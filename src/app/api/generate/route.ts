@@ -4,9 +4,11 @@ import {
   SKILL_NAMES,
   type SkillName,
 } from "@/skills";
-import { createOpenAI } from "@ai-sdk/openai";
-import { generateObject, streamText } from "ai";
-import { z } from "zod";
+import { GoogleGenAI, Type } from "@google/genai";
+
+// ---------------------------------------------------------------------------
+// Prompts
+// ---------------------------------------------------------------------------
 
 const VALIDATION_PROMPT = `You are a prompt classifier for a motion graphics generation tool.
 
@@ -140,44 +142,9 @@ CRITICAL:
 If the user has made manual edits, preserve them unless explicitly asked to change.
 `;
 
-// Schema for follow-up edit responses
-// Note: Using a flat object schema because OpenAI doesn't support discriminated unions
-const FollowUpResponseSchema = z.object({
-  type: z
-    .enum(["edit", "full"])
-    .describe(
-      'Use "edit" for small targeted changes, "full" for major restructuring',
-    ),
-  summary: z
-    .string()
-    .describe(
-      "A brief 1-sentence summary of what changes were made, e.g. 'Changed background color to blue and increased font size'",
-    ),
-  edits: z
-    .array(
-      z.object({
-        description: z
-          .string()
-          .describe(
-            "Brief description of this edit, e.g. 'Update background color', 'Increase animation duration'",
-          ),
-        old_string: z
-          .string()
-          .describe("The exact string to find (must match exactly)"),
-        new_string: z.string().describe("The replacement string"),
-      }),
-    )
-    .optional()
-    .describe(
-      "Required when type is 'edit': array of search-replace operations",
-    ),
-  code: z
-    .string()
-    .optional()
-    .describe(
-      "Required when type is 'full': the complete replacement code starting with imports",
-    ),
-});
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
 
 type EditOperation = {
   description: string;
@@ -186,14 +153,12 @@ type EditOperation = {
   lineNumber?: number;
 };
 
-// Calculate line number where a string occurs in code
 function getLineNumber(code: string, searchString: string): number {
   const index = code.indexOf(searchString);
   if (index === -1) return -1;
   return code.substring(0, index).split("\n").length;
 }
 
-// Apply edit operations to code and enrich with line numbers
 function applyEdits(
   code: string,
   edits: EditOperation[],
@@ -211,7 +176,6 @@ function applyEdits(
     const edit = edits[i];
     const { old_string, new_string, description } = edit;
 
-    // Check if the old_string exists
     if (!result.includes(old_string)) {
       return {
         success: false,
@@ -221,7 +185,6 @@ function applyEdits(
       };
     }
 
-    // Check for multiple matches (ambiguous)
     const matches = result.split(old_string).length - 1;
     if (matches > 1) {
       return {
@@ -232,28 +195,45 @@ function applyEdits(
       };
     }
 
-    // Get line number before applying edit
     const lineNumber = getLineNumber(result, old_string);
-
-    // Apply the edit
     result = result.replace(old_string, new_string);
-
-    // Store enriched edit with line number
-    enrichedEdits.push({
-      description,
-      old_string,
-      new_string,
-      lineNumber,
-    });
+    enrichedEdits.push({ description, old_string, new_string, lineNumber });
   }
 
   return { success: true, result, enrichedEdits };
 }
 
+/** Parse a base64 data URL into mimeType + raw base64 data */
+function parseDataUrl(dataUrl: string): { mimeType: string; data: string } | null {
+  const match = dataUrl.match(/^data:([^;]+);base64,([\s\S]+)$/);
+  if (!match) return null;
+  return { mimeType: match[1], data: match[2] };
+}
+
+/** Build a Google content parts array from text + optional base64 images */
+function buildParts(
+  text: string,
+  images?: string[],
+): Array<{ text: string } | { inlineData: { mimeType: string; data: string } }> {
+  const parts: Array<
+    { text: string } | { inlineData: { mimeType: string; data: string } }
+  > = [{ text }];
+  if (images?.length) {
+    for (const img of images) {
+      const parsed = parseDataUrl(img);
+      if (parsed) parts.push({ inlineData: parsed });
+    }
+  }
+  return parts;
+}
+
+// ---------------------------------------------------------------------------
+// Interfaces
+// ---------------------------------------------------------------------------
+
 interface ConversationContextMessage {
   role: "user" | "assistant";
   content: string;
-  /** For user messages, attached images as base64 data URLs */
   attachedImages?: string[];
 }
 
@@ -275,12 +255,10 @@ interface GenerateRequest {
   conversationHistory?: ConversationContextMessage[];
   isFollowUp?: boolean;
   hasManualEdits?: boolean;
-  /** Error correction context for self-healing loops */
   errorCorrection?: ErrorCorrectionContext;
-  /** Skills already used in this conversation (to avoid redundant skill content) */
   previouslyUsedSkills?: string[];
-  /** Base64 image data URLs for visual context */
   frameImages?: string[];
+  forcedSkills?: string[];
 }
 
 interface GenerateResponse {
@@ -294,10 +272,21 @@ interface GenerateResponse {
   };
 }
 
+// Map thinking effort label to token budget
+const THINKING_BUDGETS: Record<string, number> = {
+  low: 1024,
+  medium: 8192,
+  high: 24576,
+};
+
+// ---------------------------------------------------------------------------
+// Route handler
+// ---------------------------------------------------------------------------
+
 export async function POST(req: Request) {
   const {
     prompt,
-    model = "gpt-5.2",
+    model = "gemini-3-flash-preview",
     currentCode,
     conversationHistory = [],
     isFollowUp = false,
@@ -305,39 +294,50 @@ export async function POST(req: Request) {
     errorCorrection,
     previouslyUsedSkills = [],
     frameImages,
+    forcedSkills,
   }: GenerateRequest = await req.json();
 
-  const apiKey = process.env.OPENAI_API_KEY;
+  const apiKey = process.env.GOOGLE_GENERATIVE_AI_API_KEY;
 
   if (!apiKey) {
     return new Response(
       JSON.stringify({
         error:
-          'The environment variable "OPENAI_API_KEY" is not set. Add it to your .env file and try again.',
+          'The environment variable "GOOGLE_GENERATIVE_AI_API_KEY" is not set. Add it to your .env file and try again.',
       }),
-      {
-        status: 400,
-        headers: { "Content-Type": "application/json" },
-      },
+      { status: 400, headers: { "Content-Type": "application/json" } },
     );
   }
 
-  // Parse model ID - format can be "model-name" or "model-name:reasoning_effort"
-  const [modelName, reasoningEffort] = model.split(":");
+  const [modelName, thinkingEffort] = model.split(":");
+  const thinkingBudget = thinkingEffort ? THINKING_BUDGETS[thinkingEffort] : undefined;
 
-  const openai = createOpenAI({ apiKey });
+  const ai = new GoogleGenAI({ apiKey });
 
-  // Validate the prompt first (skip for follow-ups with existing code)
+  // Fast model for quick classification (validation + skill detection)
+  // gemini-2.5-flash has a confirmed free tier (1500 req/day)
+  const FAST_MODEL = "gemini-2.5-flash";
+
+  // -------------------------------------------------------------------------
+  // 1. Validate the prompt (initial generation only)
+  // -------------------------------------------------------------------------
   if (!isFollowUp) {
     try {
-      const validationResult = await generateObject({
-        model: openai("gpt-5.2"),
-        system: VALIDATION_PROMPT,
-        prompt: `User prompt: "${prompt}"`,
-        schema: z.object({ valid: z.boolean() }),
+      const valResult = await ai.models.generateContent({
+        model: FAST_MODEL,
+        contents: [{ role: "user", parts: [{ text: `User prompt: "${prompt}"` }] }],
+        config: {
+          systemInstruction: VALIDATION_PROMPT,
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: { valid: { type: Type.BOOLEAN } },
+            required: ["valid"],
+          },
+        },
       });
-
-      if (!validationResult.object.valid) {
+      const { valid } = JSON.parse(valResult.text ?? "{}");
+      if (!valid) {
         return new Response(
           JSON.stringify({
             error:
@@ -348,52 +348,64 @@ export async function POST(req: Request) {
         );
       }
     } catch (validationError) {
-      // On validation error, allow through rather than blocking
       console.error("Validation error:", validationError);
+      // Allow through on error rather than blocking
     }
   }
 
-  // Detect which skills apply to this prompt
+  // -------------------------------------------------------------------------
+  // 2. Detect applicable skills (skip if forcedSkills provided)
+  // -------------------------------------------------------------------------
   let detectedSkills: SkillName[] = [];
-  try {
-    const skillResult = await generateObject({
-      model: openai("gpt-5.2"),
-      system: SKILL_DETECTION_PROMPT,
-      prompt: `User prompt: "${prompt}"`,
-      schema: z.object({
-        skills: z.array(z.enum(SKILL_NAMES)),
-      }),
-    });
-    detectedSkills = skillResult.object.skills;
-    console.log("Detected skills:", detectedSkills);
-  } catch (skillError) {
-    console.error("Skill detection error:", skillError);
+  if (forcedSkills && forcedSkills.length > 0) {
+    // Use forced skills directly (from narrative planner) — skip AI re-detection
+    detectedSkills = forcedSkills.filter((s) =>
+      (SKILL_NAMES as readonly string[]).includes(s),
+    ) as SkillName[];
+    console.log("Using forced skills:", detectedSkills);
+  } else {
+    try {
+      const skillResult = await ai.models.generateContent({
+        model: FAST_MODEL,
+        contents: [{ role: "user", parts: [{ text: `User prompt: "${prompt}"` }] }],
+        config: {
+          systemInstruction: SKILL_DETECTION_PROMPT,
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              skills: { type: Type.ARRAY, items: { type: Type.STRING } },
+            },
+            required: ["skills"],
+          },
+        },
+      });
+      const parsed = JSON.parse(skillResult.text ?? "{}");
+      detectedSkills = ((parsed.skills as string[]) ?? []).filter((s) =>
+        (SKILL_NAMES as readonly string[]).includes(s),
+      ) as SkillName[];
+      console.log("Detected skills:", detectedSkills);
+    } catch (skillError) {
+      console.error("Skill detection error:", skillError);
+    }
   }
 
-  // Filter out skills that were already used in the conversation to avoid redundant context
+  // Filter out previously used skills to avoid redundant context
   const newSkills = detectedSkills.filter(
     (skill) => !previouslyUsedSkills.includes(skill),
   );
-  if (
-    previouslyUsedSkills.length > 0 &&
-    newSkills.length < detectedSkills.length
-  ) {
-    console.log(
-      `Skipping ${detectedSkills.length - newSkills.length} previously used skills:`,
-      detectedSkills.filter((s) => previouslyUsedSkills.includes(s)),
-    );
-  }
 
-  // Load skill-specific content only for NEW skills (previously used skills are already in context)
-  const skillContent = getCombinedSkillContent(newSkills as SkillName[]);
+  const skillContent = getCombinedSkillContent(newSkills);
   const enhancedSystemPrompt = skillContent
     ? `${SYSTEM_PROMPT}\n\n## SKILL-SPECIFIC GUIDANCE\n${skillContent}`
     : SYSTEM_PROMPT;
 
-  // FOLLOW-UP MODE: Use non-streaming generateObject for faster edits
+  // -------------------------------------------------------------------------
+  // 3. Follow-up edit mode (non-streaming, structured JSON response)
+  // -------------------------------------------------------------------------
   if (isFollowUp && currentCode) {
     try {
-      // Build context for the edit request
+      // Build conversation context string
       const contextMessages = conversationHistory.slice(-6);
       let conversationContext = "";
       if (contextMessages.length > 0) {
@@ -414,158 +426,108 @@ export async function POST(req: Request) {
         ? "\n\nNOTE: The user has made manual edits to the code. Preserve these changes."
         : "";
 
-      // Error correction context for self-healing
       let errorCorrectionNotice = "";
       if (errorCorrection) {
         const failedEditInfo = errorCorrection.failedEdit
-          ? `
-
-The previous edit attempt failed. Here's what was tried:
-- Description: ${errorCorrection.failedEdit.description}
-- Tried to find: \`${errorCorrection.failedEdit.old_string}\`
-- Wanted to replace with: \`${errorCorrection.failedEdit.new_string}\`
-
-The old_string was either not found or matched multiple locations. You MUST include more surrounding context to make the match unique.`
+          ? `\n\nThe previous edit attempt failed. Here's what was tried:\n- Description: ${errorCorrection.failedEdit.description}\n- Tried to find: \`${errorCorrection.failedEdit.old_string}\`\n- Wanted to replace with: \`${errorCorrection.failedEdit.new_string}\`\n\nThe old_string was either not found or matched multiple locations. You MUST include more surrounding context to make the match unique.`
           : "";
 
         const isEditFailure =
           errorCorrection.error.includes("Edit") &&
           errorCorrection.error.includes("failed");
 
-        if (isEditFailure) {
-          errorCorrectionNotice = `
-
-## EDIT FAILED (ATTEMPT ${errorCorrection.attemptNumber}/${errorCorrection.maxAttempts})
-${errorCorrection.error}
-${failedEditInfo}
-
-CRITICAL: Your previous edit target was ambiguous or not found. To fix this:
-1. Include MORE surrounding code context in old_string to make it unique
-2. Make sure old_string matches the code EXACTLY (including whitespace)
-3. If the code structure changed, look at the current code carefully`;
-        } else {
-          errorCorrectionNotice = `
-
-## COMPILATION ERROR (ATTEMPT ${errorCorrection.attemptNumber}/${errorCorrection.maxAttempts})
-The previous code failed to compile with this error:
-\`\`\`
-${errorCorrection.error}
-\`\`\`
-
-CRITICAL: Fix this compilation error. Common issues include:
-- Syntax errors (missing brackets, semicolons)
-- Invalid JSX (unclosed tags, invalid attributes)
-- Undefined variables or imports
-- TypeScript type errors
-
-Focus ONLY on fixing the error. Do not make other changes.`;
-        }
+        errorCorrectionNotice = isEditFailure
+          ? `\n\n## EDIT FAILED (ATTEMPT ${errorCorrection.attemptNumber}/${errorCorrection.maxAttempts})\n${errorCorrection.error}${failedEditInfo}\n\nCRITICAL: Include MORE surrounding code context in old_string to make it unique.`
+          : `\n\n## COMPILATION ERROR (ATTEMPT ${errorCorrection.attemptNumber}/${errorCorrection.maxAttempts})\nThe previous code failed to compile:\n\`\`\`\n${errorCorrection.error}\n\`\`\`\n\nFix this error only. Do not make other changes.`;
       }
 
-      const editPromptText = `## CURRENT CODE:
-\`\`\`tsx
-${currentCode}
-\`\`\`
-${conversationContext}
-${manualEditNotice}
-${errorCorrectionNotice}
-
-## USER REQUEST:
-${prompt}
-${frameImages && frameImages.length > 0 ? `\n(See the attached ${frameImages.length === 1 ? "image" : "images"} for visual reference)` : ""}
+      const editPromptText = `## CURRENT CODE:\n\`\`\`tsx\n${currentCode}\n\`\`\`${conversationContext}${manualEditNotice}${errorCorrectionNotice}\n\n## USER REQUEST:\n${prompt}${frameImages && frameImages.length > 0 ? `\n\n(See the attached ${frameImages.length === 1 ? "image" : "images"} for visual reference)` : ""}
 
 Analyze the request and decide: use targeted edits (type: "edit") for small changes, or full replacement (type: "full") for major restructuring.`;
 
-      console.log(
-        "Follow-up edit with prompt:",
-        prompt,
-        "model:",
-        modelName,
-        "skills:",
-        detectedSkills.length > 0 ? detectedSkills.join(", ") : "general",
-        frameImages && frameImages.length > 0
-          ? `(with ${frameImages.length} image(s))`
-          : "",
-      );
+      console.log("Follow-up edit — model:", modelName, "skills:", detectedSkills.join(", ") || "general");
 
-      // Build messages array - include images if provided
-      const editMessageContent: Array<
-        { type: "text"; text: string } | { type: "image"; image: string }
-      > = [{ type: "text" as const, text: editPromptText }];
-      if (frameImages && frameImages.length > 0) {
-        for (const img of frameImages) {
-          editMessageContent.push({ type: "image" as const, image: img });
-        }
-      }
-      const editMessages: Array<{
-        role: "user";
-        content: Array<
-          { type: "text"; text: string } | { type: "image"; image: string }
-        >;
-      }> = [
-        {
-          role: "user" as const,
-          content: editMessageContent,
+      const editResult = await ai.models.generateContent({
+        model: modelName,
+        contents: [{ role: "user", parts: buildParts(editPromptText, frameImages) }],
+        config: {
+          systemInstruction: FOLLOW_UP_SYSTEM_PROMPT,
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              type: {
+                type: Type.STRING,
+                description: 'Use "edit" for small targeted changes, "full" for major restructuring',
+              },
+              summary: {
+                type: Type.STRING,
+                description: "Brief 1-sentence summary of changes made",
+              },
+              edits: {
+                type: Type.ARRAY,
+                description: "Required when type is edit",
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    description: { type: Type.STRING },
+                    old_string: { type: Type.STRING, description: "Exact string to find" },
+                    new_string: { type: Type.STRING, description: "Replacement string" },
+                  },
+                  required: ["description", "old_string", "new_string"],
+                },
+              },
+              code: {
+                type: Type.STRING,
+                description: "Required when type is full: complete replacement code",
+              },
+            },
+            required: ["type", "summary"],
+          },
+          ...(thinkingBudget !== undefined && {
+            thinkingConfig: { thinkingBudget },
+          }),
         },
-      ];
-
-      const editResult = await generateObject({
-        model: openai(modelName),
-        system: FOLLOW_UP_SYSTEM_PROMPT,
-        messages: editMessages,
-        schema: FollowUpResponseSchema,
       });
 
-      const response = editResult.object;
+      const response = JSON.parse(editResult.text ?? "{}") as {
+        type: "edit" | "full";
+        summary: string;
+        edits?: EditOperation[];
+        code?: string;
+      };
+
       let finalCode: string;
       let editType: "tool_edit" | "full_replacement";
       let appliedEdits: EditOperation[] | undefined;
 
       if (response.type === "edit" && response.edits) {
-        // Apply the edits to the current code
         const result = applyEdits(currentCode, response.edits);
         if (!result.success) {
-          // If edits fail, return error with the failed edit details
           return new Response(
-            JSON.stringify({
-              error: result.error,
-              type: "edit_failed",
-              failedEdit: result.failedEdit,
-            }),
+            JSON.stringify({ error: result.error, type: "edit_failed", failedEdit: result.failedEdit }),
             { status: 400, headers: { "Content-Type": "application/json" } },
           );
         }
         finalCode = result.result;
         editType = "tool_edit";
-        // Use enriched edits with line numbers
         appliedEdits = result.enrichedEdits;
         console.log(`Applied ${response.edits.length} edit(s) successfully`);
       } else if (response.type === "full" && response.code) {
-        // Full replacement
         finalCode = response.code;
         editType = "full_replacement";
         console.log("Using full code replacement");
       } else {
-        // Invalid response - missing required fields
         return new Response(
-          JSON.stringify({
-            error: "Invalid AI response: missing required fields",
-            type: "edit_failed",
-          }),
+          JSON.stringify({ error: "Invalid AI response: missing required fields", type: "edit_failed" }),
           { status: 400, headers: { "Content-Type": "application/json" } },
         );
       }
 
-      // Return the result with metadata
       const responseData: GenerateResponse = {
         code: finalCode,
         summary: response.summary,
-        metadata: {
-          skills: detectedSkills,
-          editType,
-          edits: appliedEdits,
-          model: modelName,
-        },
+        metadata: { skills: detectedSkills, editType, edits: appliedEdits, model: modelName },
       };
 
       return new Response(JSON.stringify(responseData), {
@@ -575,111 +537,80 @@ Analyze the request and decide: use targeted edits (type: "edit") for small chan
     } catch (error) {
       console.error("Error in follow-up edit:", error);
       return new Response(
-        JSON.stringify({
-          error: "Something went wrong while processing the edit request.",
-        }),
+        JSON.stringify({ error: "Something went wrong while processing the edit request." }),
         { status: 500, headers: { "Content-Type": "application/json" } },
       );
     }
   }
 
-  // INITIAL GENERATION: Use streaming for new animations
+  // -------------------------------------------------------------------------
+  // 4. Initial generation — streaming
+  // -------------------------------------------------------------------------
   try {
-    // Build messages for initial generation (supports image references)
     const hasImages = frameImages && frameImages.length > 0;
     const initialPromptText = hasImages
       ? `${prompt}\n\n(See the attached ${frameImages.length === 1 ? "image" : "images"} for visual reference)`
       : prompt;
 
-    const initialMessageContent: Array<
-      { type: "text"; text: string } | { type: "image"; image: string }
-    > = [{ type: "text" as const, text: initialPromptText }];
-    if (hasImages) {
-      for (const img of frameImages) {
-        initialMessageContent.push({ type: "image" as const, image: img });
-      }
-    }
-
-    const initialMessages: Array<{
-      role: "user";
-      content: Array<
-        { type: "text"; text: string } | { type: "image"; image: string }
-      >;
-    }> = [
-      {
-        role: "user" as const,
-        content: initialMessageContent,
-      },
-    ];
-
-    const result = streamText({
-      model: openai(modelName),
-      system: enhancedSystemPrompt,
-      messages: initialMessages,
-      ...(reasoningEffort && {
-        providerOptions: {
-          openai: {
-            reasoningEffort: reasoningEffort,
-          },
-        },
-      }),
-    });
-
     console.log(
-      "Generating React component with prompt:",
-      prompt,
-      "model:",
-      modelName,
-      "skills:",
-      detectedSkills.length > 0 ? detectedSkills.join(", ") : "general",
-      reasoningEffort ? `reasoning_effort: ${reasoningEffort}` : "",
-      hasImages ? `(with ${frameImages.length} image(s))` : "",
+      "Generating — model:", modelName,
+      "skills:", detectedSkills.join(", ") || "general",
+      thinkingBudget !== undefined ? `thinking: ${thinkingBudget}` : "",
+      hasImages ? `images: ${frameImages.length}` : "",
     );
 
-    // Get the original stream response
-    const originalResponse = result.toUIMessageStreamResponse({
-      sendReasoning: true,
+    const stream = await ai.models.generateContentStream({
+      model: modelName,
+      contents: [{ role: "user", parts: buildParts(initialPromptText, frameImages) }],
+      config: {
+        systemInstruction: enhancedSystemPrompt,
+        ...(thinkingBudget !== undefined && {
+          thinkingConfig: { thinkingBudget },
+        }),
+      },
     });
 
-    // Create metadata event to prepend
-    const metadataEvent = `data: ${JSON.stringify({
-      type: "metadata",
-      skills: detectedSkills,
-    })}\n\n`;
-
-    // Create a new stream that prepends metadata before the LLM stream
-    const originalBody = originalResponse.body;
-    if (!originalBody) {
-      return originalResponse;
-    }
-
-    const reader = originalBody.getReader();
     const encoder = new TextEncoder();
 
-    const stream = new ReadableStream({
+    const readable = new ReadableStream({
       async start(controller) {
-        // Send metadata event first
-        controller.enqueue(encoder.encode(metadataEvent));
+        // Prepend skill metadata so the client can show which skills were used
+        controller.enqueue(
+          encoder.encode(
+            `data: ${JSON.stringify({ type: "metadata", skills: detectedSkills })}\n\n`,
+          ),
+        );
+        controller.enqueue(
+          encoder.encode(`data: ${JSON.stringify({ type: "text-start" })}\n\n`),
+        );
 
-        // Then pipe through the original stream
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          controller.enqueue(value);
+        for await (const chunk of stream) {
+          const text = chunk.text;
+          if (text) {
+            controller.enqueue(
+              encoder.encode(
+                `data: ${JSON.stringify({ type: "text-delta", delta: text })}\n\n`,
+              ),
+            );
+          }
         }
+
+        controller.enqueue(encoder.encode("data: [DONE]\n\n"));
         controller.close();
       },
     });
 
-    return new Response(stream, {
-      headers: originalResponse.headers,
+    return new Response(readable, {
+      headers: {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        Connection: "keep-alive",
+      },
     });
   } catch (error) {
     console.error("Error generating code:", error);
     return new Response(
-      JSON.stringify({
-        error: "Something went wrong while trying to reach OpenAI APIs.",
-      }),
+      JSON.stringify({ error: "Something went wrong while trying to reach Google AI APIs." }),
       { status: 500, headers: { "Content-Type": "application/json" } },
     );
   }

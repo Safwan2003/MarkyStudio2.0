@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   compileCode as compile,
+  type CompilationError,
   type CompilationResult,
 } from "../remotion/compiler";
 
@@ -10,6 +11,7 @@ export interface AnimationState {
   code: string;
   Component: React.ComponentType | null;
   error: string | null;
+  compilationError: CompilationError | undefined;
   isCompiling: boolean;
 }
 
@@ -18,6 +20,7 @@ export function useAnimationState(initialCode: string = "") {
     code: initialCode,
     Component: null,
     error: null,
+    compilationError: undefined,
     isCompiling: false,
   });
 
@@ -31,6 +34,7 @@ export function useAnimationState(initialCode: string = "") {
       ...prev,
       Component: result.Component,
       error: result.error,
+      compilationError: result.compilationError,
       isCompiling: false,
     }));
   }, []);

@@ -24,14 +24,79 @@ import {
 } from "remotion";
 import * as THREE from "three";
 
+export interface CompilationError {
+  message: string;
+  /** 1-based line number in the original LLM-generated code, or null if not parseable */
+  line: number | null;
+  /** 1-based column number, or null */
+  column: number | null;
+  /** The offending line of source code, or null */
+  snippet: string | null;
+}
+
 export interface CompilationResult {
   Component: React.ComponentType | null;
   error: string | null;
+  /** Structured error details when error is non-null */
+  compilationError?: CompilationError;
+}
+
+/**
+ * Parse a Babel/runtime error message into structured form.
+ * Babel errors typically look like:
+ *   "SyntaxError: /dynamic-animation.tsx: Unexpected token (12:5)"
+ *   "ReferenceError: foo is not defined"
+ */
+export function parseCompilerError(
+  errorMessage: string,
+  sourceCode: string,
+): CompilationError {
+  let line: number | null = null;
+  let column: number | null = null;
+
+  // Match "... (line:col)" pattern from Babel
+  const babelMatch = errorMessage.match(/\((\d+):(\d+)\)/);
+  if (babelMatch) {
+    line = parseInt(babelMatch[1], 10);
+    column = parseInt(babelMatch[2], 10);
+  }
+
+  // Match "line N" pattern from some runtime errors
+  if (!line) {
+    const lineMatch = errorMessage.match(/\bline\s+(\d+)\b/i);
+    if (lineMatch) {
+      line = parseInt(lineMatch[1], 10);
+    }
+  }
+
+  // Extract the source snippet if we have a line number
+  let snippetStr: string | null = null;
+  if (line !== null && sourceCode) {
+    const lines = sourceCode.split("\n");
+    // line is 1-based; the compiler wraps code in "const DynamicAnimation = () => {\n"
+    // so subtract 1 to account for the wrapper prefix line
+    const adjustedLine = line - 1;
+    if (adjustedLine >= 1 && adjustedLine <= lines.length) {
+      snippetStr = lines[adjustedLine - 1]?.trim() ?? null;
+    }
+  }
+
+  // Clean up the message — strip the file path prefix Babel adds
+  const cleanMessage = errorMessage
+    .replace(/^[^:]+:\s*\/[^:]+:\s*/, "") // remove "SyntaxError: /file.tsx: "
+    .trim();
+
+  return {
+    message: cleanMessage || errorMessage,
+    line,
+    column,
+    snippet: snippetStr,
+  };
 }
 
 // Strip imports and extract component body from LLM-generated code
 // Safety layer in case LLM includes full ES6 syntax despite instructions
-function extractComponentBody(code: string): string {
+export function extractComponentBody(code: string): string {
   // Strip all import statements (handles multi-line imports with newlines in braces)
   let cleaned = code;
 
@@ -209,6 +274,10 @@ export function compileCode(code: string): CompilationResult {
   } catch (error) {
     const errorMessage =
       error instanceof Error ? error.message : "Unknown compilation error";
-    return { Component: null, error: errorMessage };
+    return {
+      Component: null,
+      error: errorMessage,
+      compilationError: parseCompilerError(errorMessage, code),
+    };
   }
 }

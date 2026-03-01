@@ -33,9 +33,11 @@ export interface ChatSidebarRef {
     silent?: boolean;
     attachedImages?: string[];
   }) => void;
+  triggerFullVideoGeneration: (model: ModelId) => void;
 }
 
 interface ChatSidebarProps {
+  initialModel?: ModelId;
   messages: ConversationMessage[];
   pendingMessage?: {
     skills?: string[];
@@ -72,6 +74,7 @@ interface ChatSidebarProps {
   errorCorrection?: ErrorCorrectionContext;
   onPendingMessage?: (skills?: string[]) => void;
   onClearPendingMessage?: () => void;
+  onFullVideoGenerate?: (model: ModelId) => void;
   // Frame capture props
   Component?: ComponentType | null;
   fps?: number;
@@ -82,6 +85,7 @@ interface ChatSidebarProps {
 export const ChatSidebar = forwardRef<ChatSidebarRef, ChatSidebarProps>(
   function ChatSidebar(
     {
+      initialModel,
       messages,
       pendingMessage,
       isCollapsed,
@@ -103,6 +107,7 @@ export const ChatSidebar = forwardRef<ChatSidebarRef, ChatSidebarProps>(
       errorCorrection,
       onPendingMessage,
       onClearPendingMessage,
+      onFullVideoGenerate,
       Component,
       fps = 30,
       durationInFrames = 150,
@@ -110,7 +115,7 @@ export const ChatSidebar = forwardRef<ChatSidebarRef, ChatSidebarProps>(
     },
     ref,
   ) {
-    const [model, setModel] = useState<ModelId>(MODELS[1].id);
+    const [model, setModel] = useState<ModelId>(initialModel || MODELS[1].id);
     const promptRef = useRef<string>("");
 
     const { isLoading, runGeneration } = useGenerationApi();
@@ -156,9 +161,12 @@ export const ChatSidebar = forwardRef<ChatSidebarRef, ChatSidebarProps>(
       );
     };
 
-    // Expose triggerGeneration via ref
+    // Expose triggerGeneration and triggerFullVideoGeneration via ref
     useImperativeHandle(ref, () => ({
       triggerGeneration: handleGeneration,
+      triggerFullVideoGeneration: (model: ModelId) => {
+        onFullVideoGenerate?.(model);
+      },
     }));
 
     return (
@@ -232,6 +240,7 @@ export const ChatSidebar = forwardRef<ChatSidebarRef, ChatSidebarProps>(
               onSubmit={(attachedImages) =>
                 handleGeneration({ attachedImages })
               }
+              onFullVideoGenerate={onFullVideoGenerate}
               Component={Component}
               fps={fps}
               durationInFrames={durationInFrames}

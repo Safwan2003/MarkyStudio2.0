@@ -12,7 +12,7 @@ import {
 import { captureFrame } from "@/helpers/capture-frame";
 import { useImageAttachments } from "@/hooks/useImageAttachments";
 import { MODELS, type ModelId } from "@/types/generation";
-import { ArrowUp, Camera, Paperclip, X } from "lucide-react";
+import { ArrowUp, Camera, Film, Paperclip, X } from "lucide-react";
 import { useEffect, useState, type ComponentType } from "react";
 
 interface ChatInputProps {
@@ -22,6 +22,7 @@ interface ChatInputProps {
   onModelChange: (model: ModelId) => void;
   isLoading: boolean;
   onSubmit: (attachedImages?: string[]) => void;
+  onFullVideoGenerate?: (model: ModelId) => void;
   // Frame capture props
   Component?: ComponentType | null;
   fps?: number;
@@ -36,6 +37,7 @@ export function ChatInput({
   onModelChange,
   isLoading,
   onSubmit,
+  onFullVideoGenerate,
   Component,
   fps = 30,
   durationInFrames = 150,
@@ -225,6 +227,19 @@ export function ChatInput({
                 <Camera className="w-3.5 h-3.5 mr-1" />
                 Use Frame
               </Button>
+
+              {onFullVideoGenerate && (
+                <Button
+                  type="button"
+                  size="icon-sm"
+                  disabled={!prompt.trim() || isLoading}
+                  onClick={() => onFullVideoGenerate(model)}
+                  className="bg-teal-600 text-white hover:bg-teal-500 h-7 w-7 ml-1"
+                  title="Generate full narrative video (5–6 scenes)"
+                >
+                  <Film className="w-4 h-4" />
+                </Button>
+              )}
 
               <Button
                 type="submit"

@@ -1,0 +1,15 @@
+{
+    "name": "Desklog",
+    "description": "Productivity-focused SaaS explainer with Emerald Green theme.",
+    "durationInFrames": 2700,
+    "tags": [
+        "SaaS",
+        "Productivity",
+        "Clean",
+        "Green"
+    ],
+    "defaultProps": {
+        "brandName": "Desklog",
+        "primaryColor": "#059669"
+    }
+}

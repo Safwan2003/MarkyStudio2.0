@@ -18,6 +18,8 @@ interface SettingsModalProps {
   onDurationChange: (duration: number) => void;
   fps: number;
   onFpsChange: (fps: number) => void;
+  qualityMode?: boolean;
+  onQualityModeChange?: (enabled: boolean) => void;
 }
 
 export function SettingsModal({
@@ -25,6 +27,8 @@ export function SettingsModal({
   onDurationChange,
   fps,
   onFpsChange,
+  qualityMode = false,
+  onQualityModeChange,
 }: SettingsModalProps) {
   const [open, setOpen] = useState(false);
   const [localDuration, setLocalDuration] = useState(String(durationInFrames));
@@ -116,6 +120,35 @@ export function SettingsModal({
               {durationInFrames} frames / {fps} FPS)
             </p>
           </div>
+
+          {onQualityModeChange && (
+            <div className="grid gap-3">
+              <h3 className="text-sm font-medium text-foreground">Quality</h3>
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm text-foreground">Auto quality check</p>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    After generation, AI reviews the result and auto-fixes visual issues (~10s)
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={qualityMode}
+                  onClick={() => onQualityModeChange(!qualityMode)}
+                  className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors focus:outline-none ${
+                    qualityMode ? "bg-teal-600" : "bg-muted"
+                  }`}
+                >
+                  <span
+                    className={`pointer-events-none inline-block h-4 w-4 rounded-full bg-white shadow-md transition-transform ${
+                      qualityMode ? "translate-x-4" : "translate-x-0"
+                    }`}
+                  />
+                </button>
+              </div>
+            </div>
+          )}
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => setOpen(false)}>

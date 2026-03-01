@@ -21,9 +21,9 @@
   --background-editor-header: #2d2d2d;
   --background-error: #2a1a1a;
   --foreground: #ffffff;
-  --primary: #0B84F3;
-  --primary-hover: #0a75d9;
-  --primary-foreground: #ffffff;
+  --primary: #ffffff;
+  --primary-hover: #e5e5e5;
+  --primary-foreground: #0a0a0a;
   --secondary: #333;
   --secondary-foreground: #ffffff;
   --muted: #111;

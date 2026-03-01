@@ -9,6 +9,18 @@ import socialMediaSkill from "./social-media.md";
 import springPhysicsSkill from "./spring-physics.md";
 import transitionsSkill from "./transitions.md";
 import typographySkill from "./typography.md";
+// Premium template-derived skills
+import premiumSaasHookSkill from "./premium-saas-hook.md";
+import premiumSaasShowcaseSkill from "./premium-saas-showcase.md";
+import premiumCursorEngineSkill from "./premium-cursor-engine.md";
+import premiumTeamOrbitSkill from "./premium-team-orbit.md";
+import premiumCameraZoomSkill from "./premium-camera-zoom.md";
+import premiumSocialProofSkill from "./premium-social-proof.md";
+import premiumCtaSceneSkill from "./premium-cta-scene.md";
+import premiumKineticTextSkill from "./premium-kinetic-text.md";
+import premiumNeonDarkSkill from "./premium-neon-dark.md";
+import premiumNetworkIntroSkill from "./premium-network-intro.md";
+import premiumFeatureListSkill from "./premium-feature-list.md";
 
 // Guidance skills (markdown files with patterns/rules)
 const GUIDANCE_SKILLS = [
@@ -20,6 +32,18 @@ const GUIDANCE_SKILLS = [
   "transitions",
   "sequencing",
   "spring-physics",
+  // Premium template-derived skills
+  "premium-saas-hook",
+  "premium-saas-showcase",
+  "premium-cursor-engine",
+  "premium-team-orbit",
+  "premium-camera-zoom",
+  "premium-social-proof",
+  "premium-cta-scene",
+  "premium-kinetic-text",
+  "premium-neon-dark",
+  "premium-network-intro",
+  "premium-feature-list",
 ] as const;
 
 // Example skills (complete working code references)
@@ -49,6 +73,18 @@ const guidanceSkillContent: Record<(typeof GUIDANCE_SKILLS)[number], string> = {
   transitions: transitionsSkill,
   sequencing: sequencingSkill,
   "spring-physics": springPhysicsSkill,
+  // Premium template-derived skills
+  "premium-saas-hook": premiumSaasHookSkill,
+  "premium-saas-showcase": premiumSaasShowcaseSkill,
+  "premium-cursor-engine": premiumCursorEngineSkill,
+  "premium-team-orbit": premiumTeamOrbitSkill,
+  "premium-camera-zoom": premiumCameraZoomSkill,
+  "premium-social-proof": premiumSocialProofSkill,
+  "premium-cta-scene": premiumCtaSceneSkill,
+  "premium-kinetic-text": premiumKineticTextSkill,
+  "premium-neon-dark": premiumNeonDarkSkill,
+  "premium-network-intro": premiumNetworkIntroSkill,
+  "premium-feature-list": premiumFeatureListSkill,
 };
 
 // Map example skill names to example IDs
@@ -106,6 +142,19 @@ Guidance categories (patterns and rules):
 - transitions: scene changes, fades between clips, slide transitions, wipes, multiple scenes
 - sequencing: multiple elements appearing at different times, staggered animations, choreographed entrances
 - spring-physics: bouncy animations, organic motion, elastic effects, overshoot animations
+
+Premium SaaS / Agency-quality template skills:
+- premium-saas-hook: SaaS product intro, brand reveal, floating brand/app icons orbiting a hero device, laptop mockup with screen inset, chat bubble overlays, dark hero background
+- premium-saas-showcase: product dashboard demo, browser window with OS chrome (traffic lights + URL bar), slide-up entrance, kanban board, stat cards, SaaS dashboard, product screenshot showcase
+- premium-cursor-engine: cursor walkthrough, clicking UI elements, mouse pointer animation, interaction demo, "watch me use the app", click ripple, cursor spring movement between targets
+- premium-team-orbit: floating team avatars with role badges, "meet the team", collaboration scene, problem scene with chaotic team, orbiting people/personas around a product
+- premium-camera-zoom: hero zoom into laptop/device screen, cinematic push-in reveal, slow continuous camera pan, device mockup to fullscreen transition, "zoom into product"
+- premium-social-proof: trust scene, glass notification cards, integration logos orbiting, "task completed" badges, collaborator count, social proof testimonials, stacked avatars
+- premium-cta-scene: call-to-action finale, dark background with rotating mesh orbs, word-by-word kinetic headline, pulsing gradient CTA button with shine sweep, logo pop animation
+- premium-kinetic-text: energetic word-by-word spring entrance, brand pill with glassmorphism and flash sweep, white flash transition, rotating starburst accent, high-energy text reveal
+- premium-neon-dark: dark/neon theme, tech/analytics product, sonar radar rings, SVG glow filter, neon accent color, shape-masked image reveal (heart/circle/custom), heartbeat pulse
+- premium-network-intro: network graph, avatar nodes connected by polka-dot SVG paths, B2B ecosystem, "join the network", ripple ring on avatar pop, elastic spring node entrance
+- premium-feature-list: feature list, product features, bullet points, 3-4 items, benefit list, key features, feature showcase, "what you get", "why choose us", staggered feature reveal
 
 Code examples (complete working references):
 - example-histogram: animated bar chart with spring animations and @remotion/shapes

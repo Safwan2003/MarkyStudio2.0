@@ -1,7 +1,9 @@
 "use client";
 
 import { Player, type ErrorFallback, type PlayerRef } from "@remotion/player";
-import React, { useEffect, useRef } from "react";
+import { Crosshair } from "lucide-react";
+import React, { useEffect, useRef, useState } from "react";
+import type { CompilationError } from "../../remotion/compiler";
 import { ErrorDisplay, type ErrorType } from "../ErrorDisplay";
 import { RenderControls } from "./RenderControls";
 import { SettingsModal } from "./SettingsModal";
@@ -23,6 +25,11 @@ const renderErrorFallback: ErrorFallback = ({ error }) => {
   );
 };
 
+interface CursorPin {
+  x: number; // normalized 0-1
+  y: number; // normalized 0-1
+}
+
 interface AnimationPlayerProps {
   Component: React.ComponentType | null;
   durationInFrames: number;
@@ -33,9 +40,20 @@ interface AnimationPlayerProps {
   isStreaming: boolean;
   error: string | null;
   errorType?: ErrorType;
+  compilationError?: CompilationError;
   code: string;
+  /** Override code sent to Lambda for multi-scene export */
+  masterCode?: string;
   onRuntimeError?: (error: string) => void;
   onFrameChange?: (frame: number) => void;
+  /** When this value changes (and is non-null), the player seeks to this frame */
+  seekFrame?: number | null;
+  isCursorMode?: boolean;
+  onToggleCursorMode?: () => void;
+  onCoordinateCapture?: (x: number, y: number) => void;
+  isQualityChecking?: boolean;
+  qualityMode?: boolean;
+  onQualityModeChange?: (enabled: boolean) => void;
 }
 
 export const AnimationPlayer: React.FC<AnimationPlayerProps> = ({
@@ -48,14 +66,47 @@ export const AnimationPlayer: React.FC<AnimationPlayerProps> = ({
   isStreaming,
   error,
   errorType = "compilation",
+  compilationError,
   code,
+  masterCode,
   onRuntimeError,
   onFrameChange,
+  seekFrame,
+  isCursorMode = false,
+  onToggleCursorMode,
+  onCoordinateCapture,
+  isQualityChecking = false,
+  qualityMode = false,
+  onQualityModeChange,
 }) => {
   const playerRef = useRef<PlayerRef>(null);
+  const overlayRef = useRef<HTMLDivElement>(null);
+  const [pins, setPins] = useState<CursorPin[]>([]);
+
+  // Clear pins when cursor mode is toggled off
+  useEffect(() => {
+    if (!isCursorMode) {
+      setPins([]);
+    }
+  }, [isCursorMode]);
+
+  // Seek to a specific frame when requested
+  useEffect(() => {
+    if (seekFrame != null) {
+      playerRef.current?.seekTo(seekFrame);
+    }
+  }, [seekFrame]);
+
+  const handleOverlayClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    const rect = overlayRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const x = Math.round(((e.clientX - rect.left) / rect.width) * 100) / 100;
+    const y = Math.round(((e.clientY - rect.top) / rect.height) * 100) / 100;
+    setPins((prev) => [...prev, { x, y }]);
+    onCoordinateCapture?.(x, y);
+  };
 
   // Listen for runtime errors from the Player's error boundary
-  // Component is included in deps because the Player remounts when Component changes (via key={Component.toString()})
   useEffect(() => {
     const player = playerRef.current;
     if (!player || !onRuntimeError) return;
@@ -71,7 +122,6 @@ export const AnimationPlayer: React.FC<AnimationPlayerProps> = ({
   }, [onRuntimeError, Component]);
 
   // Listen for frame changes and report to parent
-  // Component is included in deps because the Player remounts when Component changes (via key={Component.toString()})
   useEffect(() => {
     const player = playerRef.current;
     if (!player || !onFrameChange) return;
@@ -85,6 +135,9 @@ export const AnimationPlayer: React.FC<AnimationPlayerProps> = ({
       player.removeEventListener("frameupdate", handleFrameUpdate);
     };
   }, [onFrameChange, Component]);
+
+  // Use masterCode for Lambda render when available
+  const renderCode = masterCode ?? code;
 
   const renderContent = () => {
     if (isStreaming) {
@@ -107,9 +160,13 @@ export const AnimationPlayer: React.FC<AnimationPlayerProps> = ({
     }
 
     if (error) {
+      const lineInfo =
+        compilationError?.line != null
+          ? `\nLine ${compilationError.line}${compilationError.column != null ? `:${compilationError.column}` : ""}${compilationError.snippet ? `  →  ${compilationError.snippet}` : ""}`
+          : "";
       return (
         <ErrorDisplay
-          error={error}
+          error={lineInfo ? `${error}\n${lineInfo}` : error}
           title={errorTitles[errorType]}
           variant="fullscreen"
           size="lg"
@@ -127,7 +184,7 @@ export const AnimationPlayer: React.FC<AnimationPlayerProps> = ({
 
     return (
       <>
-        <div className="w-full aspect-video max-h-[calc(100%-80px)] rounded-lg overflow-hidden shadow-[0_0_60px_rgba(0,0,0,0.5)]">
+        <div className="w-full aspect-video max-h-[calc(100%-80px)] rounded-lg overflow-hidden shadow-[0_0_60px_rgba(0,0,0,0.5)] relative">
           <Player
             ref={playerRef}
             key={Component.toString()}
@@ -148,19 +205,71 @@ export const AnimationPlayer: React.FC<AnimationPlayerProps> = ({
             spaceKeyToPlayOrPause={false}
             clickToPlay={false}
           />
+          {isCursorMode && (
+            <div
+              ref={overlayRef}
+              className="absolute inset-0 cursor-crosshair"
+              style={{ zIndex: 10 }}
+              onClick={handleOverlayClick}
+            >
+              {pins.map((pin, i) => (
+                <div
+                  key={i}
+                  className="absolute"
+                  style={{
+                    left: `${pin.x * 100}%`,
+                    top: `${pin.y * 100}%`,
+                    transform: "translate(-50%, -50%)",
+                    pointerEvents: "none",
+                  }}
+                >
+                  <div className="w-3 h-3 rounded-full bg-primary border-2 border-white shadow-md" />
+                  <span className="absolute left-4 top-0 text-xs font-mono bg-black/70 text-white px-1 rounded whitespace-nowrap">
+                    {i + 1}: {pin.x}, {pin.y}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+          {/* Quality checking badge */}
+          {isQualityChecking && (
+            <div className="absolute bottom-3 left-3 flex items-center gap-1.5 px-2 py-1 rounded-md bg-black/70 text-xs text-teal-400 font-medium backdrop-blur-sm">
+              <div className="w-1.5 h-1.5 rounded-full bg-teal-400 animate-pulse" />
+              Quality checking...
+            </div>
+          )}
         </div>
         <div className="flex items-center justify-between gap-6 mt-4">
           <RenderControls
-            code={code}
+            code={renderCode}
             durationInFrames={durationInFrames}
             fps={fps}
           />
-          <SettingsModal
-            durationInFrames={durationInFrames}
-            onDurationChange={onDurationChange}
-            fps={fps}
-            onFpsChange={onFpsChange}
-          />
+          <div className="flex items-center gap-2">
+            {onToggleCursorMode && (
+              <button
+                type="button"
+                onClick={onToggleCursorMode}
+                title={isCursorMode ? "Exit cursor mode" : "Capture cursor coordinates"}
+                className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium transition-colors ${
+                  isCursorMode
+                    ? "bg-primary text-primary-foreground"
+                    : "bg-background-elevated text-muted-foreground hover:text-foreground hover:bg-background-elevated/80"
+                }`}
+              >
+                <Crosshair className="h-3.5 w-3.5" />
+                {isCursorMode ? "Exit" : "Cursor"}
+              </button>
+            )}
+            <SettingsModal
+              durationInFrames={durationInFrames}
+              onDurationChange={onDurationChange}
+              fps={fps}
+              onFpsChange={onFpsChange}
+              qualityMode={qualityMode}
+              onQualityModeChange={onQualityModeChange}
+            />
+          </div>
         </div>
       </>
     );

@@ -1,0 +1,54 @@
+# Goal Description
+
+The project currently generates isolated, short animation components (scenes) using AI and Remotion based on a single prompt. The cursor interaction relies on the AI guessing coordinates or the user manually clicking the preview to send follow-up text prompts. 
+
+The goal is to elevate this into a **SaaS Explainer Video Generator**:
+1. **Full Narrative Videos**: Automatically generate a complete, structured multi-scene video sequence (Intro → Problem → Solution → Showcase → Social Proof → CTA) rather than just a few seconds of standalone animation.
+2. **Advanced Cursor Planning & Correction**: Move away from raw text-prompting for cursor fixes. Introduce a system that visually parses cursor steps, allows human UI-based correction, and uses Vision AI to auto-detect UI elements for accurate click targeting.
+
+## Proposed Changes
+
+### 1. Multi-Scene Narrative Architecture
+
+Currently, `/api/generate` takes a user prompt and generates one React component. We will introduce a new "Full Video" pipeline.
+
+* **Step A: Narrative Planner (AI)**
+  * When a user requests a full video, we send the prompt to an AI model instructing it to return a JSON array of scenes representing the narrative arc (Intro, Problem, Solution, Showcase, Social Proof, CTA).
+  * For each scene, the AI will determine:
+    1. A specific sub-prompt describing the scene's action.
+    2. The most applicable Remotion Skill from our library (e.g., `premium-saas-hook` for Intro, `premium-network-intro` for Solution, `premium-social-proof`, `premium-cta-scene`).
+    3. The estimated duration (in frames).
+
+* **Step B: Batch Scene Generation**
+  * The frontend will iterate through this JSON structure, calling the existing `/api/generate` route for each scene independently, using the tailored sub-prompt and explicitly forcing the chosen Skill.
+  * This results in an array of generated React components (e.g., `Scene1Intro`, `Scene2Problem`, etc.).
+
+* **Step C: Master Sequence Composition**
+  * We will generate or dynamically construct a "Master" Remotion component.
+  * This Master component will use the `import { Sequence } from "remotion"` wrapper to stitch the individual scene components together sequentially.
+  * *Result:* The `AnimationPlayer` will play a complete 30-60 second video seamlessly transitioning through the narrative arc.
+
+### 2. Advanced Cursor Planning & Human Correction
+
+The current `isCursorMode` intercepts clicks on the video player and generates a text prompt like `"Fix cursor step 1: click at x: 0.5, y: 0.5"`. This is tedious and error-prone. We will implement a visual, deterministic cursor editor.
+
+* **Step A: Visual `CURSOR_STEPS` Editor**
+  * When the code contains a `CURSOR_STEPS` array (common in the `premium-cursor-engine` skill), we will parse this Abstract Syntax Tree (AST) on the frontend.
+  * We will add a new "Cursor Timeline" tab in the `TabPanel` or Sidebar.
+  * **Human Correction:** This UI will display the parsed waypoints (Time, X, Y, Action, Label). The user can adjust sliders for X/Y coordinates, change timing, or rename labels.
+  * When saved, we run an AST transformation (or simple regex replacement if formatted consistently) to *instantly* update the React code without needing an LLM round-trip.
+
+* **Step B: System Detected Placement (Vision AI)**
+  * To make cursor planning "smart", we will allow the user to upload a screenshot of their product dashboard (which acts as the background).
+  * We will run this specifically through a Vision model (like Gemini 1.5 Pro) with a prompt to "Detect the bounding boxes of primary interactive elements (buttons, inputs, nav links)".
+  * The system will map these detected UI elements into suggested `CURSOR_STEPS` coordinates, perfectly aligning the animated cursor with the user's actual uploaded UI.
+
+## Verification Plan
+
+### Automated Tests
+* N/A - The current project does not utilize an automated test suite (Jest/Playwright).
+
+### Manual Verification
+1. **Narrative Flow:** Enter a prompt like "Make a video for an AI code editor". Verify the system generates 5-6 distinct scenes covering Intro to CTA, stitched together in a single playback sequence.
+2. **Cursor UI Parser:** Generate a scene using the cursor engine. Verify a new UI panel appears showing exactly the steps generated in code.
+3. **Cursor Correction:** Modify a coordinate via the new UI panel and verify the `AnimationPlayer` instantly reflects the new cursor position without calling the AI API.

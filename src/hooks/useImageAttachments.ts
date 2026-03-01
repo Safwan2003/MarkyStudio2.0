@@ -29,6 +29,45 @@ interface UseImageAttachmentsReturn {
   clearError: () => void;
 }
 
+async function videoFileToFrameBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const video = document.createElement("video");
+    video.preload = "metadata";
+    video.muted = true;
+    video.playsInline = true;
+
+    video.onloadedmetadata = () => {
+      // Seek to 1 second, or to 10% of duration if video is short
+      video.currentTime = Math.min(1, video.duration * 0.1);
+    };
+
+    video.onseeked = () => {
+      const canvas = document.createElement("canvas");
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) {
+        URL.revokeObjectURL(url);
+        reject(new Error("Could not get canvas context"));
+        return;
+      }
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      const dataUrl = canvas.toDataURL("image/png");
+      URL.revokeObjectURL(url);
+      // Return base64 portion only (strip the data:image/png;base64, prefix)
+      resolve(dataUrl);
+    };
+
+    video.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error("Failed to load video"));
+    };
+
+    video.src = url;
+  });
+}
+
 export function useImageAttachments(): UseImageAttachmentsReturn {
   const [attachedImages, setAttachedImages] = useState<string[]>([]);
   const [isDragging, setIsDragging] = useState(false);
@@ -76,19 +115,42 @@ export function useImageAttachments(): UseImageAttachmentsReturn {
     setAttachedImages([]);
   }, []);
 
+  const processFiles = useCallback(
+    async (files: File[]): Promise<string[]> => {
+      const results: string[] = [];
+      for (const file of files) {
+        if (file.type.startsWith("video/")) {
+          try {
+            const frame = await videoFileToFrameBase64(file);
+            results.push(frame);
+          } catch {
+            setError(`Could not extract frame from video: ${file.name}`);
+          }
+        } else if (file.type.startsWith("image/")) {
+          const base64 = await fileToBase64(file);
+          results.push(base64);
+        }
+      }
+      return results;
+    },
+    [],
+  );
+
   const handleFileSelect = useCallback(
     async (e: ChangeEvent<HTMLInputElement>) => {
       const files = Array.from(e.target.files || []);
-      const imageFiles = files.filter((f) => f.type.startsWith("image/"));
-      const validFiles = filterValidFiles(imageFiles);
+      const mediaFiles = files.filter(
+        (f) => f.type.startsWith("image/") || f.type.startsWith("video/"),
+      );
+      const validFiles = filterValidFiles(mediaFiles);
       if (validFiles.length > 0) {
-        const base64Images = await Promise.all(validFiles.map(fileToBase64));
+        const base64Images = await processFiles(validFiles);
         addImages(base64Images);
       }
       // Reset input so same file can be selected again
       e.target.value = "";
     },
-    [addImages, filterValidFiles],
+    [addImages, filterValidFiles, processFiles],
   );
 
   const handlePaste = useCallback(
@@ -102,12 +164,12 @@ export function useImageAttachments(): UseImageAttachmentsReturn {
           .filter((f): f is File => f !== null);
         const validFiles = filterValidFiles(files);
         if (validFiles.length > 0) {
-          const base64Images = await Promise.all(validFiles.map(fileToBase64));
+          const base64Images = await processFiles(validFiles);
           addImages(base64Images);
         }
       }
     },
-    [addImages, filterValidFiles],
+    [addImages, filterValidFiles, processFiles],
   );
 
   const handleDragOver = useCallback((e: DragEvent) => {
@@ -126,14 +188,16 @@ export function useImageAttachments(): UseImageAttachmentsReturn {
       setIsDragging(false);
 
       const files = Array.from(e.dataTransfer.files);
-      const imageFiles = files.filter((f) => f.type.startsWith("image/"));
-      const validFiles = filterValidFiles(imageFiles);
+      const mediaFiles = files.filter(
+        (f) => f.type.startsWith("image/") || f.type.startsWith("video/"),
+      );
+      const validFiles = filterValidFiles(mediaFiles);
       if (validFiles.length > 0) {
-        const base64Images = await Promise.all(validFiles.map(fileToBase64));
+        const base64Images = await processFiles(validFiles);
         addImages(base64Images);
       }
     },
-    [addImages, filterValidFiles],
+    [addImages, filterValidFiles, processFiles],
   );
 
   return {
