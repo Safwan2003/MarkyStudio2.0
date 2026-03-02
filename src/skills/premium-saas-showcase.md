@@ -85,8 +85,22 @@ Replicate a macOS-style browser window for instant product credibility:
   </div>
 
   {/* Dashboard content area */}
-  <div style={{ flex: 1, background: "#f8fafc", overflow: "hidden" }}>
-    {/* Your dashboard UI here */}
+  <div style={{ flex: 1, background: "#f8fafc", overflow: "hidden", position: "relative" }}>
+    {ATTACHED_IMAGES[0] ? (
+      <img
+        src={ATTACHED_IMAGES[0]}
+        style={{ width: "100%", height: "100%", objectFit: "cover", objectPosition: "top" }}
+      />
+    ) : (
+      /* Fallback: generic dashboard skeleton */
+      <div style={{ padding: 16, display: "flex", gap: 12 }}>
+        <div style={{ flex: 1, background: "#e2e8f0", borderRadius: 8, height: 120 }} />
+        <div style={{ flex: 2, display: "flex", flexDirection: "column", gap: 12 }}>
+          <div style={{ background: "#e2e8f0", borderRadius: 8, height: 40 }} />
+          <div style={{ background: "#f1f5f9", borderRadius: 8, flex: 1 }} />
+        </div>
+      </div>
+    )}
   </div>
 </div>
 ```

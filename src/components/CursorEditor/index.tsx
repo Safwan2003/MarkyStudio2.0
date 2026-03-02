@@ -16,6 +16,7 @@ interface CursorEditorProps {
   onStepsChange: (steps: CursorStep[]) => void;
   durationInFrames: number;
   fps: number;
+  preloadedImage?: string;
 }
 
 const ACTION_OPTIONS: CursorStep["action"][] = ["click", "hover", "move", "none"];
@@ -25,6 +26,7 @@ export function CursorEditor({
   onStepsChange,
   durationInFrames,
   fps,
+  preloadedImage,
 }: CursorEditorProps) {
   const [localSteps, setLocalSteps] = useState<CursorStep[]>(steps);
   const [isDetecting, setIsDetecting] = useState(false);
@@ -62,25 +64,15 @@ export function CursorEditor({
     onStepsChange(localSteps);
   };
 
-  const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
+  const runVisionDetect = async (imageBase64: string) => {
     setIsDetecting(true);
     setDetectError(null);
 
     try {
-      const reader = new FileReader();
-      const base64 = await new Promise<string>((resolve, reject) => {
-        reader.onload = () => resolve(reader.result as string);
-        reader.onerror = reject;
-        reader.readAsDataURL(file);
-      });
-
       const response = await fetch("/api/vision", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ image: base64 }),
+        body: JSON.stringify({ image: imageBase64 }),
       });
 
       if (!response.ok) {
@@ -112,9 +104,34 @@ export function CursorEditor({
       );
     } finally {
       setIsDetecting(false);
+    }
+  };
+
+  const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    try {
+      const reader = new FileReader();
+      const base64 = await new Promise<string>((resolve, reject) => {
+        reader.onload = () => resolve(reader.result as string);
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+      await runVisionDetect(base64);
+    } catch (err) {
+      setDetectError(
+        err instanceof Error ? err.message : "Failed to read file",
+      );
+    } finally {
       // Reset file input
       if (fileInputRef.current) fileInputRef.current.value = "";
     }
+  };
+
+  const handleDetectFromAttached = async () => {
+    if (!preloadedImage) return;
+    await runVisionDetect(preloadedImage);
   };
 
   const totalSeconds = (durationInFrames / fps).toFixed(1);
@@ -137,6 +154,19 @@ export function CursorEditor({
             className="hidden"
             onChange={handleFileSelect}
           />
+          {preloadedImage && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={handleDetectFromAttached}
+              disabled={isDetecting}
+              className="text-teal-500 hover:text-teal-400 text-xs h-7 px-2 gap-1.5"
+              title="Auto-detect UI elements from the attached image"
+            >
+              <ImageIcon className="w-3.5 h-3.5" />
+              {isDetecting ? "Detecting..." : "Detect from Attached Image"}
+            </Button>
+          )}
           <Button
             variant="ghost"
             size="sm"
@@ -146,7 +176,7 @@ export function CursorEditor({
             title="Upload a screenshot to auto-detect UI elements"
           >
             <ImageIcon className="w-3.5 h-3.5" />
-            {isDetecting ? "Detecting..." : "Detect from Screenshot"}
+            {isDetecting ? "..." : "Detect from Screenshot"}
           </Button>
         </div>
       </div>

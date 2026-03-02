@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   compileCode as compile,
   type CompilationError,
@@ -24,11 +24,17 @@ export function useAnimationState(initialCode: string = "") {
     isCompiling: false,
   });
 
+  const attachedImagesRef = useRef<string[]>([]);
+
+  const setAttachedImages = useCallback((images: string[]) => {
+    attachedImagesRef.current = images;
+  }, []);
+
   // Compile code when it changes (with debouncing handled by caller)
   const compileCode = useCallback((code: string) => {
     setState((prev) => ({ ...prev, isCompiling: true }));
 
-    const result: CompilationResult = compile(code);
+    const result: CompilationResult = compile(code, attachedImagesRef.current);
 
     setState((prev) => ({
       ...prev,
@@ -55,5 +61,6 @@ export function useAnimationState(initialCode: string = "") {
     ...state,
     setCode,
     compileCode,
+    setAttachedImages,
   };
 }

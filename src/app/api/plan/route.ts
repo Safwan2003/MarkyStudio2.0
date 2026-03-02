@@ -1,43 +1,155 @@
 import { GoogleGenAI, Type } from "@google/genai";
 
-const NARRATIVE_PLANNING_PROMPT = `You are a video narrative planner for SaaS product explainer videos.
+// ---------------------------------------------------------------------------
+// Retry-with-backoff for 429 rate-limit responses
+// ---------------------------------------------------------------------------
 
-Given a product description or prompt, plan a complete 5–6 scene video narrative following this arc:
-1. Intro — Hook the viewer, introduce the brand/product (use premium-saas-hook or premium-kinetic-text)
-2. Problem — Show the pain point the product solves (use premium-team-orbit or premium-neon-dark)
-3. Solution — Reveal how the product solves it (use premium-network-intro or premium-saas-hook)
-4. Showcase — Demo the product in action (use premium-saas-showcase or premium-cursor-engine)
-5. Social Proof — Build trust (use premium-social-proof)
-6. CTA — Drive action (use premium-cta-scene)
+function extractRetryDelay(error: unknown): number | null {
+  const msg = error instanceof Error ? error.message : String(error);
+  // API returns retryDelay like "17s" or "17.375652384s"
+  const match = msg.match(/"retryDelay"\s*:\s*"([\d.]+)s"/);
+  return match ? Math.ceil(parseFloat(match[1])) + 2 : null; // +2s buffer
+}
 
-Available skills (use exactly these names):
-- premium-saas-hook
-- premium-saas-showcase
-- premium-cursor-engine
-- premium-team-orbit
-- premium-camera-zoom
-- premium-social-proof
-- premium-cta-scene
-- premium-kinetic-text
-- premium-neon-dark
-- premium-network-intro
-- premium-feature-list
+async function withRetry<T>(
+  fn: () => Promise<T>,
+  maxRetries = 3,
+): Promise<T> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      const isRateLimit = msg.includes("429") || msg.includes("RESOURCE_EXHAUSTED");
+      if (!isRateLimit || attempt === maxRetries) throw err;
+      const delaySec = extractRetryDelay(err) ?? Math.pow(2, attempt + 1) * 5;
+      console.log(`Rate limited — retrying in ${delaySec}s (attempt ${attempt + 1}/${maxRetries})`);
+      await new Promise((resolve) => setTimeout(resolve, delaySec * 1000));
+      lastError = err;
+    }
+  }
+  throw lastError;
+}
+
+// ---------------------------------------------------------------------------
+// Brand extraction from screenshots (vision)
+// ---------------------------------------------------------------------------
+
+const BRAND_EXTRACTION_PROMPT = `You are a precision brand color extractor for a video generation system.
+
+Analyze this product screenshot and extract the EXACT brand design system. Study carefully:
+- Primary CTA buttons, submit buttons, nav active states → primary color
+- Secondary interactive elements, badges, tags → secondary color
+- Overall page / app background → bg
+- Card, panel, sidebar backgrounds (if distinct from bg) → surface
+- Main body / heading text → text color
+- Subdued labels, captions, metadata text → textMuted
+- Card border lines, divider rules → border
+- Dominant visual mood of the UI → style
 
 Rules:
-- Each scene must have a tailored prompt specific to the product being described
-- durationInFrames should be 150–300 (at 30fps that's 5–10 seconds)
-- Intro and CTA scenes can be shorter (150–180 frames)
-- Problem and Showcase scenes should be longer (210–270 frames)
-- Total duration should be 1200–1500 frames (40–50 seconds)
-- Each scene prompt should reference specific product details from the user's input
-- The skill must match the scene type from the available list above
-- Prefix every scene prompt with: "Brand: primary=<hex>, secondary=<hex>, bg=<hex>, font=Inter"
+- Return 6-digit hex (#rrggbb) for solid colors
+- For surfaces/borders with clear transparency, return rgba() notation
+- "style" must be "dark" if the background is dark/black, "light" if white/near-white, "neon" if highly saturated neon colors dominate
+- If you cannot identify a value precisely, infer a professional default that matches the visible mood
+- Never return "N/A" — always provide a value`;
 
-For brandTokens:
-- Extract brand colors from the product description if hex codes are given
-- Otherwise infer a coherent, professional SaaS palette that fits the product tone
-- bg should be dark (e.g. #0f0f1a) for most SaaS videos unless explicitly described as light
-- accentName is a single word like "blue", "teal", "emerald", "violet", "rose"`;
+// ---------------------------------------------------------------------------
+// Narrative planning
+// ---------------------------------------------------------------------------
+
+const NARRATIVE_PLANNING_PROMPT = `You are a video narrative planner for SaaS product explainer videos.
+
+Given a product description, plan a complete 5–6 scene video narrative tailored to the product.
+
+## SCENE ARC
+Design scenes based on the product — vary the arc, do not always use the same 6 scenes.
+Common patterns:
+- Intro → Problem → Showcase → Features → Social Proof → CTA  (standard SaaS)
+- Intro → Before/After → Product Demo → Data/Stats → CTA       (data-driven product)
+- Intro → Problem → Solution Network → Device Demo → CTA       (platform/network product)
+- Hook → Scroll Demo → Feature List → Social Proof → CTA       (website/landing page product)
+
+## ALL AVAILABLE SKILLS (use EXACTLY these names)
+
+Brand / intro:
+- premium-saas-hook        — brand reveal, floating icons orbiting a hero laptop, dark cinematic intro
+- premium-kinetic-text     — high-energy word-by-word text reveal, brand pill with flash sweep
+- premium-char-split       — character-level headline animation, push-up letter reveal
+
+Problem / contrast:
+- premium-team-orbit       — floating team avatars with role badges, chaos scene, problem visualization
+- premium-split-screen     — animated before/after divider, old way vs new way side-by-side
+- premium-neon-dark        — dark/neon tech theme, sonar radar rings, shape-masked image reveal
+- premium-match-cut        — zoom-into-button match cut transition, whip cut, motion blur reveal
+
+Product showcase:
+- premium-saas-showcase    — browser chrome, dashboard layout, stat cards, slide-up entrance
+- premium-cursor-engine    — cursor spring movement, click ripple, UI walkthrough demo
+- premium-camera-zoom      — cinematic hero zoom into laptop/device screen
+- premium-device-mockup    — MacBook / browser / phone shell with ATTACHED_IMAGES screenshot
+- premium-scroll-demo      — scroll simulation inside browser shell, "living product" demo
+- premium-multi-device     — laptop + phone + tablet composite, cross-platform showcase
+
+Features / data:
+- premium-feature-list     — staggered 3–4 feature reveal, benefit list with icons
+- premium-data-reveal      — animated counters, stat cards, ring progress, bar fills
+- premium-network-intro    — avatar network graph, polka-dot SVG paths, B2B ecosystem
+- premium-ui-skeleton      — pre-built KanbanBoard / AnalyticsDashboard / CodeEditorPanel / DataTable components (pass data props only; NO structural JSX needed)
+
+Depth / atmosphere:
+- premium-glassmorphism    — glass cards with backdrop blur, blend-mode orbs, parallax depth layers
+
+Trust / social proof:
+- premium-social-proof     — glass notification cards, integration logos, testimonials, stacked avatars
+
+Finale:
+- premium-cta-scene        — kinetic CTA headline, pulsing gradient button, mesh background
+
+Sound (add to any scene that benefits from audio atmosphere):
+- premium-audio            — background music loop, per-frame SFX, volume fade automation
+
+## SKILL SELECTION RULES
+- Intro scene: prefer premium-kinetic-text or premium-saas-hook
+- Problem scene: prefer premium-split-screen, premium-team-orbit, or premium-match-cut
+- Depth/atmosphere: premium-glassmorphism can be used for any scene needing rich visual depth (avoid dark products where glassmorphism won't contrast)
+- If user uploaded a screenshot: at least ONE scene MUST use premium-device-mockup, premium-scroll-demo, or premium-saas-showcase
+- Data products (analytics, metrics): include premium-data-reveal
+- Platform / network products: include premium-network-intro
+- Cross-platform products: include premium-multi-device
+- CTA / finale: always premium-cta-scene
+- Never repeat the same skill in two scenes
+- premium-audio can optionally appear in any single scene for background music (e.g. intro, CTA) — do not use it in more than one scene
+
+## SCENE PROMPT REQUIREMENTS
+Each scene prompt must include (2–4 sentences):
+1. Visual goal — what the viewer should see and feel
+2. Exact content — headline text, subheadline, CTA text (use actual product name and features)
+3. Animation note — what enters first, what moves, in what order
+4. If it is a device/showcase scene: explicitly mention "display ATTACHED_IMAGES inside the device shell"
+
+## TIMING
+- Intro / CTA: 150–180 frames
+- Problem / Social Proof: 180–240 frames
+- Showcase / Features / Data: 210–270 frames
+- Total: 1050–1500 frames (35–50s at 30fps)
+
+## BRAND TOKENS
+Extract from product description and any provided images:
+- primary: main CTA/accent color
+- secondary: supporting accent (darker/lighter shade of primary, or complementary)
+- bg: "#0a0a14" to "#1a1a2e" for dark SaaS; "#f8fafc" or "#ffffff" for explicitly light/clean products
+- surface: "rgba(255,255,255,0.06)" for dark; "white" for light
+- text: "#ffffff" for dark; "#0f172a" for light
+- textMuted: "rgba(255,255,255,0.5)" for dark; "rgba(15,23,42,0.5)" for light
+- border: "rgba(255,255,255,0.12)" for dark; "rgba(0,0,0,0.08)" for light
+- style: "dark" | "light" | "neon"
+- accentName: single word like "indigo", "teal", "emerald", "rose", "amber"`;
+
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
 
 interface ScenePlanRaw {
   id: number;
@@ -51,12 +163,27 @@ interface BrandTokensRaw {
   primary: string;
   secondary: string;
   bg: string;
+  surface: string;
+  text: string;
+  textMuted: string;
+  border: string;
   font: string;
   accentName: string;
+  style: string;
 }
 
+function parseDataUrl(dataUrl: string): { mimeType: string; data: string } | null {
+  const match = dataUrl.match(/^data:([^;]+);base64,([\s\S]+)$/);
+  if (!match) return null;
+  return { mimeType: match[1], data: match[2] };
+}
+
+// ---------------------------------------------------------------------------
+// Route handler
+// ---------------------------------------------------------------------------
+
 export async function POST(req: Request) {
-  const { prompt } = await req.json();
+  const { prompt, images } = await req.json();
 
   const apiKey = process.env.GOOGLE_GENERATIVE_AI_API_KEY;
   if (!apiKey) {
@@ -76,15 +203,85 @@ export async function POST(req: Request) {
   const ai = new GoogleGenAI({ apiKey });
   const FAST_MODEL = "gemini-2.5-flash";
 
-  try {
-    const result = await ai.models.generateContent({
-      model: FAST_MODEL,
-      contents: [
-        {
-          role: "user",
-          parts: [{ text: `Product/video prompt: "${prompt}"\n\nPlan a complete 5–6 scene narrative video for this product, and extract brand tokens.` }],
+  // Parse attached images once
+  const parsedImages = Array.isArray(images)
+    ? images
+        .map((img: string) => parseDataUrl(img))
+        .filter((p): p is { mimeType: string; data: string } => p !== null)
+    : [];
+
+  // -------------------------------------------------------------------------
+  // Step 1 (optional): Vision-based brand extraction from uploaded screenshots
+  // -------------------------------------------------------------------------
+  let visionBrand: Partial<BrandTokensRaw> = {};
+
+  if (parsedImages.length > 0) {
+    try {
+      const brandResult = await withRetry(() => ai.models.generateContent({
+        model: FAST_MODEL,
+        contents: [
+          {
+            role: "user",
+            parts: [
+              { text: "Extract the brand design system from this product screenshot." },
+              { inlineData: parsedImages[0] },
+            ],
+          },
+        ],
+        config: {
+          systemInstruction: BRAND_EXTRACTION_PROMPT,
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              primary:    { type: Type.STRING },
+              secondary:  { type: Type.STRING },
+              bg:         { type: Type.STRING },
+              surface:    { type: Type.STRING },
+              text:       { type: Type.STRING },
+              textMuted:  { type: Type.STRING },
+              border:     { type: Type.STRING },
+              style:      { type: Type.STRING },
+            },
+            required: ["primary", "secondary", "bg", "surface", "text", "textMuted", "border", "style"],
+          },
         },
-      ],
+      }));
+
+      const extracted = JSON.parse(brandResult.text ?? "{}");
+      // Only keep fields that look like valid color values
+      const isColor = (v: unknown) =>
+        typeof v === "string" && (v.startsWith("#") || v.startsWith("rgb") || v.startsWith("hsl"));
+      if (isColor(extracted.primary))   visionBrand.primary   = extracted.primary;
+      if (isColor(extracted.secondary)) visionBrand.secondary = extracted.secondary;
+      if (isColor(extracted.bg))        visionBrand.bg        = extracted.bg;
+      if (isColor(extracted.surface))   visionBrand.surface   = extracted.surface;
+      if (isColor(extracted.text))      visionBrand.text      = extracted.text;
+      if (isColor(extracted.textMuted)) visionBrand.textMuted = extracted.textMuted;
+      if (isColor(extracted.border))    visionBrand.border    = extracted.border;
+      if (["dark","light","neon"].includes(extracted.style)) visionBrand.style = extracted.style;
+
+      console.log("Vision brand extraction:", visionBrand);
+    } catch (e) {
+      console.warn("Vision brand extraction failed (non-fatal):", e);
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // Step 2: Narrative planning (scenes + text-inferred brand)
+  // -------------------------------------------------------------------------
+  const hasImages = parsedImages.length > 0;
+  const textPart = {
+    text: `Product/video prompt: "${prompt}"
+
+${hasImages ? "The user has uploaded product screenshots. At least one scene MUST use premium-device-mockup, premium-scroll-demo, or premium-saas-showcase to display the actual screenshots inside a device shell (ATTACHED_IMAGES).\n\n" : ""}Plan a complete 5–6 scene narrative video for this product, and extract brand tokens.`,
+  };
+  const imageParts = parsedImages.map((p) => ({ inlineData: p }));
+
+  try {
+    const result = await withRetry(() => ai.models.generateContent({
+      model: FAST_MODEL,
+      contents: [{ role: "user", parts: [textPart, ...imageParts] }],
       config: {
         systemInstruction: NARRATIVE_PLANNING_PROMPT,
         responseMimeType: "application/json",
@@ -94,23 +291,28 @@ export async function POST(req: Request) {
             brand: {
               type: Type.OBJECT,
               properties: {
-                primary: { type: Type.STRING },
-                secondary: { type: Type.STRING },
-                bg: { type: Type.STRING },
-                font: { type: Type.STRING },
+                primary:    { type: Type.STRING },
+                secondary:  { type: Type.STRING },
+                bg:         { type: Type.STRING },
+                surface:    { type: Type.STRING },
+                text:       { type: Type.STRING },
+                textMuted:  { type: Type.STRING },
+                border:     { type: Type.STRING },
+                font:       { type: Type.STRING },
                 accentName: { type: Type.STRING },
+                style:      { type: Type.STRING },
               },
-              required: ["primary", "secondary", "bg", "font", "accentName"],
+              required: ["primary", "secondary", "bg", "surface", "text", "textMuted", "border", "font", "accentName", "style"],
             },
             scenes: {
               type: Type.ARRAY,
               items: {
                 type: Type.OBJECT,
                 properties: {
-                  id: { type: Type.NUMBER },
-                  title: { type: Type.STRING },
-                  prompt: { type: Type.STRING },
-                  skill: { type: Type.STRING },
+                  id:               { type: Type.NUMBER },
+                  title:            { type: Type.STRING },
+                  prompt:           { type: Type.STRING },
+                  skill:            { type: Type.STRING },
                   durationInFrames: { type: Type.NUMBER },
                 },
                 required: ["id", "title", "prompt", "skill", "durationInFrames"],
@@ -120,7 +322,7 @@ export async function POST(req: Request) {
           required: ["brand", "scenes"],
         },
       },
-    });
+    }));
 
     const parsed = JSON.parse(result.text ?? "{}") as {
       scenes: ScenePlanRaw[];
@@ -131,26 +333,30 @@ export async function POST(req: Request) {
       throw new Error("No scenes returned from planner");
     }
 
-    // Prefix each scene prompt with brand context
-    const brand = parsed.brand ?? {
-      primary: "#6366f1",
-      secondary: "#a78bfa",
-      bg: "#0f0f1a",
-      font: "Inter",
-      accentName: "indigo",
+    // Merge: vision-extracted colors take priority over text-inferred
+    const textBrand = parsed.brand ?? {};
+    const brand = {
+      primary:    visionBrand.primary    ?? textBrand.primary    ?? "#6366f1",
+      secondary:  visionBrand.secondary  ?? textBrand.secondary  ?? "#a78bfa",
+      bg:         visionBrand.bg         ?? textBrand.bg         ?? "#0f0f1a",
+      surface:    visionBrand.surface    ?? textBrand.surface    ?? "rgba(255,255,255,0.06)",
+      text:       visionBrand.text       ?? textBrand.text       ?? "#ffffff",
+      textMuted:  visionBrand.textMuted  ?? textBrand.textMuted  ?? "rgba(255,255,255,0.5)",
+      border:     visionBrand.border     ?? textBrand.border     ?? "rgba(255,255,255,0.12)",
+      font:       textBrand.font         ?? "Inter",
+      accentName: textBrand.accentName   ?? "indigo",
+      style:      (visionBrand.style ?? textBrand.style ?? "dark") as "dark" | "light" | "neon",
     };
 
-    const brandPrefix = `Brand: primary=${brand.primary}, secondary=${brand.secondary}, bg=${brand.bg}, font=${brand.font}\n`;
-    const scenes = parsed.scenes.map((s) => ({
-      ...s,
-      prompt: s.prompt.startsWith("Brand:") ? s.prompt : `${brandPrefix}${s.prompt}`,
-    }));
+    // Scene prompts are returned clean (no brand prefix) — the generation layer
+    // injects brand as a structured block at call time
+    const scenes = parsed.scenes;
 
     console.log(
       "Narrative plan:",
       scenes.map((s) => `${s.title} (${s.skill}, ${s.durationInFrames}f)`).join(" → "),
     );
-    console.log("Brand tokens:", brand);
+    console.log("Final brand:", brand);
 
     return new Response(JSON.stringify({ scenes, brand }), {
       status: 200,
@@ -158,9 +364,20 @@ export async function POST(req: Request) {
     });
   } catch (error) {
     console.error("Planning error:", error);
+
+    // Surface quota / rate-limit errors with actionable messaging
+    const msg = error instanceof Error ? error.message : String(error);
+    const isQuota = msg.includes("429") || msg.includes("RESOURCE_EXHAUSTED") || msg.includes("quota");
+    const retryMatch = msg.match(/"retryDelay"\s*:\s*"(\d+)s"/);
+    const retrySec = retryMatch ? parseInt(retryMatch[1], 10) : null;
+
+    const userMessage = isQuota
+      ? `Google AI quota exceeded.${retrySec ? ` Retry in ${retrySec}s.` : ""} Add billing at aistudio.google.com or wait for your daily quota to reset.`
+      : "Failed to generate video plan. Please try again.";
+
     return new Response(
-      JSON.stringify({ error: "Failed to generate video plan. Please try again." }),
-      { status: 500, headers: { "Content-Type": "application/json" } },
+      JSON.stringify({ error: userMessage }),
+      { status: isQuota ? 429 : 500, headers: { "Content-Type": "application/json" } },
     );
   }
 }

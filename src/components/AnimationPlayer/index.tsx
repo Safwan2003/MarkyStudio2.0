@@ -44,6 +44,10 @@ interface AnimationPlayerProps {
   code: string;
   /** Override code sent to Lambda for multi-scene export */
   masterCode?: string;
+  /** Images to inject into Lambda render scope as ATTACHED_IMAGES */
+  renderImages?: string[];
+  /** Brand tokens to inject into Lambda render scope as BRAND */
+  renderBrand?: Record<string, string>;
   onRuntimeError?: (error: string) => void;
   onFrameChange?: (frame: number) => void;
   /** When this value changes (and is non-null), the player seeks to this frame */
@@ -69,6 +73,8 @@ export const AnimationPlayer: React.FC<AnimationPlayerProps> = ({
   compilationError,
   code,
   masterCode,
+  renderImages = [],
+  renderBrand = {},
   onRuntimeError,
   onFrameChange,
   seekFrame,
@@ -244,6 +250,8 @@ export const AnimationPlayer: React.FC<AnimationPlayerProps> = ({
             code={renderCode}
             durationInFrames={durationInFrames}
             fps={fps}
+            images={renderImages}
+            brand={renderBrand}
           />
           <div className="flex items-center gap-2">
             {onToggleCursorMode && (

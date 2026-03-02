@@ -21,6 +21,16 @@ import premiumKineticTextSkill from "./premium-kinetic-text.md";
 import premiumNeonDarkSkill from "./premium-neon-dark.md";
 import premiumNetworkIntroSkill from "./premium-network-intro.md";
 import premiumFeatureListSkill from "./premium-feature-list.md";
+import premiumDeviceMockupSkill from "./premium-device-mockup.md";
+import premiumScrollDemoSkill from "./premium-scroll-demo.md";
+import premiumDataRevealSkill from "./premium-data-reveal.md";
+import premiumSplitScreenSkill from "./premium-split-screen.md";
+import premiumMultiDeviceSkill from "./premium-multi-device.md";
+import premiumGlassmorphismSkill from "./premium-glassmorphism.md";
+import premiumMatchCutSkill from "./premium-match-cut.md";
+import premiumCharSplitSkill from "./premium-char-split.md";
+import premiumAudioSkill from "./premium-audio.md";
+import premiumUiSkeletonSkill from "./premium-ui-skeleton.md";
 
 // Guidance skills (markdown files with patterns/rules)
 const GUIDANCE_SKILLS = [
@@ -44,6 +54,16 @@ const GUIDANCE_SKILLS = [
   "premium-neon-dark",
   "premium-network-intro",
   "premium-feature-list",
+  "premium-device-mockup",
+  "premium-scroll-demo",
+  "premium-data-reveal",
+  "premium-split-screen",
+  "premium-multi-device",
+  "premium-glassmorphism",
+  "premium-match-cut",
+  "premium-char-split",
+  "premium-audio",
+  "premium-ui-skeleton",
 ] as const;
 
 // Example skills (complete working code references)
@@ -85,6 +105,16 @@ const guidanceSkillContent: Record<(typeof GUIDANCE_SKILLS)[number], string> = {
   "premium-neon-dark": premiumNeonDarkSkill,
   "premium-network-intro": premiumNetworkIntroSkill,
   "premium-feature-list": premiumFeatureListSkill,
+  "premium-device-mockup": premiumDeviceMockupSkill,
+  "premium-scroll-demo": premiumScrollDemoSkill,
+  "premium-data-reveal": premiumDataRevealSkill,
+  "premium-split-screen": premiumSplitScreenSkill,
+  "premium-multi-device": premiumMultiDeviceSkill,
+  "premium-glassmorphism": premiumGlassmorphismSkill,
+  "premium-match-cut": premiumMatchCutSkill,
+  "premium-char-split": premiumCharSplitSkill,
+  "premium-audio": premiumAudioSkill,
+  "premium-ui-skeleton": premiumUiSkeletonSkill,
 };
 
 // Map example skill names to example IDs
@@ -155,6 +185,16 @@ Premium SaaS / Agency-quality template skills:
 - premium-neon-dark: dark/neon theme, tech/analytics product, sonar radar rings, SVG glow filter, neon accent color, shape-masked image reveal (heart/circle/custom), heartbeat pulse
 - premium-network-intro: network graph, avatar nodes connected by polka-dot SVG paths, B2B ecosystem, "join the network", ripple ring on avatar pop, elastic spring node entrance
 - premium-feature-list: feature list, product features, bullet points, 3-4 items, benefit list, key features, feature showcase, "what you get", "why choose us", staggered feature reveal
+- premium-device-mockup: device mockup, MacBook mockup, laptop with screenshot, browser window with product, phone mockup, product screenshot inside device shell, ATTACHED_IMAGES on screen, device frame
+- premium-scroll-demo: scroll simulation, scrolling product demo, website walkthrough, scroll through page, animated scroll, browser scroll, "living product" demo, scroll reveal
+- premium-data-reveal: animated stats, counting numbers, animated metrics, KPI reveal, number counter, stat cards, progress ring, bar fill animation, percentage counter, data credibility
+- premium-split-screen: before/after, comparison, side-by-side, problem vs solution, split screen, chaos vs clean, old way vs new way, contrast scene, divider reveal
+- premium-multi-device: multi-device, cross-platform, laptop and phone, responsive showcase, all devices, MacBook iPhone composite, device family, works everywhere
+- premium-glassmorphism: glass card, frosted glass, glassmorphism, backdrop blur, glowing orbs, blend mode, parallax depth, dark mode premium, mix-blend-mode, depth layers, parallax camera
+- premium-match-cut: match cut, zoom transition, cinematic transition, zoom into button, whip cut, motion blur, fast pan, scene transition, color match cut, cinematic cut
+- premium-char-split: character animation, letter by letter, char split, kinetic typography, text reveal, push-up text, rotating letters, scramble text, word stagger, headline animation, type on effect
+- premium-audio: background music, sound effects, SFX, audio track, looping music, ambient sound, volume fade, audio automation, soundtrack, sound design
+- premium-ui-skeleton: kanban board, task board, project board, analytics dashboard, KPI cards, bar chart, code editor, terminal, IDE, CRM table, data table, pipeline, deals table, dashboard layout, product UI demo
 
 Code examples (complete working references):
 - example-histogram: animated bar chart with spring animations and @remotion/shapes

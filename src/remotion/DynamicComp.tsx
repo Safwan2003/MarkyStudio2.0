@@ -9,11 +9,13 @@ import { compileCode } from "./compiler";
 
 interface DynamicCompProps {
   code: string;
+  images?: string[];
+  brand?: Record<string, string>;
   [key: string]: unknown;
 }
 
 export const DynamicComp: React.FC = () => {
-  const { code } = getInputProps() as DynamicCompProps;
+  const { code, images = [], brand = {} } = getInputProps() as DynamicCompProps;
 
   const [handle] = useState(() => delayRender("Compiling code..."));
   const [Component, setComponent] = useState<React.ComponentType | null>(null);
@@ -21,7 +23,7 @@ export const DynamicComp: React.FC = () => {
 
   useEffect(() => {
     try {
-      const result = compileCode(code);
+      const result = compileCode(code, images, brand);
 
       if (result.error) {
         setError(result.error);

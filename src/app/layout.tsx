@@ -1,5 +1,12 @@
+import { Inter } from "next/font/google";
 import { Metadata, Viewport } from "next";
 import "../../styles/global.css";
+
+const inter = Inter({
+  subsets: ["latin"],
+  weight: ["400", "500", "600", "700", "800", "900"],
+  display: "swap",
+});
 
 export const metadata: Metadata = {
   title: "Prompt to Motion Graphics - Remotion",
@@ -19,7 +26,7 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <body className="bg-background">{children}</body>
+      <body className={`bg-background ${inter.className}`}>{children}</body>
     </html>
   );
 }

@@ -1,43 +1,19 @@
 "use client";
 
 import { Button } from "@/components/ui/button";
-import { useGenerationApi } from "@/hooks/useGenerationApi";
 import { cn } from "@/lib/utils";
-import type {
-  AssistantMetadata,
-  ConversationContextMessage,
-  ConversationMessage,
-  EditOperation,
-  ErrorCorrectionContext,
-} from "@/types/conversation";
-import {
-  MODELS,
-  type GenerationErrorType,
-  type ModelId,
-  type StreamPhase,
-} from "@/types/generation";
+import type { ConversationMessage } from "@/types/conversation";
+import { MODELS, type ModelId } from "@/types/generation";
 import { PanelLeftClose, PanelLeftOpen, RotateCcw } from "lucide-react";
-import {
-  forwardRef,
-  useEffect,
-  useImperativeHandle,
-  useRef,
-  useState,
-  type ComponentType,
-} from "react";
+import { forwardRef, useImperativeHandle, useRef, useState } from "react";
 import { ChatHistory } from "./ChatHistory";
 import { ChatInput } from "./ChatInput";
 
 export interface ChatSidebarRef {
-  triggerGeneration: (options?: {
-    silent?: boolean;
-    attachedImages?: string[];
-  }) => void;
-  triggerFullVideoGeneration: (model: ModelId) => void;
+  triggerGenerate: (promptText: string, model: ModelId) => void;
 }
 
 interface ChatSidebarProps {
-  initialModel?: ModelId;
   messages: ConversationMessage[];
   pendingMessage?: {
     skills?: string[];
@@ -45,129 +21,45 @@ interface ChatSidebarProps {
   };
   isCollapsed: boolean;
   onToggleCollapse: () => void;
-  hasManualEdits: boolean;
-  // Generation callbacks
-  onCodeGenerated?: (code: string) => void;
-  onStreamingChange?: (isStreaming: boolean) => void;
-  onStreamPhaseChange?: (phase: StreamPhase) => void;
-  onError?: (
-    error: string,
-    type: GenerationErrorType,
-    failedEdit?: EditOperation,
-  ) => void;
   prompt: string;
   onPromptChange: (prompt: string) => void;
-  currentCode?: string;
-  conversationHistory?: ConversationContextMessage[];
-  previouslyUsedSkills?: string[];
-  isFollowUp?: boolean;
-  onMessageSent?: (prompt: string, attachedImages?: string[]) => void;
-  onGenerationComplete?: (
-    code: string,
-    summary?: string,
-    metadata?: AssistantMetadata,
-  ) => void;
-  onErrorMessage?: (
-    message: string,
-    errorType: "edit_failed" | "api" | "validation",
-  ) => void;
-  errorCorrection?: ErrorCorrectionContext;
-  onPendingMessage?: (skills?: string[]) => void;
-  onClearPendingMessage?: () => void;
-  onFullVideoGenerate?: (model: ModelId) => void;
-  // Frame capture props
-  Component?: ComponentType | null;
-  fps?: number;
-  durationInFrames?: number;
-  currentFrame?: number;
+  /** Called when user submits — receives the prompt text, selected model, and optional images */
+  onGenerate: (promptText: string, model: ModelId, images?: string[]) => void;
+  isLoading: boolean;
+  initialModel?: ModelId;
 }
 
 export const ChatSidebar = forwardRef<ChatSidebarRef, ChatSidebarProps>(
   function ChatSidebar(
     {
-      initialModel,
       messages,
       pendingMessage,
       isCollapsed,
       onToggleCollapse,
-      hasManualEdits,
-      onCodeGenerated,
-      onStreamingChange,
-      onStreamPhaseChange,
-      onError,
       prompt,
       onPromptChange,
-      currentCode,
-      conversationHistory = [],
-      previouslyUsedSkills = [],
-      isFollowUp = false,
-      onMessageSent,
-      onGenerationComplete,
-      onErrorMessage,
-      errorCorrection,
-      onPendingMessage,
-      onClearPendingMessage,
-      onFullVideoGenerate,
-      Component,
-      fps = 30,
-      durationInFrames = 150,
-      currentFrame = 0,
+      onGenerate,
+      isLoading,
+      initialModel,
     },
     ref,
   ) {
     const [model, setModel] = useState<ModelId>(initialModel || MODELS[1].id);
-    const promptRef = useRef<string>("");
+    const promptRef = useRef(prompt);
+    promptRef.current = prompt;
 
-    const { isLoading, runGeneration } = useGenerationApi();
-
-    // Keep prompt ref in sync for use in triggerGeneration
-    useEffect(() => {
-      promptRef.current = prompt;
-    }, [prompt]);
-
-    const handleGeneration = async (options?: {
-      silent?: boolean;
-      attachedImages?: string[];
-    }) => {
-      const currentPrompt = promptRef.current;
-      if (!currentPrompt.trim()) return;
-
-      onPromptChange(""); // Clear input immediately
-
-      await runGeneration(
-        currentPrompt,
-        model,
-        {
-          currentCode,
-          conversationHistory,
-          previouslyUsedSkills,
-          isFollowUp,
-          hasManualEdits,
-          errorCorrection,
-          frameImages: options?.attachedImages,
-        },
-        {
-          onCodeGenerated,
-          onStreamingChange,
-          onStreamPhaseChange,
-          onError,
-          onMessageSent,
-          onGenerationComplete,
-          onErrorMessage,
-          onPendingMessage,
-          onClearPendingMessage,
-        },
-        options,
-      );
-    };
-
-    // Expose triggerGeneration and triggerFullVideoGeneration via ref
     useImperativeHandle(ref, () => ({
-      triggerGeneration: handleGeneration,
-      triggerFullVideoGeneration: (model: ModelId) => {
-        onFullVideoGenerate?.(model);
+      triggerGenerate: (promptText: string, m: ModelId) => {
+        onGenerate(promptText, m);
       },
     }));
+
+    const handleGenerate = (selectedModel: ModelId, images?: string[]) => {
+      const currentPrompt = promptRef.current.trim();
+      if (!currentPrompt || isLoading) return;
+      onPromptChange("");
+      onGenerate(currentPrompt, selectedModel, images);
+    };
 
     return (
       <div
@@ -190,7 +82,6 @@ export const ChatSidebar = forwardRef<ChatSidebarRef, ChatSidebarProps>(
             </Button>
           </div>
         ) : (
-          /* Chat area with subtle backdrop */
           <div className="flex-1 flex flex-col min-h-0 ml-12 mr-8 mb-8 rounded-xl bg-muted/20 border border-border/30 shadow-sm">
             {/* Header */}
             <div className="flex items-start justify-between px-4 pt-4 pb-2">
@@ -237,14 +128,7 @@ export const ChatSidebar = forwardRef<ChatSidebarRef, ChatSidebarProps>(
               model={model}
               onModelChange={setModel}
               isLoading={isLoading}
-              onSubmit={(attachedImages) =>
-                handleGeneration({ attachedImages })
-              }
-              onFullVideoGenerate={onFullVideoGenerate}
-              Component={Component}
-              fps={fps}
-              durationInFrames={durationInFrames}
-              currentFrame={currentFrame}
+              onGenerate={handleGenerate}
             />
           </div>
         )}

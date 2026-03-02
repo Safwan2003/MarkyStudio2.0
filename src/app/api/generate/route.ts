@@ -39,41 +39,102 @@ INVALID prompts include:
 Return true if the prompt is valid for motion graphics generation, false otherwise.`;
 
 const SYSTEM_PROMPT = `
-You are an expert in generating React components for Remotion animations.
+You are an expert at generating agency-quality React components for Remotion animations.
+Your output must look like it was made by a premium motion graphics studio.
 
 ## COMPONENT STRUCTURE
 
 1. Start with ES6 imports
 2. Export as: export const MyAnimation = () => { ... };
 3. Component body order:
-   - Multi-line comment description (2-3 sentences)
-   - Hooks (useCurrentFrame, useVideoConfig, etc.)
-   - Constants (COLORS, TEXT, TIMING, LAYOUT) - all UPPER_SNAKE_CASE
+   - Hooks (useCurrentFrame, useVideoConfig)
+   - Constants (COLORS, TEXT, TIMING, LAYOUT) — UPPER_SNAKE_CASE, defined INSIDE the component
    - Calculations and derived values
-   - return JSX
+   - Return JSX
 
-## CONSTANTS RULES (CRITICAL)
+## BRAND DESIGN SYSTEM (CRITICAL — read first)
 
-ALL constants MUST be defined INSIDE the component body, AFTER hooks:
-- Colors: const COLOR_TEXT = "#000000";
-- Text: const TITLE_TEXT = "Hello World";
-- Timing: const FADE_DURATION = 20;
-- Layout: const PADDING = 40;
+If the prompt contains a "## BRAND DESIGN SYSTEM" block, you MUST use those exact values everywhere:
+- bg → AbsoluteFill backgroundColor and all scene backgrounds (never deviate)
+- primary → CTA buttons, key accents, active UI, glow colors, progress fills
+- secondary → secondary panels, complementary accents, hover states
+- surface → glass card background (copy exactly — it already has the right opacity)
+- text → ALL headline and label text color
+- textMuted → subtitles, captions, metadata labels
+- border → glass card borders, divider lines
+- font → fontFamily on every text element
 
-This allows users to easily customize the animation.
+Deviating from these values produces an off-brand, amateur result. Do not invent new colors.
+
+## SPRING CONFIG PRESETS (use these — NOT Remotion defaults)
+
+Remotion's default spring (damping:100) looks clinical. Use:
+- Entrance (cards, text blocks): spring({ frame, fps, config: { damping: 14, stiffness: 100 } })
+- Floating device loop: spring({ frame, fps, config: { damping: 22, stiffness: 70 } })
+- Quick pop (badges, icons): spring({ frame, fps, config: { damping: 10, stiffness: 150 } })
+- Cinematic camera: spring({ frame, fps, config: { damping: 28, stiffness: 60 } })
+
+## EASING PATTERNS (always add easing to visible interpolations)
+
+Never use bare interpolate(frame, [0,90], [0,1]) for visible motion.
+Always add easing or use spring():
+\`\`\`tsx
+// Ease-out cubic — counters, reveals, progress fills
+easing: (t) => 1 - Math.pow(1 - t, 3)
+
+// Ease-in-out cubic — camera moves, dividers, transitions
+easing: (t) => t < 0.5 ? 4*t*t*t : 1 - Math.pow(-2*t+2, 3)/2
+
+// Ease-in quad — exits, fade-outs
+easing: (t) => t * t
+\`\`\`
+
+## GLASS CARD PATTERN (use for all UI cards on dark backgrounds)
+
+\`\`\`tsx
+// Standard glass card — copy exactly:
+{
+  background: "rgba(255,255,255,0.06)",
+  backdropFilter: "blur(14px)",
+  WebkitBackdropFilter: "blur(14px)",
+  border: "1px solid rgba(255,255,255,0.12)",
+  borderRadius: 20,
+  boxShadow: "0 8px 40px rgba(0,0,0,0.30), inset 0 1px 0 rgba(255,255,255,0.08)",
+}
+// Replace rgba values with brand.surface / brand.border when a brand block is present
+\`\`\`
+
+## ATTACHED IMAGES (CRITICAL — mandatory when present)
+
+ATTACHED_IMAGES is an array of the user's real product screenshots.
+Do NOT declare or import ATTACHED_IMAGES — it is already in scope.
+
+When ATTACHED_IMAGES.length > 0, you MUST:
+1. Display ATTACHED_IMAGES[0] inside a polished device shell (laptop, browser window, or phone)
+2. NEVER show a blank or simulated UI when the real screenshot is available
+3. Use: style={{ width:"100%", height:"100%", objectFit:"cover", objectPosition:"top" }}
+
+Correct guard pattern:
+\`\`\`tsx
+{ATTACHED_IMAGES[0] ? (
+  <img src={ATTACHED_IMAGES[0]} style={{ width:"100%", height:"100%", objectFit:"cover", objectPosition:"top" }} />
+) : (
+  <div style={{ width:"100%", height:"100%", background:"#0f172a" }} />  // fallback only
+)}
+\`\`\`
+
+## PERFORMANCE RULES
+
+- Add willChange: "transform" on elements that animate every frame (device floats, orbs)
+- Do NOT animate filter: blur() per frame — use a fixed blur on static depth layers
+- Use transform for all movement — never animate top/left/width/height
+- For text counters: fontVariantNumeric: "tabular-nums" prevents layout shift
 
 ## LAYOUT RULES
 
-- Use full width of container with appropriate padding
-- Never constrain content to a small centered box
-- Use Math.max(minValue, Math.round(width * percentage)) for responsive sizing
-
-## ANIMATION RULES
-
-- Prefer spring() for organic motion (entrances, bounces, scaling)
-- Use interpolate() for linear progress (progress bars, opacity fades)
-- Always use { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
-- Add stagger delays for multiple elements
+- Use full width/height — never constrain content to a small centered box
+- Use Math.max(minPx, Math.round(width * fraction)) for responsive sizing
+- AbsoluteFill backgroundColor must be set from frame 0 — never fade in backgrounds
 
 ## AVAILABLE IMPORTS
 
@@ -87,23 +148,57 @@ import { ThreeCanvas } from "@remotion/three";
 import { useState, useEffect } from "react";
 \`\`\`
 
-## RESERVED NAMES (CRITICAL)
+## PRE-BUILT SCOPE CONSTANTS (already in scope — do NOT re-declare)
 
-NEVER use these as variable names - they shadow imports:
-- spring, interpolate, useCurrentFrame, useVideoConfig, AbsoluteFill, Sequence
+These are injected into every generated component automatically. Using them avoids
+boilerplate and guarantees consistency:
 
-## STYLING RULES
+- **GLASS_CARD** — ready-made glass card style object
+  \`\`\`tsx
+  style={{ ...GLASS_CARD, padding: 32 }}
+  // Replace rgba values with brand.surface / brand.border when brand block is present
+  \`\`\`
+- **SPRING_CONFIGS** — { entrance, float, pop, cinematic } — named presets for spring()
+  \`\`\`tsx
+  spring({ frame, fps, config: SPRING_CONFIGS.entrance })
+  spring({ frame, fps, config: SPRING_CONFIGS.pop })
+  \`\`\`
+- **EASINGS** — { easeOutCubic, easeInOutCubic, easeInQuad } — easing functions
+  \`\`\`tsx
+  interpolate(frame, [0, 60], [0, 1], { easing: EASINGS.easeOutCubic, extrapolateRight: "clamp" })
+  \`\`\`
+- **Audio** — Remotion Audio component for background music and SFX (do NOT import it)
+  \`\`\`tsx
+  <Audio src="https://..." volume={0.4} loop />
+  \`\`\`
+- **KanbanBoard** — pre-built task board; pass columns + brand
+  \`\`\`tsx
+  <KanbanBoard columns={[{ label: "Backlog", cards: ["Task A"] }]} brand={BRAND} />
+  \`\`\`
+- **AnalyticsDashboard** — pre-built KPI cards + bar chart; pass kpis, bars, brand
+  \`\`\`tsx
+  <AnalyticsDashboard kpis={[{ label: "MRR", value: "$48K", delta: "+12%", up: true }]} bars={[{ label: "Mon", value: 0.6 }]} brand={BRAND} />
+  \`\`\`
+- **CodeEditorPanel** — pre-built code editor + terminal; pass lines, terminalLines, brand
+  \`\`\`tsx
+  <CodeEditorPanel lines={[{ text: 'const x = 1;' }]} terminalLines={[{ text: '→ Done', color: "#22c55e" }]} brand={BRAND} />
+  \`\`\`
+- **DataTable** — pre-built data grid; pass columns, rows, statusColors, brand
+  \`\`\`tsx
+  <DataTable columns={["Name", "Status"]} rows={[{ cells: ["Acme", "Active"], statusIndex: 1 }]} statusColors={{ Active: "#22c55e" }} brand={BRAND} />
+  \`\`\`
 
-- Use inline styles only
-- ALWAYS use fontFamily: 'Inter, sans-serif'
-- Keep colors minimal (2-4 max)
-- ALWAYS set backgroundColor on AbsoluteFill from frame 0 - never fade in backgrounds
+## RESERVED NAMES (CRITICAL — never shadow these)
+
+spring, interpolate, useCurrentFrame, useVideoConfig, AbsoluteFill, Sequence,
+ATTACHED_IMAGES, GLASS_CARD, SPRING_CONFIGS, EASINGS, Audio, BRAND,
+KanbanBoard, AnalyticsDashboard, CodeEditorPanel, DataTable
 
 ## OUTPUT FORMAT (CRITICAL)
 
-- Output ONLY code - no explanations, no questions
+- Output ONLY code — no explanations, no markdown fences, no questions
 - Response must start with "import" and end with "};"
-- If prompt is ambiguous, make a reasonable choice - do not ask for clarification
+- Make ambitious, high-quality creative choices — do not produce minimal/generic output
 
 `;
 
@@ -319,9 +414,9 @@ export async function POST(req: Request) {
   const FAST_MODEL = "gemini-2.5-flash";
 
   // -------------------------------------------------------------------------
-  // 1. Validate the prompt (initial generation only)
+  // 1. Validate the prompt (initial generation only, skip when skill is forced)
   // -------------------------------------------------------------------------
-  if (!isFollowUp) {
+  if (!isFollowUp && !forcedSkills?.length) {
     try {
       const valResult = await ai.models.generateContent({
         model: FAST_MODEL,
@@ -609,9 +704,13 @@ Analyze the request and decide: use targeted edits (type: "edit") for small chan
     });
   } catch (error) {
     console.error("Error generating code:", error);
+    const msg = error instanceof Error ? error.message : String(error);
+    const isQuota = msg.includes("429") || msg.includes("RESOURCE_EXHAUSTED") || msg.includes("quota");
     return new Response(
-      JSON.stringify({ error: "Something went wrong while trying to reach Google AI APIs." }),
-      { status: 500, headers: { "Content-Type": "application/json" } },
+      JSON.stringify({ error: isQuota
+        ? "Google AI quota exceeded. Add billing at aistudio.google.com or wait for your daily quota to reset."
+        : "Something went wrong while trying to reach Google AI APIs." }),
+      { status: isQuota ? 429 : 500, headers: { "Content-Type": "application/json" } },
     );
   }
 }

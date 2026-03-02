@@ -1,6 +1,6 @@
 "use client";
 
-import { RefreshCw } from "lucide-react";
+import { MousePointer2, RefreshCw } from "lucide-react";
 
 const SEGMENT_COLORS = [
   "bg-blue-600/60 hover:bg-blue-600/80",
@@ -19,6 +19,8 @@ interface SceneTimelineProps {
   onSeek: (frame: number) => void;
   onRegenerateScene: (index: number) => void;
   regeneratingIndex: number | null;
+  hasCursorSteps?: boolean[];
+  onEditCursor?: (index: number) => void;
 }
 
 export function SceneTimeline({
@@ -29,6 +31,8 @@ export function SceneTimeline({
   onSeek,
   onRegenerateScene,
   regeneratingIndex,
+  hasCursorSteps,
+  onEditCursor,
 }: SceneTimelineProps) {
   if (!scenes.length || !totalDuration) return null;
 
@@ -58,6 +62,21 @@ export function SceneTimeline({
               <span className="text-[10px] font-medium text-white/80 px-1 truncate select-none">
                 {scene.title}
               </span>
+
+              {/* Cursor edit button (shown on hover, when scene has CURSOR_STEPS) */}
+              {hasCursorSteps?.[i] && onEditCursor && (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onEditCursor(i);
+                  }}
+                  title="Edit cursor steps"
+                  className="absolute right-6 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity text-white/80 hover:text-white"
+                >
+                  <MousePointer2 className="w-3 h-3" />
+                </button>
+              )}
 
               {/* Regen button (shown on hover) */}
               <button
