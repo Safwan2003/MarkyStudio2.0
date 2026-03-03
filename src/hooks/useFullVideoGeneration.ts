@@ -16,13 +16,14 @@ export interface CompiledScene {
   title: string;
   prompt: string;
   skill: string;
+  imageIndex?: number;
 }
 
 // Module-level cache — persists for the browser session
 const sceneCache = new Map<string, CompiledScene>();
 
 function cacheKey(scene: ScenePlan, brand: BrandTokens): string {
-  return `${scene.skill}::${brand.primary}::${scene.prompt.slice(0, 80)}`;
+  return `${scene.skill}::${brand.primary}::${scene.imageIndex ?? -1}::${scene.prompt.slice(0, 80)}`;
 }
 
 const FADE_FRAMES = 8;
@@ -178,11 +179,17 @@ async function consumeSceneGeneration(
   // Build the full prompt: brand block + scene creative brief
   const brandBlock = buildBrandBlock(brand);
 
-  // Vision → Cursor bridge: when generating a cursor walkthrough over an attached screenshot,
-  // pre-detect interactive elements so the LLM can use exact coordinates.
+  // Vision bridge: pre-detect UI elements from the screenshot and inject them into the prompt.
+  // - cursor-engine: precise x/y coordinates used as CURSOR_STEPS waypoints
+  // - scroll-demo / saas-showcase: element labels used to populate realistic content
+  const VISION_SKILLS = new Set([
+    "premium-cursor-engine",
+    "premium-scroll-demo",
+    "premium-saas-showcase",
+  ]);
   let detectedElementsBlock = "";
   if (
-    scene.skill === "premium-cursor-engine" &&
+    VISION_SKILLS.has(scene.skill) &&
     images &&
     images.length > 0 &&
     !errorContext // skip on retry — don't double-call vision
@@ -198,33 +205,49 @@ async function consumeSceneGeneration(
         const elements: Array<{ label: string; x: number; y: number }> =
           visionData.elements ?? [];
         if (elements.length > 0) {
-          // The screenshot sits below a thin 6% chrome bar — offset y coords accordingly
-          const transformed = elements.map((el) => ({
-            label: el.label,
-            x: parseFloat(el.x.toFixed(3)),
-            y: parseFloat((0.06 + el.y * 0.94).toFixed(3)),
-          }));
-          detectedElementsBlock = `
+          if (scene.skill === "premium-cursor-engine") {
+            // Cursor: use full x/y coords — screenshot sits below a 6% chrome bar
+            const transformed = elements.map((el) => ({
+              label: el.label,
+              x: parseFloat(el.x.toFixed(3)),
+              y: parseFloat((0.06 + el.y * 0.94).toFixed(3)),
+            }));
+            detectedElementsBlock = `
 
 ## DETECTED UI ELEMENTS FROM UPLOADED SCREENSHOT
 The screenshot is displayed below a 6% chrome bar at the top of the video frame.
-These coordinates are already in video space — use them EXACTLY for CURSOR_STEPS x/y.
+These coordinates are already in video space.
 Select 3–5 of the most interesting elements for the walkthrough demo.
 
+CRITICAL: You MUST include the following constant declaration in your generated code (do not assume it is in scope):
+
 const DETECTED_ELEMENTS = ${JSON.stringify(transformed, null, 2)};`;
+          } else {
+            // Scroll-demo / saas-showcase: use labels to populate accurate content
+            const labels = elements.map((el) => el.label);
+            detectedElementsBlock = `
+
+## DETECTED UI SECTIONS FROM UPLOADED SCREENSHOT
+These are the real UI sections/components visible in the screenshot.
+Use these labels to populate your component with accurate text, stat names, and layout sections that match the actual product — do NOT invent generic labels.
+
+CRITICAL: You MUST include the following constant declaration in your generated code (do not assume it is in scope):
+
+const DETECTED_SECTIONS = ${JSON.stringify(labels, null, 2)};`;
+          }
           console.log(
-            `Vision cursor bridge: ${elements.length} elements detected for "${scene.title}"`,
+            `Vision bridge (${scene.skill}): ${elements.length} elements detected for "${scene.title}"`,
           );
         }
       }
     } catch (e) {
-      console.warn("Vision detection for cursor bridge failed (non-fatal):", e);
+      console.warn("Vision detection failed (non-fatal):", e);
     }
   }
 
   const scenePrompt = errorContext
-    ? `${brandBlock}\n\n${scene.prompt}${detectedElementsBlock}\n\nPrevious attempt failed with this error:\n${errorContext}\nPlease fix the issues and regenerate.`
-    : `${brandBlock}\n\n${scene.prompt}${detectedElementsBlock}`;
+    ? `${brandBlock}\n\n${scene.prompt}${detectedElementsBlock} \n\nPrevious attempt failed with this error: \n${errorContext} \nPlease fix the issues and regenerate.`
+    : `${brandBlock} \n\n${scene.prompt}${detectedElementsBlock} `;
 
   const response = await fetch("/api/generate", {
     method: "POST",
@@ -242,7 +265,7 @@ const DETECTED_ELEMENTS = ${JSON.stringify(transformed, null, 2)};`;
     const errorData = await response.json().catch(() => ({}));
     throw new Error(
       errorData.error ||
-        `API error ${response.status} for scene "${scene.title}"`,
+      `API error ${response.status} for scene "${scene.title}"`,
     );
   }
 
@@ -288,6 +311,18 @@ const DETECTED_ELEMENTS = ${JSON.stringify(transformed, null, 2)};`;
   return finalCode;
 }
 
+/**
+ * When a scene has imageIndex set, put that image first in the array so LLM and compiler
+ * receive it as ATTACHED_IMAGES[0]. All other images follow.
+ */
+function reorderImagesForScene(images: string[] | undefined, scene: ScenePlan): string[] {
+  if (!images || images.length === 0) return [];
+  if (scene.imageIndex === undefined || scene.imageIndex < 0 || scene.imageIndex >= images.length) {
+    return images;
+  }
+  return [images[scene.imageIndex], ...images.filter((_, i) => i !== scene.imageIndex)];
+}
+
 /** Generate, compile, and error-recover a single scene. Never throws. */
 async function processScene(
   scene: ScenePlan,
@@ -306,11 +341,14 @@ async function processScene(
 
   onProgress(scene.title);
 
+  // Use scene-specific image ordering (imageIndex becomes ATTACHED_IMAGES[0])
+  const sceneImages = reorderImagesForScene(images, scene);
+
   // First attempt
   try {
-    const code = await consumeSceneGeneration(scene, model, brand, undefined, images);
+    const code = await consumeSceneGeneration(scene, model, brand, undefined, sceneImages);
     if (code.trim()) {
-      const result = compileCode(code, images ?? [], brand as Record<string, string>);
+      const result = compileCode(code, sceneImages, brand as Record<string, string>);
       if (!result.error && result.Component) {
         const compiled: CompiledScene = {
           Component: result.Component,
@@ -319,22 +357,23 @@ async function processScene(
           title: scene.title,
           prompt: scene.prompt,
           skill: scene.skill,
+          imageIndex: scene.imageIndex,
         };
         sceneCache.set(key, compiled);
         return compiled;
       }
 
-      // Retry with error context
+      // Retry with error context (use same sceneImages ordering)
       try {
         const retryCode = await consumeSceneGeneration(
           scene,
           model,
           brand,
           result.error ?? "Compilation failed — JSX or syntax error",
-          images,
+          sceneImages,
         );
         if (retryCode.trim()) {
-          const retryResult = compileCode(retryCode, images ?? [], brand as Record<string, string>);
+          const retryResult = compileCode(retryCode, sceneImages, brand as Record<string, string>);
           if (!retryResult.error && retryResult.Component) {
             const compiled: CompiledScene = {
               Component: retryResult.Component,
@@ -343,6 +382,7 @@ async function processScene(
               title: scene.title,
               prompt: scene.prompt,
               skill: scene.skill,
+              imageIndex: scene.imageIndex,
             };
             sceneCache.set(key, compiled);
             return compiled;
@@ -403,6 +443,7 @@ export function useFullVideoGeneration() {
   const [pendingPlan, setPendingPlan] = useState<{
     scenes: ScenePlan[];
     brand: BrandTokens;
+    imageDescriptions?: string[];
   } | null>(null);
   const [regeneratingSceneIndex, setRegeneratingSceneIndex] = useState<
     number | null
@@ -518,6 +559,7 @@ export function useFullVideoGeneration() {
         const data = await planResponse.json();
         const planScenes: ScenePlan[] = data.scenes ?? [];
         const brand: BrandTokens = { ...DEFAULT_BRAND, ...(data.brand ?? {}) };
+        const imageDescriptions: string[] = data.imageDescriptions ?? [];
 
         if (!planScenes.length) {
           throw new Error("No scenes returned from planner");
@@ -525,7 +567,7 @@ export function useFullVideoGeneration() {
 
         pendingModelRef.current = model;
         pendingBrandRef.current = brand;
-        setPendingPlan({ scenes: planScenes, brand });
+        setPendingPlan({ scenes: planScenes, brand, imageDescriptions });
       } catch (err) {
         setError(err instanceof Error ? err.message : "Planning failed");
       } finally {
@@ -567,9 +609,10 @@ export function useFullVideoGeneration() {
           prompt: scene.prompt,
           skill: scene.skill,
           durationInFrames: scene.durationInFrames,
+          imageIndex: scene.imageIndex,
         };
 
-        const updated = await processScene(scenePlan, model, brand, true, () => {}, images);
+        const updated = await processScene(scenePlan, model, brand, true, () => { }, images);
 
         setScenes((prev) => {
           const next = [...prev];

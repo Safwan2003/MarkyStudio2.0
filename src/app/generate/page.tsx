@@ -41,8 +41,23 @@ function GeneratePageContent() {
   const [currentFrame, setCurrentFrame] = useState(0);
   const [seekFrame, setSeekFrame] = useState<number | null>(null);
 
-  // Attached images (passed to every scene as ATTACHED_IMAGES)
-  const [attachedImages, setAttachedImages] = useState<string[]>([]);
+  // Attached images (passed to every scene as ATTACHED_IMAGES).
+  // Lazy initializer restores images that were stored in sessionStorage by the landing page.
+  const [attachedImages, setAttachedImages] = useState<string[]>(() => {
+    if (typeof window === "undefined") return [];
+    try {
+      const stored = sessionStorage.getItem("initialAttachedImages");
+      if (stored) {
+        sessionStorage.removeItem("initialAttachedImages");
+        const imgs = JSON.parse(stored);
+        return Array.isArray(imgs) ? imgs : [];
+      }
+    } catch {}
+    return [];
+  });
+
+  // Stable ref so the auto-start effect (empty deps) can read the initial images
+  const initialImagesRef = useRef<string[]>(attachedImages);
 
   // Index of the scene currently being edited in CursorEditor
   const [cursorSceneIndex, setCursorSceneIndex] = useState<number | null>(null);
@@ -92,6 +107,9 @@ function GeneratePageContent() {
   const sceneHasCursorSteps = fullVideoScenes.map((s) =>
     /const\s+CURSOR_STEPS\s*=/.test(s.code),
   );
+
+  // Scenes where compilation failed — empty code = placeholder
+  const failedScenes = fullVideoScenes.map((s) => s.code === "");
 
   const hasCursorContent =
     cursorSceneIndex !== null && sceneHasCursorSteps[cursorSceneIndex];
@@ -199,12 +217,12 @@ function GeneratePageContent() {
     setSeekFrame(frame);
   }, []);
 
-  // Auto-trigger from URL param
+  // Auto-trigger from URL param (reads images from ref so the empty-dep closure gets them)
   useEffect(() => {
     if (initialPrompt && !hasAutoStarted.current) {
       hasAutoStarted.current = true;
       const model = initialModel ?? ("gemini-2.5-flash:none" as ModelId);
-      setTimeout(() => handleGenerate(initialPrompt, model), 200);
+      setTimeout(() => handleGenerate(initialPrompt, model, initialImagesRef.current), 200);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -293,6 +311,7 @@ function GeneratePageContent() {
                     onRegenerateScene={regenerateScene}
                     regeneratingIndex={regeneratingSceneIndex}
                     hasCursorSteps={sceneHasCursorSteps}
+                    failedScenes={failedScenes}
                     onEditCursor={setCursorSceneIndex}
                   />
                 )}
@@ -348,6 +367,8 @@ function GeneratePageContent() {
                 <ScenePlanEditor
                   scenes={pendingPlan.scenes}
                   brand={pendingPlan.brand}
+                  images={attachedImages.length > 0 ? attachedImages : undefined}
+                  imageDescriptions={pendingPlan.imageDescriptions}
                   onConfirm={handleConfirmPlan}
                 />
               ) : undefined

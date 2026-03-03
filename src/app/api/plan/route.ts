@@ -114,7 +114,10 @@ Sound (add to any scene that benefits from audio atmosphere):
 - Intro scene: prefer premium-kinetic-text or premium-saas-hook
 - Problem scene: prefer premium-split-screen, premium-team-orbit, or premium-match-cut
 - Depth/atmosphere: premium-glassmorphism can be used for any scene needing rich visual depth (avoid dark products where glassmorphism won't contrast)
-- If user uploaded a screenshot: at least ONE scene MUST use premium-device-mockup, premium-scroll-demo, or premium-saas-showcase
+- If user uploaded screenshots:
+  - MANDATORY: At least ONE scene MUST use premium-cursor-engine for an interactive cursor walkthrough over the actual UI — the vision system will auto-detect buttons and interactive elements and inject them as cursor waypoints, you just need to assign the skill and set imageIndex to the most UI-rich screenshot
+  - ALSO MANDATORY: At least ONE scene (different from the cursor scene) MUST use premium-device-mockup, premium-scroll-demo, or premium-saas-showcase to display the screenshot inside a device frame
+  - For each showcase/cursor/device scene, set imageIndex (0-based integer) to indicate which uploaded screenshot is most relevant to that scene's content
 - Data products (analytics, metrics): include premium-data-reveal
 - Platform / network products: include premium-network-intro
 - Cross-platform products: include premium-multi-device
@@ -128,6 +131,14 @@ Each scene prompt must include (2–4 sentences):
 2. Exact content — headline text, subheadline, CTA text (use actual product name and features)
 3. Animation note — what enters first, what moves, in what order
 4. If it is a device/showcase scene: explicitly mention "display ATTACHED_IMAGES inside the device shell"
+
+## CURSOR SCENE PROMPT REQUIREMENTS (premium-cursor-engine ONLY)
+When writing the prompt for a cursor-engine scene, you MUST include a specific interaction sequence:
+- Name 3–5 concrete UI actions the cursor will perform, using actual product feature names
+- Format: "Cursor navigates to [Feature A] and clicks → moves to [Feature B] → hovers over [Feature C] and clicks"
+- Base actions on the product's key workflows (e.g., for a project manager: "opens New Project → adds a task → clicks the Kanban view → opens analytics dashboard")
+- The vision system will auto-detect element coordinates — you just need to describe WHAT to click, not WHERE
+- Example good prompt: "Interactive cursor walkthrough showing [Product] in action. Cursor clicks 'New Report' → navigates to the Analytics tab → selects a date range filter → clicks Export. Animate ATTACHED_IMAGES[0] as the live UI backdrop."
 
 ## TIMING
 - Intro / CTA: 150–180 frames
@@ -157,6 +168,7 @@ interface ScenePlanRaw {
   prompt: string;
   skill: string;
   durationInFrames: number;
+  imageIndex?: number;
 }
 
 interface BrandTokensRaw {
@@ -211,59 +223,103 @@ export async function POST(req: Request) {
     : [];
 
   // -------------------------------------------------------------------------
-  // Step 1 (optional): Vision-based brand extraction from uploaded screenshots
+  // Step 1 (optional, parallel): Vision brand extraction + image descriptions
   // -------------------------------------------------------------------------
   let visionBrand: Partial<BrandTokensRaw> = {};
+  let imageDescriptions: string[] = [];
 
   if (parsedImages.length > 0) {
-    try {
-      const brandResult = await withRetry(() => ai.models.generateContent({
-        model: FAST_MODEL,
-        contents: [
-          {
-            role: "user",
-            parts: [
-              { text: "Extract the brand design system from this product screenshot." },
-              { inlineData: parsedImages[0] },
-            ],
-          },
-        ],
-        config: {
-          systemInstruction: BRAND_EXTRACTION_PROMPT,
-          responseMimeType: "application/json",
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              primary:    { type: Type.STRING },
-              secondary:  { type: Type.STRING },
-              bg:         { type: Type.STRING },
-              surface:    { type: Type.STRING },
-              text:       { type: Type.STRING },
-              textMuted:  { type: Type.STRING },
-              border:     { type: Type.STRING },
-              style:      { type: Type.STRING },
-            },
-            required: ["primary", "secondary", "bg", "surface", "text", "textMuted", "border", "style"],
-          },
+    // Run brand extraction and (if >1 image) description extraction in parallel
+    const brandPromise = withRetry(() => ai.models.generateContent({
+      model: FAST_MODEL,
+      contents: [
+        {
+          role: "user",
+          parts: [
+            { text: "Extract the brand design system from this product screenshot." },
+            { inlineData: parsedImages[0] },
+          ],
         },
-      }));
+      ],
+      config: {
+        systemInstruction: BRAND_EXTRACTION_PROMPT,
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            primary:    { type: Type.STRING },
+            secondary:  { type: Type.STRING },
+            bg:         { type: Type.STRING },
+            surface:    { type: Type.STRING },
+            text:       { type: Type.STRING },
+            textMuted:  { type: Type.STRING },
+            border:     { type: Type.STRING },
+            style:      { type: Type.STRING },
+          },
+          required: ["primary", "secondary", "bg", "surface", "text", "textMuted", "border", "style"],
+        },
+      },
+    }));
 
-      const extracted = JSON.parse(brandResult.text ?? "{}");
-      // Only keep fields that look like valid color values
-      const isColor = (v: unknown) =>
-        typeof v === "string" && (v.startsWith("#") || v.startsWith("rgb") || v.startsWith("hsl"));
-      if (isColor(extracted.primary))   visionBrand.primary   = extracted.primary;
-      if (isColor(extracted.secondary)) visionBrand.secondary = extracted.secondary;
-      if (isColor(extracted.bg))        visionBrand.bg        = extracted.bg;
-      if (isColor(extracted.surface))   visionBrand.surface   = extracted.surface;
-      if (isColor(extracted.text))      visionBrand.text      = extracted.text;
-      if (isColor(extracted.textMuted)) visionBrand.textMuted = extracted.textMuted;
-      if (isColor(extracted.border))    visionBrand.border    = extracted.border;
-      if (["dark","light","neon"].includes(extracted.style)) visionBrand.style = extracted.style;
+    // For multiple images, ask the LLM to label each one so the planner can assign them
+    const descPromise = parsedImages.length > 1
+      ? withRetry(() => ai.models.generateContent({
+          model: FAST_MODEL,
+          contents: [
+            {
+              role: "user",
+              parts: [
+                {
+                  text: `Describe each of these ${parsedImages.length} product screenshots in one short sentence (what screen/feature it shows). Return JSON.`,
+                },
+                ...parsedImages.map((p) => ({ inlineData: p })),
+              ],
+            },
+          ],
+          config: {
+            responseMimeType: "application/json",
+            responseSchema: {
+              type: Type.OBJECT,
+              properties: {
+                descriptions: { type: Type.ARRAY, items: { type: Type.STRING } },
+              },
+              required: ["descriptions"],
+            },
+          },
+        }))
+      : Promise.resolve(null);
 
-      console.log("Vision brand extraction:", visionBrand);
-    } catch (e) {
-      console.warn("Vision brand extraction failed (non-fatal):", e);
+    const [brandResult, descResult] = await Promise.allSettled([brandPromise, descPromise]);
+
+    if (brandResult.status === "fulfilled") {
+      try {
+        const extracted = JSON.parse(brandResult.value.text ?? "{}");
+        const isColor = (v: unknown) =>
+          typeof v === "string" && (v.startsWith("#") || v.startsWith("rgb") || v.startsWith("hsl"));
+        if (isColor(extracted.primary))   visionBrand.primary   = extracted.primary;
+        if (isColor(extracted.secondary)) visionBrand.secondary = extracted.secondary;
+        if (isColor(extracted.bg))        visionBrand.bg        = extracted.bg;
+        if (isColor(extracted.surface))   visionBrand.surface   = extracted.surface;
+        if (isColor(extracted.text))      visionBrand.text      = extracted.text;
+        if (isColor(extracted.textMuted)) visionBrand.textMuted = extracted.textMuted;
+        if (isColor(extracted.border))    visionBrand.border    = extracted.border;
+        if (["dark","light","neon"].includes(extracted.style)) visionBrand.style = extracted.style;
+        console.log("Vision brand extraction:", visionBrand);
+      } catch (e) {
+        console.warn("Vision brand parse failed (non-fatal):", e);
+      }
+    } else {
+      console.warn("Vision brand extraction failed (non-fatal):", brandResult.reason);
+    }
+
+    if (descResult.status === "fulfilled" && descResult.value) {
+      try {
+        const parsed = JSON.parse(descResult.value.text ?? "{}");
+        imageDescriptions = Array.isArray(parsed.descriptions) ? parsed.descriptions : [];
+        console.log("Image descriptions:", imageDescriptions);
+      } catch (e) {
+        console.warn("Image description parse failed (non-fatal):", e);
+      }
     }
   }
 
@@ -271,10 +327,23 @@ export async function POST(req: Request) {
   // Step 2: Narrative planning (scenes + text-inferred brand)
   // -------------------------------------------------------------------------
   const hasImages = parsedImages.length > 0;
+
+  // Build image context block for the planner
+  let imageContextBlock = "";
+  if (hasImages) {
+    const countStr = parsedImages.length === 1
+      ? "1 product screenshot (index 0)"
+      : `${parsedImages.length} product screenshots (indices 0–${parsedImages.length - 1})`;
+    const descLines = imageDescriptions.length > 0
+      ? imageDescriptions.map((d, i) => `  - Image ${i}: ${d}`).join("\n")
+      : parsedImages.map((_, i) => `  - Image ${i}: screenshot ${i + 1}`).join("\n");
+    imageContextBlock = `\nATTACHED IMAGES: The user has uploaded ${countStr}.\n${descLines}\n\nFor showcase/cursor/device scenes, set imageIndex to the most relevant image index.\n`;
+  }
+
   const textPart = {
     text: `Product/video prompt: "${prompt}"
-
-${hasImages ? "The user has uploaded product screenshots. At least one scene MUST use premium-device-mockup, premium-scroll-demo, or premium-saas-showcase to display the actual screenshots inside a device shell (ATTACHED_IMAGES).\n\n" : ""}Plan a complete 5–6 scene narrative video for this product, and extract brand tokens.`,
+${imageContextBlock}
+Plan a complete 5–6 scene narrative video for this product, and extract brand tokens.`,
   };
   const imageParts = parsedImages.map((p) => ({ inlineData: p }));
 
@@ -314,6 +383,7 @@ ${hasImages ? "The user has uploaded product screenshots. At least one scene MUS
                   prompt:           { type: Type.STRING },
                   skill:            { type: Type.STRING },
                   durationInFrames: { type: Type.NUMBER },
+                  imageIndex:       { type: Type.NUMBER },
                 },
                 required: ["id", "title", "prompt", "skill", "durationInFrames"],
               },
@@ -349,16 +419,23 @@ ${hasImages ? "The user has uploaded product screenshots. At least one scene MUS
     };
 
     // Scene prompts are returned clean (no brand prefix) — the generation layer
-    // injects brand as a structured block at call time
-    const scenes = parsed.scenes;
+    // injects brand as a structured block at call time.
+    // Clamp imageIndex to valid range so bad LLM output doesn't cause errors downstream.
+    const maxImageIdx = parsedImages.length - 1;
+    const scenes = parsed.scenes.map((s) => ({
+      ...s,
+      imageIndex: (typeof s.imageIndex === "number" && s.imageIndex >= 0 && s.imageIndex <= maxImageIdx)
+        ? s.imageIndex
+        : undefined,
+    }));
 
     console.log(
       "Narrative plan:",
-      scenes.map((s) => `${s.title} (${s.skill}, ${s.durationInFrames}f)`).join(" → "),
+      scenes.map((s) => `${s.title} (${s.skill}${s.imageIndex !== undefined ? `, img${s.imageIndex}` : ""})`).join(" → "),
     );
     console.log("Final brand:", brand);
 
-    return new Response(JSON.stringify({ scenes, brand }), {
+    return new Response(JSON.stringify({ scenes, brand, imageDescriptions }), {
       status: 200,
       headers: { "Content-Type": "application/json" },
     });

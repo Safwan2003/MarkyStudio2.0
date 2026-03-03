@@ -9,7 +9,7 @@ const inter = Inter({
 });
 
 export const metadata: Metadata = {
-  title: "Prompt to Motion Graphics - Remotion",
+  title: "MarkyStudio ",
   description: "Prompt to Motion Graphics - Remotion",
 };
 

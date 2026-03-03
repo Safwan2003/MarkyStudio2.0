@@ -39,16 +39,16 @@ const GLASS_CARD = {
 } as const;
 
 const SPRING_CONFIGS = {
-  entrance:  { damping: 14, stiffness: 100 },
-  float:     { damping: 22, stiffness: 70  },
-  pop:       { damping: 10, stiffness: 150 },
-  cinematic: { damping: 28, stiffness: 60  },
+  entrance: { damping: 14, stiffness: 100 },
+  float: { damping: 22, stiffness: 70 },
+  pop: { damping: 10, stiffness: 150 },
+  cinematic: { damping: 28, stiffness: 60 },
 } as const;
 
 const EASINGS = {
-  easeOutCubic:    (t: number) => 1 - Math.pow(1 - t, 3),
-  easeInOutCubic:  (t: number) => t < 0.5 ? 4*t*t*t : 1 - Math.pow(-2*t+2, 3)/2,
-  easeInQuad:      (t: number) => t * t,
+  easeOutCubic: (t: number) => 1 - Math.pow(1 - t, 3),
+  easeInOutCubic: (t: number) => t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2,
+  easeInQuad: (t: number) => t * t,
 } as const;
 
 // ---------------------------------------------------------------------------
@@ -231,7 +231,7 @@ const CodeEditorPanel = ({ lines, terminalLines, filename, brand }: {
       React.createElement("div", {
         style: { height: 36, backgroundColor: "#161b22", display: "flex", alignItems: "center", paddingLeft: 14, gap: 7, borderBottom: "1px solid rgba(255,255,255,0.08)" },
       },
-        ...["#ef4444","#f59e0b","#22c55e"].map((c, i) =>
+        ...["#ef4444", "#f59e0b", "#22c55e"].map((c, i) =>
           React.createElement("div", { key: i, style: { width: 11, height: 11, borderRadius: "50%", backgroundColor: c } }),
         ),
         React.createElement("span", { style: { marginLeft: 10, fontSize: 11, color: dimColor } }, filename ?? "main.tsx"),
@@ -566,8 +566,15 @@ export function compileCode(
       "DataTable",
       "ATTACHED_IMAGES",
       "BRAND",
+      "DETECTED_ELEMENTS",
+      "DETECTED_SECTIONS",
       wrappedCode,
     );
+
+    // Provide safe defaults for variables the LLM might assume are globally available
+    // because they were mentioned in the prompt, but failed to explicitly declare.
+    const defaultDetectedElements = [{ label: "mock_element", x: 0.5, y: 0.5 }];
+    const defaultDetectedSections = ["mock_section"];
 
     const Component = createComponent(
       React,
@@ -623,6 +630,8 @@ export function compileCode(
       DataTable,
       attachedImages,
       brand,
+      defaultDetectedElements,
+      defaultDetectedSections,
     );
 
     if (typeof Component !== "function") {

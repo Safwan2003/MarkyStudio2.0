@@ -24,6 +24,8 @@ export interface ScenePlan {
   prompt: string;
   skill: string;
   durationInFrames: number;
+  /** Which uploaded image (0-based index) is primarily used in this scene. Undefined = use all images. */
+  imageIndex?: number;
 }
 
 /**

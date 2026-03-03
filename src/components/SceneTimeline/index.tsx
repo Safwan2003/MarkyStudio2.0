@@ -1,6 +1,6 @@
 "use client";
 
-import { MousePointer2, RefreshCw } from "lucide-react";
+import { AlertTriangle, MousePointer2, RefreshCw } from "lucide-react";
 
 const SEGMENT_COLORS = [
   "bg-blue-600/60 hover:bg-blue-600/80",
@@ -20,6 +20,8 @@ interface SceneTimelineProps {
   onRegenerateScene: (index: number) => void;
   regeneratingIndex: number | null;
   hasCursorSteps?: boolean[];
+  /** Parallel array — true if that scene failed to compile */
+  failedScenes?: boolean[];
   onEditCursor?: (index: number) => void;
 }
 
@@ -32,6 +34,7 @@ export function SceneTimeline({
   onRegenerateScene,
   regeneratingIndex,
   hasCursorSteps,
+  failedScenes,
   onEditCursor,
 }: SceneTimelineProps) {
   if (!scenes.length || !totalDuration) return null;
@@ -47,8 +50,10 @@ export function SceneTimeline({
           const startFrame = cumulativeFrames;
           cumulativeFrames += scene.durationInFrames;
           const widthPct = (scene.durationInFrames / totalDuration) * 100;
-          const colorClass =
-            SEGMENT_COLORS[i % SEGMENT_COLORS.length];
+          const isFailed = failedScenes?.[i] ?? false;
+          const colorClass = isFailed
+            ? "bg-red-700/70 hover:bg-red-700/90"
+            : SEGMENT_COLORS[i % SEGMENT_COLORS.length];
 
           return (
             <div
@@ -56,8 +61,13 @@ export function SceneTimeline({
               className={`relative flex items-center justify-center cursor-pointer transition-colors ${colorClass}`}
               style={{ width: `${widthPct}%` }}
               onClick={() => onSeek(startFrame)}
-              title={`${scene.title} — click to seek`}
+              title={isFailed ? `${scene.title} — failed to generate, click to regenerate` : `${scene.title} — click to seek`}
             >
+              {/* Failed badge */}
+              {isFailed && (
+                <AlertTriangle className="w-3 h-3 text-red-200 shrink-0 mr-0.5" />
+              )}
+
               {/* Scene title */}
               <span className="text-[10px] font-medium text-white/80 px-1 truncate select-none">
                 {scene.title}
@@ -78,7 +88,7 @@ export function SceneTimeline({
                 </button>
               )}
 
-              {/* Regen button (shown on hover) */}
+              {/* Regen button (always visible on failed scenes, hover-only otherwise) */}
               <button
                 type="button"
                 onClick={(e) => {
@@ -87,7 +97,9 @@ export function SceneTimeline({
                 }}
                 disabled={regeneratingIndex !== null}
                 title="Regenerate this scene"
-                className="absolute right-1 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity disabled:opacity-30 text-white/80 hover:text-white"
+                className={`absolute right-1 top-1/2 -translate-y-1/2 transition-opacity disabled:opacity-30 text-white/80 hover:text-white ${
+                  isFailed ? "opacity-90" : "opacity-0 group-hover:opacity-100"
+                }`}
               >
                 <RefreshCw
                   className={`w-3 h-3 ${regeneratingIndex === i ? "animate-spin" : ""}`}
@@ -107,6 +119,13 @@ export function SceneTimeline({
         <span className="text-[10px] text-muted-foreground">
           {(currentFrame / fps).toFixed(1)}s
         </span>
+        {failedScenes?.some(Boolean) && (
+          <span className="text-[10px] text-red-400 flex items-center gap-0.5">
+            <AlertTriangle className="w-2.5 h-2.5" />
+            {failedScenes.filter(Boolean).length} scene{failedScenes.filter(Boolean).length > 1 ? "s" : ""} failed — click
+            <RefreshCw className="w-2.5 h-2.5 ml-0.5" /> to retry
+          </span>
+        )}
         <span className="text-[10px] text-muted-foreground">
           {(totalDuration / fps).toFixed(1)}s
         </span>

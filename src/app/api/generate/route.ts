@@ -462,7 +462,7 @@ export async function POST(req: Request) {
     try {
       const skillResult = await ai.models.generateContent({
         model: FAST_MODEL,
-        contents: [{ role: "user", parts: [{ text: `User prompt: "${prompt}"` }] }],
+        contents: [{ role: "user", parts: buildParts(`User prompt: "${prompt}"`, frameImages) }],
         config: {
           systemInstruction: SKILL_DETECTION_PROMPT,
           responseMimeType: "application/json",

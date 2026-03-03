@@ -7,27 +7,53 @@ import { useState } from "react";
 
 const AVAILABLE_SKILLS = [
   "premium-saas-hook",
+  "premium-kinetic-text",
+  "premium-char-split",
+  "premium-team-orbit",
+  "premium-split-screen",
+  "premium-neon-dark",
+  "premium-match-cut",
   "premium-saas-showcase",
   "premium-cursor-engine",
-  "premium-team-orbit",
   "premium-camera-zoom",
+  "premium-device-mockup",
+  "premium-scroll-demo",
+  "premium-multi-device",
+  "premium-feature-list",
+  "premium-data-reveal",
+  "premium-network-intro",
+  "premium-ui-skeleton",
+  "premium-glassmorphism",
   "premium-social-proof",
   "premium-cta-scene",
-  "premium-kinetic-text",
-  "premium-neon-dark",
-  "premium-network-intro",
-  "premium-feature-list",
+  "premium-audio",
 ] as const;
+
+// Skills that display images — show the image picker for these
+const IMAGE_SKILLS = new Set([
+  "premium-cursor-engine",
+  "premium-device-mockup",
+  "premium-scroll-demo",
+  "premium-saas-showcase",
+  "premium-camera-zoom",
+  "premium-multi-device",
+]);
 
 interface ScenePlanEditorProps {
   scenes: ScenePlan[];
   brand: BrandTokens;
+  /** Optional: uploaded images shown as thumbnails for per-scene assignment */
+  images?: string[];
+  /** Optional: AI-generated one-line description for each uploaded image */
+  imageDescriptions?: string[];
   onConfirm: (editedScenes: ScenePlan[]) => void;
 }
 
 export function ScenePlanEditor({
   scenes: initialScenes,
   brand,
+  images,
+  imageDescriptions,
   onConfirm,
 }: ScenePlanEditorProps) {
   const [localScenes, setLocalScenes] = useState<ScenePlan[]>(initialScenes);
@@ -176,6 +202,50 @@ export function ScenePlanEditor({
                 placeholder="Scene prompt..."
               />
             </div>
+
+            {/* Row 4: image picker — shown when multiple images uploaded + skill uses images */}
+            {images && images.length > 1 && IMAGE_SKILLS.has(scene.skill) && (
+              <div className="pl-7 flex items-center gap-1.5 flex-wrap">
+                <span className="text-[10px] text-muted-foreground shrink-0">Screenshot:</span>
+                {images.map((img, imgIdx) => {
+                  const desc = imageDescriptions?.[imgIdx];
+                  return (
+                    <div key={imgIdx} className="flex flex-col items-center gap-0.5 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => handleSceneChange(i, "imageIndex", imgIdx)}
+                        className={`relative w-9 h-9 rounded border-2 overflow-hidden transition-all ${
+                          scene.imageIndex === imgIdx
+                            ? "border-teal-500 ring-1 ring-teal-500/40"
+                            : "border-border/40 hover:border-border opacity-60 hover:opacity-100"
+                        }`}
+                        title={desc ?? `Screenshot ${imgIdx + 1}`}
+                      >
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img src={img} alt={desc ?? `Screenshot ${imgIdx + 1}`} className="w-full h-full object-cover" />
+                        {scene.imageIndex === imgIdx && (
+                          <div className="absolute inset-0 bg-teal-500/20" />
+                        )}
+                      </button>
+                      {desc && (
+                        <span className="text-[9px] text-muted-foreground text-center leading-tight max-w-[38px] truncate" title={desc}>
+                          {desc.split(" ").slice(0, 2).join(" ")}
+                        </span>
+                      )}
+                    </div>
+                  );
+                })}
+                {scene.imageIndex !== undefined && (
+                  <button
+                    type="button"
+                    onClick={() => handleSceneChange(i, "imageIndex", undefined)}
+                    className="text-[10px] text-muted-foreground hover:text-foreground ml-1"
+                  >
+                    clear
+                  </button>
+                )}
+              </div>
+            )}
           </div>
         ))}
       </div>
