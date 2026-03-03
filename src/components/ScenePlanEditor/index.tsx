@@ -1,9 +1,10 @@
 "use client";
 
 import { Button } from "@/components/ui/button";
-import type { BrandTokens, ScenePlan } from "@/types/generation";
-import { Film, Plus, Trash2 } from "lucide-react";
-import { useState } from "react";
+import type { BrandTokens, CursorWaypoint, ScenePlan } from "@/types/generation";
+import { Film, MousePointerClick, Plus, Trash2 } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { CursorWaypointEditor } from "./CursorWaypointEditor";
 
 const AVAILABLE_SKILLS = [
   "premium-saas-hook",
@@ -57,6 +58,12 @@ export function ScenePlanEditor({
   onConfirm,
 }: ScenePlanEditorProps) {
   const [localScenes, setLocalScenes] = useState<ScenePlan[]>(initialScenes);
+  /** Index of the scene whose cursor path editor is open, or null */
+  const [cursorEditorScene, setCursorEditorScene] = useState<number | null>(null);
+  /** Per-scene vision loading state */
+  const [visionLoading, setVisionLoading] = useState<Record<number, boolean>>({});
+  /** Track which (sceneId, imageIdx) combos we already fetched to avoid refetching */
+  const fetchedRef = useRef<Set<string>>(new Set());
 
   const handleSceneChange = <K extends keyof ScenePlan>(
     index: number,
@@ -67,6 +74,54 @@ export function ScenePlanEditor({
       prev.map((s, i) => (i === index ? { ...s, [field]: value } : s)),
     );
   };
+
+  // ── Vision pre-fetch ──────────────────────────────────────────────────────
+  // For every cursor-engine scene with an image assigned that doesn't yet have
+  // user-confirmed waypoints, auto-call /api/vision in the background.
+  useEffect(() => {
+    if (!images || images.length === 0) return;
+
+    localScenes.forEach((scene, i) => {
+      if (scene.skill !== "premium-cursor-engine") return;
+      if (scene.cursorWaypoints && scene.cursorWaypoints.length > 0) return; // user already set
+      const imgIdx = scene.imageIndex ?? 0;
+      const fetchKey = `${i}:${imgIdx}`;
+      if (fetchedRef.current.has(fetchKey)) return;
+
+      fetchedRef.current.add(fetchKey);
+      const imageData = images[imgIdx];
+      if (!imageData) return;
+
+      setVisionLoading((prev) => ({ ...prev, [i]: true }));
+      fetch("/api/vision", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ image: imageData }),
+      })
+        .then((res) => res.ok ? res.json() : null)
+        .then((data) => {
+          if (!data?.elements?.length) return;
+          const waypoints: CursorWaypoint[] = data.elements
+            .slice(0, 8)
+            .map((el: { label: string; x: number; y: number }) => ({
+              label: el.label,
+              x: parseFloat(el.x.toFixed(3)),
+              // Apply the same 6% chrome-bar offset used by the generation system
+              y: parseFloat((0.06 + el.y * 0.94).toFixed(3)),
+            }));
+          setLocalScenes((prev) =>
+            prev.map((s, idx) =>
+              idx === i && (!s.cursorWaypoints || s.cursorWaypoints.length === 0)
+                ? { ...s, cursorWaypoints: waypoints }
+                : s,
+            ),
+          );
+        })
+        .catch(() => {/* non-fatal */ })
+        .finally(() => setVisionLoading((prev) => ({ ...prev, [i]: false })));
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [localScenes.map((s) => `${s.skill}:${s.imageIndex}`).join(","), images]);
 
   const handleAddScene = () => {
     const newScene: ScenePlan = {
@@ -88,6 +143,14 @@ export function ScenePlanEditor({
     0,
   );
   const totalSeconds = (totalDuration / 30).toFixed(1);
+
+  // Active scene for the cursor editor
+  const activeEditorScene =
+    cursorEditorScene !== null ? localScenes[cursorEditorScene] : null;
+  const activeEditorImage =
+    activeEditorScene && images
+      ? images[activeEditorScene.imageIndex ?? 0]
+      : undefined;
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
@@ -203,45 +266,75 @@ export function ScenePlanEditor({
               />
             </div>
 
-            {/* Row 4: image picker — shown when multiple images uploaded + skill uses images */}
-            {images && images.length > 1 && IMAGE_SKILLS.has(scene.skill) && (
+            {/* Row 4: image picker + cursor path editor button */}
+            {images && images.length > 0 && IMAGE_SKILLS.has(scene.skill) && (
               <div className="pl-7 flex items-center gap-1.5 flex-wrap">
-                <span className="text-[10px] text-muted-foreground shrink-0">Screenshot:</span>
-                {images.map((img, imgIdx) => {
-                  const desc = imageDescriptions?.[imgIdx];
-                  return (
-                    <div key={imgIdx} className="flex flex-col items-center gap-0.5 shrink-0">
+                {images.length > 1 && (
+                  <>
+                    <span className="text-[10px] text-muted-foreground shrink-0">Screenshot:</span>
+                    {images.map((img, imgIdx) => {
+                      const desc = imageDescriptions?.[imgIdx];
+                      return (
+                        <div key={imgIdx} className="flex flex-col items-center gap-0.5 shrink-0">
+                          <button
+                            type="button"
+                            onClick={() => handleSceneChange(i, "imageIndex", imgIdx)}
+                            className={`relative w-9 h-9 rounded border-2 overflow-hidden transition-all ${scene.imageIndex === imgIdx
+                                ? "border-teal-500 ring-1 ring-teal-500/40"
+                                : "border-border/40 hover:border-border opacity-60 hover:opacity-100"
+                              }`}
+                            title={desc ?? `Screenshot ${imgIdx + 1}`}
+                          >
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img src={img} alt={desc ?? `Screenshot ${imgIdx + 1}`} className="w-full h-full object-cover" />
+                            {scene.imageIndex === imgIdx && (
+                              <div className="absolute inset-0 bg-teal-500/20" />
+                            )}
+                          </button>
+                          {desc && (
+                            <span className="text-[9px] text-muted-foreground text-center leading-tight max-w-[38px] truncate" title={desc}>
+                              {desc.split(" ").slice(0, 2).join(" ")}
+                            </span>
+                          )}
+                        </div>
+                      );
+                    })}
+                    {scene.imageIndex !== undefined && (
                       <button
                         type="button"
-                        onClick={() => handleSceneChange(i, "imageIndex", imgIdx)}
-                        className={`relative w-9 h-9 rounded border-2 overflow-hidden transition-all ${
-                          scene.imageIndex === imgIdx
-                            ? "border-teal-500 ring-1 ring-teal-500/40"
-                            : "border-border/40 hover:border-border opacity-60 hover:opacity-100"
-                        }`}
-                        title={desc ?? `Screenshot ${imgIdx + 1}`}
+                        onClick={() => handleSceneChange(i, "imageIndex", undefined)}
+                        className="text-[10px] text-muted-foreground hover:text-foreground ml-1"
                       >
-                        {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img src={img} alt={desc ?? `Screenshot ${imgIdx + 1}`} className="w-full h-full object-cover" />
-                        {scene.imageIndex === imgIdx && (
-                          <div className="absolute inset-0 bg-teal-500/20" />
-                        )}
+                        clear
                       </button>
-                      {desc && (
-                        <span className="text-[9px] text-muted-foreground text-center leading-tight max-w-[38px] truncate" title={desc}>
-                          {desc.split(" ").slice(0, 2).join(" ")}
-                        </span>
-                      )}
-                    </div>
-                  );
-                })}
-                {scene.imageIndex !== undefined && (
+                    )}
+                  </>
+                )}
+
+                {/* Cursor Path Editor button — only for cursor-engine scenes */}
+                {scene.skill === "premium-cursor-engine" && (
                   <button
                     type="button"
-                    onClick={() => handleSceneChange(i, "imageIndex", undefined)}
-                    className="text-[10px] text-muted-foreground hover:text-foreground ml-1"
+                    onClick={() => setCursorEditorScene(i)}
+                    title="Edit cursor waypoints on screenshot"
+                    className={`ml-auto flex items-center gap-1.5 text-[10px] px-2.5 py-1 rounded-full border transition-all font-medium ${scene.cursorWaypoints && scene.cursorWaypoints.length > 0
+                        ? "border-indigo-500/40 text-indigo-400 bg-indigo-500/10 hover:bg-indigo-500/20"
+                        : "border-border/40 text-muted-foreground hover:text-foreground hover:border-foreground/20"
+                      }`}
                   >
-                    clear
+                    {visionLoading[i] ? (
+                      <>
+                        <span className="w-2.5 h-2.5 rounded-full border border-current border-t-transparent animate-spin" />
+                        Detecting...
+                      </>
+                    ) : (
+                      <>
+                        <MousePointerClick className="w-2.5 h-2.5" />
+                        {scene.cursorWaypoints && scene.cursorWaypoints.length > 0
+                          ? `${scene.cursorWaypoints.length} waypoints ✎`
+                          : "Edit Cursor Path"}
+                      </>
+                    )}
                   </button>
                 )}
               </div>
@@ -271,6 +364,18 @@ export function ScenePlanEditor({
           Generate Video
         </Button>
       </div>
+
+      {/* Cursor Waypoint Editor Modal */}
+      {cursorEditorScene !== null && activeEditorScene && activeEditorImage && (
+        <CursorWaypointEditor
+          image={activeEditorImage}
+          waypoints={activeEditorScene.cursorWaypoints ?? []}
+          onChange={(waypoints) =>
+            handleSceneChange(cursorEditorScene, "cursorWaypoints", waypoints)
+          }
+          onClose={() => setCursorEditorScene(null)}
+        />
+      )}
     </div>
   );
 }

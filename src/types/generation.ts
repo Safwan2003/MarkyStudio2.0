@@ -1,15 +1,15 @@
 export const MODELS = [
   // ── Free tier (confirmed) ──────────────────────────────────────────────
   { id: "gemini-2.5-flash:none", name: "Gemini 2.5 Flash — Free (Fast)" },
-  { id: "gemini-2.5-pro:none",   name: "Gemini 2.5 Pro — Free" },
-  { id: "gemini-2.5-pro:low",    name: "Gemini 2.5 Pro — Free (Think: Low)" },
+  { id: "gemini-2.5-pro:none", name: "Gemini 2.5 Pro — Free" },
+  { id: "gemini-2.5-pro:low", name: "Gemini 2.5 Pro — Free (Think: Low)" },
   { id: "gemini-2.5-pro:medium", name: "Gemini 2.5 Pro — Free (Think: Medium)" },
-  { id: "gemini-2.5-pro:high",   name: "Gemini 2.5 Pro — Free (Think: High)" },
+  { id: "gemini-2.5-pro:high", name: "Gemini 2.5 Pro — Free (Think: High)" },
   // ── Paid / billing required ────────────────────────────────────────────
-  { id: "gemini-3-flash-preview:none",   name: "Gemini 3 Flash — Paid (Preview)" },
-  { id: "gemini-3.1-pro-preview:none",   name: "Gemini 3.1 Pro — Paid (Preview)" },
-  { id: "gemini-3.1-pro-preview:low",    name: "Gemini 3.1 Pro — Paid (Think: Low)" },
-  { id: "gemini-3.1-pro-preview:high",   name: "Gemini 3.1 Pro — Paid (Think: High)" },
+  { id: "gemini-3-flash-preview:none", name: "Gemini 3 Flash — Paid (Preview)" },
+  { id: "gemini-3.1-pro-preview:none", name: "Gemini 3.1 Pro — Paid (Preview)" },
+  { id: "gemini-3.1-pro-preview:low", name: "Gemini 3.1 Pro — Paid (Think: Low)" },
+  { id: "gemini-3.1-pro-preview:high", name: "Gemini 3.1 Pro — Paid (Think: High)" },
 ] as const;
 
 export type ModelId = (typeof MODELS)[number]["id"];
@@ -17,6 +17,20 @@ export type ModelId = (typeof MODELS)[number]["id"];
 export type StreamPhase = "idle" | "reasoning" | "generating";
 
 export type GenerationErrorType = "validation" | "api";
+
+/** The interaction performed at this waypoint. */
+export type WaypointAction = "click" | "hover" | "double-click" | "scroll";
+
+/** A single cursor waypoint — normalized coordinates (0–1) within the video frame. */
+export interface CursorWaypoint {
+  label: string;
+  x: number;
+  y: number;
+  /** Interaction performed at this waypoint. Defaults to "click". */
+  action?: WaypointAction;
+  /** Frames cursor lingers at this waypoint before moving on. Default: 18 (0.6s @ 30fps). */
+  dwellFrames?: number;
+}
 
 export interface ScenePlan {
   id: number;
@@ -26,6 +40,8 @@ export interface ScenePlan {
   durationInFrames: number;
   /** Which uploaded image (0-based index) is primarily used in this scene. Undefined = use all images. */
   imageIndex?: number;
+  /** User-confirmed cursor waypoints for premium-cursor-engine scenes. Overrides AI-detected elements. */
+  cursorWaypoints?: CursorWaypoint[];
 }
 
 /**

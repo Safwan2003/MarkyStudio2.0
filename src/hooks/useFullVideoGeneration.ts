@@ -181,6 +181,8 @@ async function consumeSceneGeneration(
 
   // Vision bridge: pre-detect UI elements from the screenshot and inject them into the prompt.
   // - cursor-engine: precise x/y coordinates used as CURSOR_STEPS waypoints
+  //   If the user already confirmed waypoints in the plan editor, use those directly
+  //   and skip the /api/vision call entirely (faster + more accurate).
   // - scroll-demo / saas-showcase: element labels used to populate realistic content
   const VISION_SKILLS = new Set([
     "premium-cursor-engine",
@@ -194,25 +196,45 @@ async function consumeSceneGeneration(
     images.length > 0 &&
     !errorContext // skip on retry — don't double-call vision
   ) {
-    try {
-      const visionResponse = await fetch("/api/vision", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ image: images[0] }),
-      });
-      if (visionResponse.ok) {
-        const visionData = await visionResponse.json();
-        const elements: Array<{ label: string; x: number; y: number }> =
-          visionData.elements ?? [];
-        if (elements.length > 0) {
-          if (scene.skill === "premium-cursor-engine") {
-            // Cursor: use full x/y coords — screenshot sits below a 6% chrome bar
-            const transformed = elements.map((el) => ({
-              label: el.label,
-              x: parseFloat(el.x.toFixed(3)),
-              y: parseFloat((0.06 + el.y * 0.94).toFixed(3)),
-            }));
-            detectedElementsBlock = `
+    // ── User-confirmed cursor waypoints (skip vision call) ─────────────────
+    if (
+      scene.skill === "premium-cursor-engine" &&
+      scene.cursorWaypoints &&
+      scene.cursorWaypoints.length > 0
+    ) {
+      console.log(
+        `Cursor path: using ${scene.cursorWaypoints.length} user-confirmed waypoints for "${scene.title}" (skipping /api/vision)`,
+      );
+      detectedElementsBlock = `
+
+## CURSOR WAYPOINTS (USER-CONFIRMED — maximum accuracy)
+These waypoints were manually verified by the user from the uploaded screenshot.
+Use them EXACTLY as provided for CURSOR_STEPS x/y values.
+The screenshot is displayed below a 6% chrome bar — these coords are already in video space.
+
+CRITICAL: You MUST include the following constant declaration in your generated code (do not assume it is in scope):
+
+const DETECTED_ELEMENTS = ${JSON.stringify(scene.cursorWaypoints, null, 2)};`;
+    } else {
+      // ── Fallback: auto-detect via /api/vision ──────────────────────────
+      try {
+        const visionResponse = await fetch("/api/vision", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ image: images[0] }),
+        });
+        if (visionResponse.ok) {
+          const visionData = await visionResponse.json();
+          const elements: Array<{ label: string; x: number; y: number }> =
+            visionData.elements ?? [];
+          if (elements.length > 0) {
+            if (scene.skill === "premium-cursor-engine") {
+              const transformed = elements.map((el) => ({
+                label: el.label,
+                x: parseFloat(el.x.toFixed(3)),
+                y: parseFloat((0.06 + el.y * 0.94).toFixed(3)),
+              }));
+              detectedElementsBlock = `
 
 ## DETECTED UI ELEMENTS FROM UPLOADED SCREENSHOT
 The screenshot is displayed below a 6% chrome bar at the top of the video frame.
@@ -222,10 +244,9 @@ Select 3–5 of the most interesting elements for the walkthrough demo.
 CRITICAL: You MUST include the following constant declaration in your generated code (do not assume it is in scope):
 
 const DETECTED_ELEMENTS = ${JSON.stringify(transformed, null, 2)};`;
-          } else {
-            // Scroll-demo / saas-showcase: use labels to populate accurate content
-            const labels = elements.map((el) => el.label);
-            detectedElementsBlock = `
+            } else {
+              const labels = elements.map((el) => el.label);
+              detectedElementsBlock = `
 
 ## DETECTED UI SECTIONS FROM UPLOADED SCREENSHOT
 These are the real UI sections/components visible in the screenshot.
@@ -234,14 +255,15 @@ Use these labels to populate your component with accurate text, stat names, and 
 CRITICAL: You MUST include the following constant declaration in your generated code (do not assume it is in scope):
 
 const DETECTED_SECTIONS = ${JSON.stringify(labels, null, 2)};`;
+            }
+            console.log(
+              `Vision bridge (${scene.skill}): ${elements.length} elements detected for "${scene.title}"`,
+            );
           }
-          console.log(
-            `Vision bridge (${scene.skill}): ${elements.length} elements detected for "${scene.title}"`,
-          );
         }
+      } catch (e) {
+        console.warn("Vision detection failed (non-fatal):", e);
       }
-    } catch (e) {
-      console.warn("Vision detection failed (non-fatal):", e);
     }
   }
 
