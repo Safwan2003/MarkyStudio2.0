@@ -30,7 +30,34 @@ import premiumGlassmorphismSkill from "./premium-glassmorphism.md";
 import premiumMatchCutSkill from "./premium-match-cut.md";
 import premiumCharSplitSkill from "./premium-char-split.md";
 import premiumAudioSkill from "./premium-audio.md";
-import premiumUiSkeletonSkill from "./premium-ui-skeleton.md";
+import premiumChameleonUiSkill from "./premium-chameleon-ui.md";
+import premiumDataFlowAbstractSkill from "./premium-data-flow-abstract.md";
+import premium3dIsometricExplodeSkill from "./premium-3d-isometric-explode.md";
+import premiumAmbientEnvironmentSkill from "./premium-ambient-environment.md";
+import premiumShapeMorphTransitionSkill from "./premium-shape-morph-transition.md";
+import premiumHandCursorSkill from "./premium-hand-cursor.md";
+import premiumCalloutBubbleSkill from "./premium-callout-bubble.md";
+import premiumResponsiveViewportSkill from "./premium-responsive-viewport.md";
+import premiumDotMatrixBgSkill from "./premium-dot-matrix-bg.md";
+import premiumInkLogoRevealSkill from "./premium-ink-logo-reveal.md";
+import premiumMultiCornerGradientSkill from "./premium-multi-corner-gradient.md";
+import premiumCustomerJourneySkill from "./premium-customer-journey.md";
+import premiumIconConceptSceneSkill from "./premium-icon-concept-scene.md";
+import premiumIconArcRevealSkill from "./premium-icon-arc-reveal.md";
+import premiumFloatingPathNodesSkill from "./premium-floating-path-nodes.md";
+import premiumConfettiCelebrationSkill from "./premium-confetti-celebration.md";
+import premiumRealPhotoDeviceSkill from "./premium-real-photo-device.md";
+import premiumIconBubbleRowSkill from "./premium-icon-bubble-row.md";
+import premiumIntegrationWallSkill from "./premium-integration-wall.md";
+import premiumFeedbackStormSkill from "./premium-feedback-storm.md";
+import premiumGradientHeroSkill from "./premium-gradient-hero.md";
+import premiumLogoWallSkill from "./premium-logo-wall.md";
+import premiumStatCounterSkill from "./premium-stat-counter.md";
+import premiumFeatureGridSkill from "./premium-feature-grid.md";
+import premiumInteractiveUiSkill from "./premium-interactive-ui.md";
+import premiumLightArcBgSkill from "./premium-light-arc-bg.md";
+import premiumFeatureBundleCardsSkill from "./premium-feature-bundle-cards.md";
+import premiumReconstructedUiSkill from "./premium-reconstructed-ui.md";
 
 // Guidance skills (markdown files with patterns/rules)
 const GUIDANCE_SKILLS = [
@@ -63,7 +90,34 @@ const GUIDANCE_SKILLS = [
   "premium-match-cut",
   "premium-char-split",
   "premium-audio",
-  "premium-ui-skeleton",
+  "premium-chameleon-ui",
+  "premium-data-flow-abstract",
+  "premium-3d-isometric-explode",
+  "premium-ambient-environment",
+  "premium-shape-morph-transition",
+  "premium-hand-cursor",
+  "premium-callout-bubble",
+  "premium-responsive-viewport",
+  "premium-dot-matrix-bg",
+  "premium-ink-logo-reveal",
+  "premium-multi-corner-gradient",
+  "premium-customer-journey",
+  "premium-icon-concept-scene",
+  "premium-icon-arc-reveal",
+  "premium-floating-path-nodes",
+  "premium-confetti-celebration",
+  "premium-real-photo-device",
+  "premium-icon-bubble-row",
+  "premium-integration-wall",
+  "premium-feedback-storm",
+  "premium-gradient-hero",
+  "premium-logo-wall",
+  "premium-stat-counter",
+  "premium-feature-grid",
+  "premium-interactive-ui",
+  "premium-light-arc-bg",
+  "premium-feature-bundle-cards",
+  "premium-reconstructed-ui",
 ] as const;
 
 // Example skills (complete working code references)
@@ -114,7 +168,34 @@ const guidanceSkillContent: Record<(typeof GUIDANCE_SKILLS)[number], string> = {
   "premium-match-cut": premiumMatchCutSkill,
   "premium-char-split": premiumCharSplitSkill,
   "premium-audio": premiumAudioSkill,
-  "premium-ui-skeleton": premiumUiSkeletonSkill,
+  "premium-chameleon-ui": premiumChameleonUiSkill,
+  "premium-data-flow-abstract": premiumDataFlowAbstractSkill,
+  "premium-3d-isometric-explode": premium3dIsometricExplodeSkill,
+  "premium-ambient-environment": premiumAmbientEnvironmentSkill,
+  "premium-shape-morph-transition": premiumShapeMorphTransitionSkill,
+  "premium-hand-cursor": premiumHandCursorSkill,
+  "premium-callout-bubble": premiumCalloutBubbleSkill,
+  "premium-responsive-viewport": premiumResponsiveViewportSkill,
+  "premium-dot-matrix-bg": premiumDotMatrixBgSkill,
+  "premium-ink-logo-reveal": premiumInkLogoRevealSkill,
+  "premium-multi-corner-gradient": premiumMultiCornerGradientSkill,
+  "premium-customer-journey": premiumCustomerJourneySkill,
+  "premium-icon-concept-scene": premiumIconConceptSceneSkill,
+  "premium-icon-arc-reveal": premiumIconArcRevealSkill,
+  "premium-floating-path-nodes": premiumFloatingPathNodesSkill,
+  "premium-confetti-celebration": premiumConfettiCelebrationSkill,
+  "premium-real-photo-device": premiumRealPhotoDeviceSkill,
+  "premium-icon-bubble-row": premiumIconBubbleRowSkill,
+  "premium-integration-wall": premiumIntegrationWallSkill,
+  "premium-feedback-storm": premiumFeedbackStormSkill,
+  "premium-gradient-hero": premiumGradientHeroSkill,
+  "premium-logo-wall": premiumLogoWallSkill,
+  "premium-stat-counter": premiumStatCounterSkill,
+  "premium-feature-grid": premiumFeatureGridSkill,
+  "premium-interactive-ui": premiumInteractiveUiSkill,
+  "premium-light-arc-bg": premiumLightArcBgSkill,
+  "premium-feature-bundle-cards": premiumFeatureBundleCardsSkill,
+  "premium-reconstructed-ui": premiumReconstructedUiSkill,
 };
 
 // Map example skill names to example IDs
@@ -194,7 +275,34 @@ Premium SaaS / Agency-quality template skills:
 - premium-match-cut: match cut, zoom transition, cinematic transition, zoom into button, whip cut, motion blur, fast pan, scene transition, color match cut, cinematic cut
 - premium-char-split: character animation, letter by letter, char split, kinetic typography, text reveal, push-up text, rotating letters, scramble text, word stagger, headline animation, type on effect
 - premium-audio: background music, sound effects, SFX, audio track, looping music, ambient sound, volume fade, audio automation, soundtrack, sound design
-- premium-ui-skeleton: kanban board, task board, project board, analytics dashboard, KPI cards, bar chart, code editor, terminal, IDE, CRM table, data table, pipeline, deals table, dashboard layout, product UI demo
+- premium-chameleon-ui: chameleon overlay, typing animation, input overlay, dropdown animation, cinematic zoom, glass panel slide, interactive overlay, realistic product demo, cursor typing, fake interactivity, UI takeover, element overlay
+- premium-data-flow-abstract: data flow, api integration, network graph, nodes connected, glowing orbs, data packets, integration diagram, pipeline visualization, conceptual metaphor, abstract concept, data sync, ai processing, salesforce integration, API connection, node network, hub and spoke
+- premium-3d-isometric-explode: isometric, 3d layers, explode view, screenshot layers, 3d depth, css 3d, perspective reveal, architecture reveal, layer separation, panels floating, isometric explode, 3d screenshot, floating panels, depth reveal
+- premium-ambient-environment: breathing background, ambient particles, floating particles, mesh gradient, orbiting orbs, particle system, aurora background, bokeh background, living background, atmospheric depth, ambient glow, dynamic background
+- premium-shape-morph-transition: color flood fill, shape morph, clip path expand, button click transition, scene transition, color wipe, explosive transition, circle expand, morph cut, fluid transition, shape expand, color reveal
+- premium-hand-cursor: cartoon hand pointer, pointing finger cursor, explainer video cursor, hand cursor, flat hand icon, click hand animation, friendly cursor, tutorial cursor
+- premium-callout-bubble: floating comment card, annotation bubble, collaboration popup, comment overlay, feedback card, review annotation, mention card, typing annotation, slide-in panel, comments panel
+- premium-responsive-viewport: responsive demo, device switcher, viewport toggle, mobile preview, tablet view, responsive layout, browser toolbar, device icons, responsive product demo, viewport width
+- premium-dot-matrix-bg: dot grid background, halftone texture, dot matrix, light background, clean background, polka dot texture, minimal texture, floating accent dots, dash marks, light theme background, airy background
+- premium-ink-logo-reveal: logo reveal, ink blob reveal, brand reveal, paint blob, logo morph, blob to logo, ink drop, brand emergence, cinematic logo, wordmark reveal, brand intro, logo animation
+- premium-multi-corner-gradient: pastel background, corner blobs, light gradient, multi-corner gradient, soft background, airy background, light bg with color corners, near-white background, gentle gradient, pastel corners, Pretaa background
+- premium-customer-journey: customer journey, lifecycle, timeline, milestones, stages, pipeline stages, customer success, deal stages, onboarding stages, journey map, traveling dot, milestone cards, stage progression, CRM journey
+- premium-icon-concept-scene: icon concept, abstract concept, metaphor scene, concept visual, icon with glow, radial glow icon, badge overlay, dotted path arrowhead, cost visualization, time waste visual, conceptual scene, single icon hero
+- premium-icon-arc-reveal: icon arc, SVG arc draw, circular arc, brand icon hook, dark intro, neon icon, arc animation, strokeDashoffset circle, concentric rings, icon reveal, heartbeat icon, dark hook, cinematic intro, shape mask reveal, neon glow
+- premium-floating-path-nodes: floating nodes, outline circles, dark nodes, ghost circles, nebula background, aurora background, dotted path, traveling dot, scattered circles, dark problem scene, data silos, disconnected systems, node graph dark
+- premium-confetti-celebration: confetti, celebration, falling particles, product screenshot party, launch scene, deal closed, success scene, colorful particles, confetti rain, festive, achievement
+- premium-real-photo-device: real photo background, product in context, device in environment, tablet mockup photo, phone mockup realistic, office photo device, social proof product, real world product, dealership tablet, environment mockup
+- premium-icon-bubble-row: icon bubbles, colored circles, category icons, tech stack, feature categories, use cases, large circles with icons, bubble row, arc accent, spring pop circles, customer experience categories, AI NLP circles
+- premium-integration-wall: integration cards, app logos, data sources, scattered cards, app wall, integration showcase, zapier zendesk cards, tool cards, scattered app icons, integration explosion, data sources wall, colored background cards
+- premium-feedback-storm: feedback cards, customer voice, verbatim feedback, person with cards, feedback floating, urgency pills, priority tags, social proof floating, customer feedback storm, testimonial cards around person
+- premium-gradient-hero: gradient text headline, full-screen text, chapter card, bold statement, single message, brand gradient words, gradient typography, no chrome, title card, big text reveal, text-only scene
+- premium-logo-wall: trusted by, company logos, logo grid, partner logos, customer logos, social proof logos, brand wall, logo marquee, scrolling logos, who uses it
+- premium-stat-counter: single stat, big number, percentage counter, metric punch, 94%, 3x, count-up number, dramatic number, full-screen stat, data proof, one big fact
+- premium-feature-grid: feature grid, 2x2 grid, product features grid, feature cards, capabilities grid, what you get, 4 features, 6 features, card grid layout
+- premium-interactive-ui: full app shell, AppShell, SidebarNav, task creation demo, saas walkthrough, app reconstruction, no screenshot needed, full layout control, sidebar navigation, form filling, CRUD demo, task panel, modal creation, Bordio style
+- premium-light-arc-bg: light theme, arc background, white background, arc texture, near-white background, light B2B background, concentric arcs, subtle arc lines, light themed video
+- premium-feature-bundle-cards: feature bundle, integration cards, 3 cards, product overview with cards, three feature cards, capability cards, bundle overview, platform features, integration overview, plus connector cards
+- premium-reconstructed-ui: reconstructed ui, animated dashboard, vector reconstruction, animate independently, sidebar animation, metric cards animation, animated table, animated chart, animated form, vector dashboard, fully animated UI
 
 Code examples (complete working references):
 - example-histogram: animated bar chart with spring animations and @remotion/shapes

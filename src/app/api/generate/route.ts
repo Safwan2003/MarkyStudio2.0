@@ -66,13 +66,18 @@ If the prompt contains a "## BRAND DESIGN SYSTEM" block, you MUST use those exac
 
 Deviating from these values produces an off-brand, amateur result. Do not invent new colors.
 
-## SPRING CONFIG PRESETS (use these — NOT Remotion defaults)
+## SPRING CONFIG PRESETS — "Pro Standard" (MANDATORY — agency-grade physics)
 
-Remotion's default spring (damping:100) looks clinical. Use:
-- Entrance (cards, text blocks): spring({ frame, fps, config: { damping: 14, stiffness: 100 } })
-- Floating device loop: spring({ frame, fps, config: { damping: 22, stiffness: 70 } })
-- Quick pop (badges, icons): spring({ frame, fps, config: { damping: 10, stiffness: 150 } })
-- Cinematic camera: spring({ frame, fps, config: { damping: 28, stiffness: 60 } })
+The "Pro Standard" is: **damping:200** for all standard UI transitions (crisp inertial settle, zero overshoot).
+**damping:8** exclusively for intentionally playful/bouncy elements.
+
+Use SPRING_CONFIGS presets (already in scope) or these exact values:
+- Standard UI reveal (cards, panels, overlays, text): spring({ frame, fps, config: { damping: 200, stiffness: 120 } })
+- Gentle floating loop (device mockup, avatar): spring({ frame, fps, config: { damping: 22, stiffness: 70 } })
+- Playful pop ONLY (notification badge, emoji, confetti): spring({ frame, fps, config: { damping: 8, stiffness: 150 } })
+- Cinematic camera push-in: spring({ frame, fps, config: { damping: 200, stiffness: 80 } })
+
+NEVER use \`{ damping: 14 }\` or \`{ damping: 28 }\` — these are low-quality defaults.
 
 ## EASING PATTERNS (always add easing to visible interpolations)
 
@@ -94,15 +99,32 @@ easing: (t) => t * t
 \`\`\`tsx
 // Standard glass card — copy exactly:
 {
-  background: "rgba(255,255,255,0.06)",
-  backdropFilter: "blur(14px)",
-  WebkitBackdropFilter: "blur(14px)",
-  border: "1px solid rgba(255,255,255,0.12)",
+  background: "linear-gradient(135deg, rgba(255,255,255,0.08) 0%, rgba(255,255,255,0.02) 100%)",
+  backdropFilter: "blur(16px)",
+  WebkitBackdropFilter: "blur(16px)",
+  border: "1px solid rgba(255,255,255,0.08)",
+  borderTop: "1px solid rgba(255,255,255,0.2)",
+  borderLeft: "1px solid rgba(255,255,255,0.15)",
   borderRadius: 20,
-  boxShadow: "0 8px 40px rgba(0,0,0,0.30), inset 0 1px 0 rgba(255,255,255,0.08)",
+  boxShadow: "0 12px 40px rgba(0,0,0,0.4), inset 0 1px 1px rgba(255,255,255,0.15)",
 }
-// Replace rgba values with brand.surface / brand.border when a brand block is present
+// For brand block, mix the custom background gradient but keep the lighter top/left borders and shadow
 \`\`\`
+
+## SHADOW DEPTH SCALE (mandatory for light themes, recommended for all)
+
+For light-background scenes, NEVER use single-layer shadows. Use multi-layer soft shadows based on elevation:
+
+| Elevation | boxShadow |
+|-----------|-----------|
+| Low | 0 1px 2px rgba(0,0,0,0.04), 0 4px 12px rgba(0,0,0,0.06) |
+| Medium | 0 2px 4px rgba(0,0,0,0.04), 0 8px 24px rgba(0,0,0,0.08), 0 24px 48px rgba(0,0,0,0.04) |
+| High | 0 4px 8px rgba(0,0,0,0.04), 0 12px 32px rgba(0,0,0,0.08), 0 32px 64px rgba(0,0,0,0.06) |
+
+NEVER use shadow opacity > 0.15 on light backgrounds.
+Use "Medium" elevation for floating cards, panels, device mockups.
+Use "High" elevation for hero elements (device mockups, central feature cards).
+Use "Low" for subtle depth (list items, table rows).
 
 ## ATTACHED IMAGES (CRITICAL — mandatory when present)
 
@@ -123,6 +145,142 @@ Correct guard pattern:
 )}
 \`\`\`
 
+## CHAMELEON OVERLAY ARCHITECTURE (use for cursor-engine scenes with INTERACTION_SCRIPT)
+
+When an INTERACTION_SCRIPT block is present in the prompt:
+- NEVER rebuild the static UI from scratch
+- ATTACHED_IMAGES[0] is the immutable background (z=0)
+- Place ChameleonInput, ChameleonHighlight, DropdownMenu at exact [box] coordinates (z=10)
+- Keep cursor at z=100
+- Use the frame numbers from INTERACTION_SCRIPT to trigger each chameleon at the right time
+
+Components in scope (do NOT declare):
+- useTyping(text, startFrame, fps, cps?) → {displayText, showCursor}
+- usePopup(openFrame, closeFrame?) → {scale, opacity, visible}
+- useAccordion(triggerFrame, targetHeight) → {height, opacity}
+- useDragItem(from, to, startFrame) → {x, y, elevation}
+- ChameleonInput({x, y, w, h, text, startFrame, brand}) — typing overlay on input
+- ChameleonHighlight({x, y, w, h, triggerFrame, brand}) — click glow on button
+- DropdownMenu({x, y, w, items, openFrame, closeFrame, brand}) — spring-in dropdown
+- CinematicCamera({targetX, targetY, zoomTo, children}) — push-in zoom + 3D tilt wrapper
+- TaskDetailPanel({openFrame, title, fields, brand}) — glass panel slides from right
+- ModalOverlay({openFrame, closeFrame, title, brand}) — center modal with backdrop
+- InputField({value, placeholder, label, focused, brand, width?}) — styled input with typing cursor (value = useTyping() result)
+- ChatBubble({message, author, color, appearFrame, brand}) — message with avatar dot, springs in at appearFrame
+- SidebarNav({appName, items, activeItem, brand}) — dark glass sidebar; items=[{label,badge?,icon?}]
+- AppShell({sidebar, topbar, children, brand, zoom?}) — full SaaS layout: sidebar left + topbar + main content
+
+## CONCEPTUAL-TIER PATTERNS (from premium-data-flow-abstract / premium-3d-isometric-explode / premium-ambient-environment / premium-shape-morph-transition skills)
+- Data flow: Hub nodes + SVG bezier paths (stroke-dashoffset draw animation) + traveling orbs via cubicBezier() formula — see premium-data-flow-abstract skill
+- 3D isometric: CSS perspective+rotateX+rotateY on a preserve-3d container; slice screenshot into 3 panels via backgroundPosition — see premium-3d-isometric-explode skill
+- Ambient background: orbiting blur orbs (ORBS array, Math.cos/sin, mix-blend-mode:screen) + PARTICLES array with sine drift — MUST be defined outside component — see premium-ambient-environment skill
+- Shape morph: clipPath:"circle(Rpx at Xpx Ypx)" expanding from click point to DIAGONAL — see premium-shape-morph-transition skill
+
+Rigid rules:
+1. When CURSOR WAYPOINTS block is present in the prompt: paste the CURSOR_STEPS const VERBATIM — do NOT change x/y/box/time values
+2. ChameleonInput x, y, w, h come DIRECTLY from CURSOR_STEPS box values — copy them exactly
+3. triggerFrame/startFrame for chameleon overlays = step.time + 25 (TRAVEL frames after spring starts). The comment above each step says "arrives+clicks at f:X" — use that X as your triggerFrame/startFrame
+4. For input elements: use ChameleonInput + ChameleonHighlight + spotlight darkening (from premium-cursor-engine skill)
+5. For button elements: use ChameleonHighlight only
+6. For dropdowns: use ChameleonHighlight on trigger + DropdownMenu below it
+7. Render cursor div OUTSIDE the CinematicCamera wrapper so it stays at z=100 unaffected by zoom
+8. Use progressive camera zoom (camera target lerps toward cur.x/cur.y with a lag) instead of fixed target
+9. Add double-ripple click effect (two concentric rings at frame offsets 0 and 4)
+10. Add step annotation badges above cursor: "Step N of M" pill in brand.primary color
+11. After a button submit step: show loading spinner (rotate via frame*12) → green checkmark success state → slide-in toast
+12. For input steps: show keyboard key pill ("Enter ↵" or "Tab ⇥") near end of dwell frames
+
+## TYPOGRAPHY SCALE (MANDATORY — never deviate)
+
+Text size determines visual impact. Size every text element based on its role:
+
+| Role | fontSize | fontWeight | letterSpacing |
+|---|---|---|---|
+| Hero headline (1–4 words) | **128–160px** | 900 | -0.05em |
+| Scene headline (5–8 words) | **80–108px** | 800–900 | -0.04em |
+| Section title / card headline | **40–56px** | 700 | -0.02em |
+| Body / description text | **22–32px** | 400–500 | -0.01em |
+| Badge / label / caption | **14–18px** | 500–600 | 0.01em–0.12em |
+
+**CRITICAL RULES:**
+- NEVER use less than 72px for a scene headline that spans the full width
+- NEVER use less than 20px for any text the viewer is supposed to read
+- For 1–3 word headlines: target 140px+ so text FILLS most of the frame width
+- Always set lineHeight 1.0 to 1.1 for headlines (no default browser line-height)
+- Always set letterSpacing "-0.03em" minimum on weights 700+
+
+## GRADIENT TEXT PATTERN (use for hero headlines and key accents)
+
+\`\`\`tsx
+// Standard gradient text — copy exactly, always works:
+style={{
+  background: \`linear-gradient(135deg, \${BRAND.primary} 0%, \${BRAND.secondary} 60%, \${BRAND.primary} 100%)\`,
+  WebkitBackgroundClip: "text",
+  WebkitTextFillColor: "transparent",
+  backgroundClip: "text",
+  // No color property needed — WebkitTextFillColor overrides it
+}}
+
+// Accent word only (one word gradient, rest solid):
+// Apply gradient styles only to the accent word span
+// Apply color: BRAND.text to all other word spans
+\`\`\`
+
+Use gradient text on: hero/opener scene headlines, CTA scene primary headline, bold problem statements, brand name reveals.
+
+## VISUAL COMPOSITION (follow these to look agency-quality)
+
+**Layout:**
+- Give every element 80–120px breathing room from screen edges (160px minimum for hero/title scenes — generous negative space = premium)
+- Use a split composition for showcase/feature scenes: text left (40%), visual right (55%), 5% gap
+- For full-screen text scenes: center everything, max 75% width constraint on text blocks
+- AbsoluteFill background must match BRAND.bg from frame 0 — never fade in background
+
+**Visual hierarchy:**
+- One dominant element per scene (the largest, brightest, or first to animate)
+- Everything else is subordinate — reduce size, weight, or opacity of secondary elements
+- CTA buttons: at minimum 60px tall, min-width 280px, full border-radius (9999px for pill shape)
+
+**Alignment:**
+- Left-aligned text + right-side visual = modern, editorial feel (showcase scenes)
+- Center-aligned = dramatic reveal (title cards, stat counters, CTA)
+- Never mix alignment within the same text block
+
+**Color usage:**
+- Primary (BRAND.primary) on max 2–3 elements per scene — overusing it kills impact
+- Use \`\${BRAND.primary}20\` (12.5% opacity) for background washes, never full-opacity fills
+- Glow/bloom effect: \`radial-gradient(circle, \${BRAND.primary}25 0%, transparent 60%)\` + \`filter: blur(60px)\` behind key elements
+
+## SAAS COLOR PALETTE PRESETS (use when BRAND colors are not specified)
+
+If no BRAND design system is provided, default to one of these polished palettes based on the product type:
+
+| Style | bg | primary | secondary | text |
+|---|---|---|---|---|
+| Dark SaaS (dev/data) | #0a0f1e | #6366f1 | #14b8a6 | #f8fafc |
+| Dark SaaS (enterprise) | #0c1220 | #3b82f6 | #8b5cf6 | #f1f5f9 |
+| Light SaaS (B2B) | #f8fafc | #4f46e5 | #0ea5e9 | #0f172a |
+| Dark Neon | #080c14 | #22d3ee | #a855f7 | #e2e8f0 |
+| Warm Light | #faf9f7 | #f97316 | #eab308 | #1c1917 |
+
+Always prefer dark SaaS (dev/data) as default when product type is unclear.
+
+## CURSOR ENTRY CONVENTION
+
+When generating scenes with cursor waypoints, the cursor must ALWAYS start off-screen by including an initial anchor step:
+\`\`\`tsx
+const CURSOR_STEPS = [
+  { x: 0.5, y: 0.85, label: "", time: 0, action: "none" }, // enters from bottom-center
+  // ... actual waypoints below
+];
+\`\`\`
+Without this anchor, the cursor is pre-positioned at the first waypoint from frame 0 instead of traveling to it.
+
+## SECTION HEADER REQUIREMENTS
+
+For cursor-engine and chameleon-ui scenes with 3+ interaction steps, include a sectionHeader on each interaction event naming the feature being demonstrated.
+In the scene prompt, instruct: "Label each cursor step with a contextual section header above the UI — large bold text (64px, weight 800) in brand.text color that slides in from above and identifies the feature. Format: 'Feature Name' above the device frame."
+
 ## PERFORMANCE RULES
 
 - Add willChange: "transform" on elements that animate every frame (device floats, orbs)
@@ -130,11 +288,26 @@ Correct guard pattern:
 - Use transform for all movement — never animate top/left/width/height
 - For text counters: fontVariantNumeric: "tabular-nums" prevents layout shift
 
+## DETERMINISM RULE (CRITICAL for distributed rendering)
+
+NEVER use Math.random() — it produces different values on each render chunk, breaking consistency.
+ALWAYS use random('stable-seed-string') from Remotion scope instead:
+\`\`\`tsx
+// WRONG: Math.random() * 100
+// RIGHT: random('particle-x') * 100
+const PARTICLES = Array.from({ length: 60 }, (_, i) => ({
+  x: random(\`p-\${i}-x\`) * width,
+  y: random(\`p-\${i}-y\`) * height,
+  size: 4 + random(\`p-\${i}-size\`) * 8,
+}));
+\`\`\`
+
 ## LAYOUT RULES
 
 - Use full width/height — never constrain content to a small centered box
 - Use Math.max(minPx, Math.round(width * fraction)) for responsive sizing
 - AbsoluteFill backgroundColor must be set from frame 0 — never fade in backgrounds
+- You have full layout freedom — build unique dashboards, kanban boards, and data tables from base HTML elements tailored to the prompt. Do NOT replicate a generic template.
 
 ## AVAILABLE IMPORTS
 
@@ -153,10 +326,21 @@ import { useState, useEffect } from "react";
 These are injected into every generated component automatically. Using them avoids
 boilerplate and guarantees consistency:
 
-- **GLASS_CARD** — ready-made glass card style object
+- **getGlassCard(brand)** — dark/light adaptive glass card styles. Call it directly:
   \`\`\`tsx
-  style={{ ...GLASS_CARD, padding: 32 }}
-  // Replace rgba values with brand.surface / brand.border when brand block is present
+  style={{ ...getGlassCard(BRAND ?? undefined), padding: 32 }}
+  \`\`\`
+- **ParallaxLayer** — 3D depth layer for scrolling/zooming backgrounds. Depth 0-1.
+  \`\`\`tsx
+  <ParallaxLayer depth={0.5} cameraProgress={progress}><div/></ParallaxLayer>
+  \`\`\`
+- **SheenOverlay** — Diagonal sweeping light overlay for buttons/cards.
+  \`\`\`tsx
+  <SheenOverlay startFrame={30} width={200} angle={105} />
+  \`\`\`
+- **MotionBlurWhip** — Cinematic motion blur wrapper for fast transitions.
+  \`\`\`tsx
+  <MotionBlurWhip frame={frame} startFrame={0} duration={14} maxBlur={18}><div/></MotionBlurWhip>
   \`\`\`
 - **SPRING_CONFIGS** — { entrance, float, pop, cinematic } — named presets for spring()
   \`\`\`tsx
@@ -171,28 +355,56 @@ boilerplate and guarantees consistency:
   \`\`\`tsx
   <Audio src="https://..." volume={0.4} loop />
   \`\`\`
-- **KanbanBoard** — pre-built task board; pass columns + brand
+- **MeshGradientBg** — Animated mesh gradient background (4 radial gradients that slowly drift). Use instead of static CSS gradients for rich, living backgrounds.
   \`\`\`tsx
-  <KanbanBoard columns={[{ label: "Backlog", cards: ["Task A"] }]} brand={BRAND} />
+  // colors defaults to brand-appropriate tones if omitted
+  <MeshGradientBg colors={["#6366f1", "#8b5cf6", "#14b8a6", "#3b82f6"]} animate speed={0.8} />
   \`\`\`
-- **AnalyticsDashboard** — pre-built KPI cards + bar chart; pass kpis, bars, brand
+- **CameraMotionBlur** — Cinematic directional motion blur (shutterAngle=180° standard). Wrap high-velocity container shifts.
   \`\`\`tsx
-  <AnalyticsDashboard kpis={[{ label: "MRR", value: "$48K", delta: "+12%", up: true }]} bars={[{ label: "Mon", value: 0.6 }]} brand={BRAND} />
+  // velocityX/Y in px/frame — drives blur intensity via shutterAngle
+  <CameraMotionBlur velocityX={slideSpeed} shutterAngle={180}>
+    <div style={{ transform: \`translateX(\${x}px)\` }} />
+  </CameraMotionBlur>
   \`\`\`
-- **CodeEditorPanel** — pre-built code editor + terminal; pass lines, terminalLines, brand
+- **random(seed)** — Remotion's seeded random (deterministic across renders). ALWAYS use this instead of Math.random() for any visual variation.
   \`\`\`tsx
-  <CodeEditorPanel lines={[{ text: 'const x = 1;' }]} terminalLines={[{ text: '→ Done', color: "#22c55e" }]} brand={BRAND} />
+  // Returns stable 0–1 value. Use string seeds for named elements.
+  const x = random('particle-3-x') * width;
+  const delay = random(\`card-\${i}-delay\`) * 20;
   \`\`\`
-- **DataTable** — pre-built data grid; pass columns, rows, statusColors, brand
+- **useAudioSync(wordTimings?)** — Returns \`{ currentWord, wordProgress, completedWords }\` synced to pre-computed word timestamps. Use WORD_TIMINGS (pre-built array, already in scope) as the argument.
   \`\`\`tsx
-  <DataTable columns={["Name", "Status"]} rows={[{ cells: ["Acme", "Active"], statusIndex: 1 }]} statusColors={{ Active: "#22c55e" }} brand={BRAND} />
+  const { currentWord, completedWords } = useAudioSync(WORD_TIMINGS);
+  // Highlight the currentWord in the caption, show completedWords faded
   \`\`\`
+- **useBeat(bpm, offset?)** — Returns a 0–1 pulse value that peaks on every beat. Sharp attack, slow decay (mimics sidechain compression).
+  \`\`\`tsx
+  const beat = useBeat(120); // 120 BPM
+  // Use for scale, opacity, or glow pulses on each beat
+  style={{ transform: \`scale(\${1 + beat * 0.04})\` }}
+  \`\`\`
+- **WORD_TIMINGS** — Pre-computed word timing array for the scene's voiceover. Pass to useAudioSync(). Array of \`{ word, startFrame, endFrame }\`.
+- **GLOBAL_STYLE** — Visual consistency constants: \`{ contentPadding: 80, cardRadius: 20, headlineSize: 88, shadowMedium, shadowHigh, shadowLow }\` — use for consistent spacing across scenes
+- **FilmGrain** — Subtle noise overlay for organic feel. Add as topmost layer: \`<FilmGrain opacity={0.03} />\`
+- **ContextualSectionHeader** — Large bold text above UI during cursor demos. \`<ContextualSectionHeader text="Feature Name" subtext="Context" startFrame={30} brand={BRAND} />\`
+- **SfxSequencer** — Places Audio elements for SFX events: \`<SfxSequencer events={interactionEvents} />\`
+- **AnimatedSidebar** — Staggered sidebar nav: \`<AnimatedSidebar appName="App" items={[{label, icon, isActive}]} brand={BRAND} startFrame={0} />\`
+- **AnimatedMetricCards** — Count-up metric cards: \`<AnimatedMetricCards cards={[{label, value, numericValue, trend, trendValue}]} brand={BRAND} columns={3} />\`
+- **AnimatedTable** — Staggered table reveal: \`<AnimatedTable columns={[{label, width}]} rows={[{cells, isHighlighted}]} brand={BRAND} />\`
+- **AnimatedChart** — SVG animated charts: \`<AnimatedChart type="line|bar|donut" dataPoints={[...]} color={BRAND.primary} brand={BRAND} />\`
+- **AnimatedForm** — Sequential form field reveal: \`<AnimatedForm title="" fields={[{label, type, value}]} submitLabel="" brand={BRAND} />\`
+- **ReconstructedAppShell** — Full app reconstruction from UISchema: \`<ReconstructedAppShell uiSchema={UI_SCHEMA} brand={BRAND} />\`
 
 ## RESERVED NAMES (CRITICAL — never shadow these)
 
 spring, interpolate, useCurrentFrame, useVideoConfig, AbsoluteFill, Sequence,
-ATTACHED_IMAGES, GLASS_CARD, SPRING_CONFIGS, EASINGS, Audio, BRAND,
-KanbanBoard, AnalyticsDashboard, CodeEditorPanel, DataTable
+ATTACHED_IMAGES, getGlassCard, ParallaxLayer, SheenOverlay, MotionBlurWhip, SPRING_CONFIGS, EASINGS, Audio, BRAND,
+MeshGradientBg, CameraMotionBlur, useAudioSync, useBeat, WORD_TIMINGS, random,
+useTyping, usePopup, useAccordion, useDragItem,
+ChameleonInput, ChameleonHighlight, DropdownMenu,
+CinematicCamera, TaskDetailPanel, ModalOverlay, InputField, ChatBubble, SidebarNav, AppShell,
+GLOBAL_STYLE, FilmGrain, ContextualSectionHeader, SfxSequencer, AnimatedSidebar, AnimatedMetricCards, AnimatedTable, AnimatedChart, AnimatedForm, ReconstructedAppShell
 
 ## OUTPUT FORMAT (CRITICAL)
 
@@ -707,9 +919,11 @@ Analyze the request and decide: use targeted edits (type: "edit") for small chan
     const msg = error instanceof Error ? error.message : String(error);
     const isQuota = msg.includes("429") || msg.includes("RESOURCE_EXHAUSTED") || msg.includes("quota");
     return new Response(
-      JSON.stringify({ error: isQuota
-        ? "Google AI quota exceeded. Add billing at aistudio.google.com or wait for your daily quota to reset."
-        : "Something went wrong while trying to reach Google AI APIs." }),
+      JSON.stringify({
+        error: isQuota
+          ? "Google AI quota exceeded. Add billing at aistudio.google.com or wait for your daily quota to reset."
+          : "Something went wrong while trying to reach Google AI APIs."
+      }),
       { status: isQuota ? 429 : 500, headers: { "Content-Type": "application/json" } },
     );
   }
