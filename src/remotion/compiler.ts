@@ -512,6 +512,91 @@ const AppShell = ({ sidebar, topbar, children, brand, zoom = 1 }: {
 };
 
 // ---------------------------------------------------------------------------
+// cubicBezier — quadratic bezier interpolation for natural cursor arcs
+// ---------------------------------------------------------------------------
+
+/** Natural cursor arc movement between two points.
+ *  controlOffset: perpendicular offset (0.15 = gentle arc, 0.3 = dramatic arc)
+ *  t: 0→1 spring progress
+ *  Returns { x, y } in the same coordinate space as from/to.
+ */
+const cubicBezier = (
+  from: { x: number; y: number },
+  to: { x: number; y: number },
+  t: number,
+  controlOffset = 0.15,
+): { x: number; y: number } => {
+  const dx = to.x - from.x;
+  const dy = to.y - from.y;
+  // Control point perpendicular to movement vector
+  const cx = (from.x + to.x) / 2 + dy * controlOffset;
+  const cy = (from.y + to.y) / 2 - dx * controlOffset;
+  const mt = 1 - t;
+  return {
+    x: mt * mt * from.x + 2 * mt * t * cx + t * t * to.x,
+    y: mt * mt * from.y + 2 * mt * t * cy + t * t * to.y,
+  };
+};
+
+// ---------------------------------------------------------------------------
+// LightArcBg — animated near-white background with concentric arc lines
+// ---------------------------------------------------------------------------
+
+/** Pre-built light-theme arc background — use instead of flat bg for B2B SaaS videos.
+ *  Place as first child of AbsoluteFill: <LightArcBg brand={BRAND} />
+ */
+const LightArcBg = ({ brand }: { brand?: any }) => {
+  const frame = useCurrentFrame();
+  const { width, height } = useVideoConfig();
+
+  const bgColor = brand?.bg || "#f8f9fc";
+  const primary = brand?.primary || "#6366f1";
+  const secondary = brand?.secondary || "#ec4899";
+
+  const ARC_COUNT = 8;
+  const ORIGIN_X = width * 0.3;
+  const ORIGIN_Y = height * 0.6;
+
+  const arcs = Array.from({ length: ARC_COUNT }, (_, i) => ({
+    radius: 180 + i * 130,
+    opacity: Math.max(0, 0.04 - i * 0.003),
+    dashArray: `${55 + i * 18} ${180 + i * 36}`,
+    dashOffset: i * 40,
+  }));
+
+  const rotation = frame * 0.05;
+
+  return React.createElement("div", { style: { position: "absolute", inset: 0, background: bgColor } },
+    // Corner gradient blobs
+    React.createElement("div", {
+      style: {
+        position: "absolute", inset: 0,
+        background: `radial-gradient(ellipse at 0% 100%, ${primary}12 0%, transparent 50%), radial-gradient(ellipse at 100% 0%, ${secondary}0e 0%, transparent 45%), radial-gradient(ellipse at 100% 100%, ${primary}0b 0%, transparent 40%)`,
+      },
+    }),
+    // Animated concentric arc lines
+    React.createElement("svg", {
+      style: { position: "absolute", inset: 0, width: "100%", height: "100%", overflow: "visible" },
+    },
+      ...arcs.map((arc, i) =>
+        React.createElement("circle", {
+          key: i,
+          cx: ORIGIN_X,
+          cy: ORIGIN_Y,
+          r: arc.radius,
+          fill: "none",
+          stroke: `rgba(0,0,0,${arc.opacity.toFixed(3)})`,
+          strokeWidth: 1,
+          strokeDasharray: arc.dashArray,
+          strokeDashoffset: arc.dashOffset,
+          transform: `rotate(${rotation + i * 5}, ${ORIGIN_X}, ${ORIGIN_Y})`,
+        }),
+      ),
+    ),
+  );
+};
+
+// ---------------------------------------------------------------------------
 // GLOBAL_STYLE — visual consistency constants across all scenes
 // ---------------------------------------------------------------------------
 
@@ -600,12 +685,12 @@ const ContextualSectionHeader = ({ text, subtext, icon, startFrame, exitFrame, b
 // ---------------------------------------------------------------------------
 
 const SFX_MAP: Record<string, string> = {
-  click: "/audio/sfx/click-soft.mp3",
-  whoosh: "/audio/sfx/whoosh-in.mp3",
-  pop: "/audio/sfx/pop-up.mp3",
-  type: "/audio/sfx/type-key.mp3",
-  success: "/audio/sfx/success-chime.mp3",
-  swoosh: "/audio/sfx/swoosh-transition.mp3",
+  click:   "https://cdn.pixabay.com/audio/2022/03/15/audio_8e4dcdc8a0.mp3",
+  whoosh:  "https://cdn.pixabay.com/audio/2022/09/01/audio_d1c8f71ac7.mp3",
+  pop:     "https://cdn.pixabay.com/audio/2023/06/14/audio_5a7d7b7b7e.mp3",
+  type:    "https://cdn.pixabay.com/audio/2022/11/17/audio_febc508520.mp3",
+  success: "https://cdn.pixabay.com/audio/2023/03/17/audio_c1ab6d7a3e.mp3",
+  swoosh:  "https://cdn.pixabay.com/audio/2022/10/30/audio_27a9c0d733.mp3",
 };
 
 const SfxSequencer = ({ events }: { events: Array<{ frame: number; sfx?: string }> }) => {
@@ -1270,6 +1355,7 @@ export function compileCode(
   brand: Record<string, string> = {},
   voiceoverAudioUrl: string | null = null,
   wordTimings: Array<{ word: string; startFrame: number; endFrame: number }> = [],
+  uiSchema: Record<string, unknown> | null = null,
 ): CompilationResult {
   if (!code?.trim()) {
     return { Component: null, error: "No code provided" };
@@ -1365,6 +1451,8 @@ export function compileCode(
       "ChatBubble",
       "SidebarNav",
       "AppShell",
+      "cubicBezier",
+      "LightArcBg",
       "GLOBAL_STYLE",
       "FilmGrain",
       "ContextualSectionHeader",
@@ -1381,6 +1469,7 @@ export function compileCode(
       "DETECTED_SECTIONS",
       "VOICEOVER_AUDIO_URL",
       "WORD_TIMINGS",
+      "UI_SCHEMA",
       // Phase 3: audio sync hooks
       "useAudioSync",
       "useBeat",
@@ -1400,6 +1489,7 @@ export function compileCode(
     const BRAND = brand;
     const VOICEOVER_AUDIO_URL = voiceoverAudioUrl ?? null;
     const WORD_TIMINGS = wordTimings;
+    const UI_SCHEMA = uiSchema ?? null;
 
     const Component = createComponent(
       React,
@@ -1466,6 +1556,8 @@ export function compileCode(
       ChatBubble,
       SidebarNav,
       AppShell,
+      cubicBezier,
+      LightArcBg,
       GLOBAL_STYLE,
       FilmGrain,
       ContextualSectionHeader,
@@ -1482,6 +1574,7 @@ export function compileCode(
       DETECTED_SECTIONS,
       VOICEOVER_AUDIO_URL,
       WORD_TIMINGS,
+      UI_SCHEMA,
       useAudioSync,
       useBeat,
       MeshGradientBg,

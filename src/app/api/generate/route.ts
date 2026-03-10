@@ -126,6 +126,16 @@ Use "Medium" elevation for floating cards, panels, device mockups.
 Use "High" elevation for hero elements (device mockups, central feature cards).
 Use "Low" for subtle depth (list items, table rows).
 
+## LIGHT THEME SCENE RULES
+
+When BRAND.style === "light":
+1. ALWAYS start with <LightArcBg brand={BRAND} /> as first child of AbsoluteFill
+2. Use white cards (background: "white") NOT glass cards (no backdropFilter on light bg)
+3. Apply Medium or High shadow elevation to all floating cards
+4. Text: BRAND.text (#0f172a), labels: BRAND.textMuted (rgba(15,23,42,0.5))
+5. Accent color (BRAND.primary) on max 2–3 elements — never as background fill
+6. Border: 1px solid rgba(0,0,0,0.08) on cards and dividers
+
 ## ATTACHED IMAGES (CRITICAL — mandatory when present)
 
 ATTACHED_IMAGES is an array of the user's real product screenshots.
@@ -395,6 +405,16 @@ boilerplate and guarantees consistency:
 - **AnimatedChart** — SVG animated charts: \`<AnimatedChart type="line|bar|donut" dataPoints={[...]} color={BRAND.primary} brand={BRAND} />\`
 - **AnimatedForm** — Sequential form field reveal: \`<AnimatedForm title="" fields={[{label, type, value}]} submitLabel="" brand={BRAND} />\`
 - **ReconstructedAppShell** — Full app reconstruction from UISchema: \`<ReconstructedAppShell uiSchema={UI_SCHEMA} brand={BRAND} />\`
+- **cubicBezier(from, to, t, controlOffset?)** — Natural arc movement for cursors. Returns \`{x, y}\`. \`from\`/\`to\` are \`{x, y}\` objects, \`t\` is 0–1 spring progress, \`controlOffset\` defaults to 0.15.
+  \`\`\`tsx
+  const pos = cubicBezier(prevWaypoint, currentWaypoint, springProgress);
+  // pos.x, pos.y — use for cursor position
+  \`\`\`
+- **LightArcBg** — Animated near-white background with concentric arc lines + corner gradient blobs. Drop-in for light-themed scenes.
+  \`\`\`tsx
+  // Always place as first child of AbsoluteFill for light-theme scenes:
+  <LightArcBg brand={BRAND} />
+  \`\`\`
 
 ## RESERVED NAMES (CRITICAL — never shadow these)
 
@@ -404,6 +424,7 @@ MeshGradientBg, CameraMotionBlur, useAudioSync, useBeat, WORD_TIMINGS, random,
 useTyping, usePopup, useAccordion, useDragItem,
 ChameleonInput, ChameleonHighlight, DropdownMenu,
 CinematicCamera, TaskDetailPanel, ModalOverlay, InputField, ChatBubble, SidebarNav, AppShell,
+cubicBezier, LightArcBg,
 GLOBAL_STYLE, FilmGrain, ContextualSectionHeader, SfxSequencer, AnimatedSidebar, AnimatedMetricCards, AnimatedTable, AnimatedChart, AnimatedForm, ReconstructedAppShell
 
 ## OUTPUT FORMAT (CRITICAL)

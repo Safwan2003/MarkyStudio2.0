@@ -32,10 +32,18 @@ function buildInteractionScriptFromTransition(
           action: "type",
           target: targetLabel,
           value: typeValue ?? "search query",
-          elementType: "input",
+          elementType: "input" as const,
           box,
           style,
-        }
+          sfx: "type" as const,
+        },
+        {
+          frame: REVEAL_END + 60,
+          action: "click",
+          target: `Submit`,
+          elementType: "button" as const,
+          sfx: "success" as const,
+        },
       ];
     case "click":
     case "navigate":
@@ -47,6 +55,7 @@ function buildInteractionScriptFromTransition(
           elementType,
           box,
           style,
+          sfx: "click" as const,
         },
       ];
     case "hover":
@@ -58,6 +67,7 @@ function buildInteractionScriptFromTransition(
           elementType,
           box,
           style,
+          sfx: "whoosh" as const,
         },
       ];
     case "scroll":
@@ -253,6 +263,7 @@ Sound (add to any scene that benefits from audio atmosphere):
 - Cursor style choice: use premium-hand-cursor instead of premium-cursor-engine when the product is a collaboration tool, design tool, project management app, or consumer SaaS where a friendly/approachable tone fits better; use premium-cursor-engine (arrow) for dev tools, analytics, and technical products
 - Collaboration / feedback / annotation features: add premium-callout-bubble to the cursor scene or as a standalone scene; especially if the product has comments, reviews, or multi-user features
 - Responsive web products (website builders, CMS, e-commerce, web design tools): add premium-responsive-viewport as one of the showcase scenes to demonstrate cross-device compatibility
+- Light B2B products: in EVERY scene prompt, instruct "Use <LightArcBg brand={BRAND} /> as the first child of AbsoluteFill" — LightArcBg is already in compiler scope
 - Light-themed brands (white/gray palette, minimal aesthetic): use premium-dot-matrix-bg as the background layer instead of dark gradient; combine with premium-kinetic-text (light variant) for text scenes
 - Logo reveal scenes (any brand): prefer premium-ink-logo-reveal over a simple fade-in when the brand moment needs to be dramatic; pair with premium-dot-matrix-bg
 - When product has real-time monitoring, live dashboards, agent queues, or call-center features: use premium-chameleon-ui or premium-cursor-engine with a custom-built dashboard layout for the showcase scene
@@ -303,6 +314,7 @@ Each scene prompt must include (2–4 sentences):
 2. Exact content — headline text, subheadline, CTA text (use actual product name and features); for hero/gradient-hero scenes specify the exact headline word count
 3. Animation note — what enters first, what moves, in what order; specify if headline should be gradient-colored
 4. If it is a device/showcase scene: explicitly mention "display ATTACHED_IMAGES inside the device shell"
+5. For light-themed brands (BRAND.style === "light"): always start the scene prompt with "Use LightArcBg as background. " — this ensures every scene gets the animated arc texture.
 
 Each scene must also include a voiceoverText: a crisp 15–25 word spoken narration for that scene.
 Write it as natural spoken English — the viewer hears this while watching the visuals.
@@ -352,7 +364,11 @@ Extract from product description and any provided images:
 - border: "rgba(255,255,255,0.12)" for dark; "rgba(0,0,0,0.08)" for light
 - style: "dark" | "light" | "neon"
 - accentName: single word like "indigo", "teal", "emerald", "rose", "amber"
-- musicStyle: "corporate" | "energetic" | "cinematic" | "calm" | "playful" — pick based on brand tone`;
+- musicStyle: "corporate" | "energetic" | "cinematic" | "calm" | "playful" — pick based on brand tone
+
+## BGSKILL OUTPUT
+When brand.style is "light", output bgSkill: "premium-light-arc-bg" at the top level of the response JSON.
+For dark themes, omit bgSkill (it defaults to no global background layer).`;
 
 // ---------------------------------------------------------------------------
 // Types
@@ -368,6 +384,11 @@ interface ScenePlanRaw {
   voiceoverText?: string;
   transition?: string;
   interactionScript?: import("@/types/generation").InteractionEvent[];
+}
+
+interface FullVideoPlanRaw {
+  scenes: ScenePlanRaw[];
+  bgSkill?: string;
 }
 
 interface BrandTokensRaw {
@@ -430,6 +451,7 @@ export async function POST(req: Request) {
   // -------------------------------------------------------------------------
   let visionBrand: Partial<BrandTokensRaw> = {};
   let imageDescriptions: string[] = [];
+  let uiSchemaResult: Record<string, unknown> | null = null;
 
   if (parsedImages.length > 0) {
     // Run brand extraction and (if >1 image) description extraction in parallel
@@ -492,7 +514,73 @@ export async function POST(req: Request) {
       }))
       : Promise.resolve(null);
 
-    const [brandResult, descResult] = await Promise.allSettled([brandPromise, descPromise]);
+    // UI schema decomposition — runs in parallel with brand extraction
+    // Only for the first (most UI-rich) image; non-fatal if it fails
+    const uiDecomposePromise = withRetry(() => ai.models.generateContent({
+      model: FAST_MODEL,
+      contents: [
+        {
+          role: "user",
+          parts: [
+            { text: "Decompose this product screenshot into a structural UI schema for animation." },
+            { inlineData: parsedImages[0] },
+          ],
+        },
+      ],
+      config: {
+        systemInstruction: `You are a UI architect for a video animation system.
+Analyze this product screenshot and decompose it into a STRUCTURAL SCHEMA.
+Extract: layout type (sidebar-main/topnav-main/full-width/split), sidebar items (label+emoji icon+isActive), topbar presence, main content sections in order (metric-cards/table/chart/form/card-grid/list), and theme colors.
+Simplify: max 6 table rows, 8 chart datapoints normalized 0-100, 7 sidebar items, clean round numbers.
+Use emoji for all icons. Return only valid JSON.`,
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            layout: {
+              type: Type.OBJECT,
+              properties: {
+                type: { type: Type.STRING },
+                sidebar: {
+                  type: Type.OBJECT,
+                  properties: {
+                    appName: { type: Type.STRING },
+                    items: { type: Type.ARRAY, items: { type: Type.OBJECT, properties: { label: { type: Type.STRING }, icon: { type: Type.STRING }, isActive: { type: Type.BOOLEAN } }, required: ["label", "icon", "isActive"] } },
+                  },
+                  required: ["appName", "items"],
+                },
+              },
+              required: ["type"],
+            },
+            mainContent: {
+              type: Type.OBJECT,
+              properties: {
+                sections: {
+                  type: Type.ARRAY,
+                  items: { type: Type.OBJECT, properties: { type: { type: Type.STRING }, data: { type: Type.OBJECT } }, required: ["type", "data"] },
+                },
+              },
+              required: ["sections"],
+            },
+            theme: {
+              type: Type.OBJECT,
+              properties: {
+                bgColor: { type: Type.STRING },
+                cardBgColor: { type: Type.STRING },
+                textColor: { type: Type.STRING },
+                accentColor: { type: Type.STRING },
+                borderRadius: { type: Type.NUMBER },
+                isDark: { type: Type.BOOLEAN },
+              },
+              required: ["bgColor", "textColor", "accentColor", "isDark"],
+            },
+          },
+          required: ["layout", "mainContent", "theme"],
+        },
+      },
+    }));
+
+    const [brandResult, descResult, uiDecomposeSettled] = await Promise.allSettled([brandPromise, descPromise, uiDecomposePromise]);
 
     if (brandResult.status === "fulfilled") {
       try {
@@ -507,6 +595,22 @@ export async function POST(req: Request) {
         if (isColor(extracted.textMuted)) visionBrand.textMuted = extracted.textMuted;
         if (isColor(extracted.border)) visionBrand.border = extracted.border;
         if (["dark", "light", "neon"].includes(extracted.style)) visionBrand.style = extracted.style;
+
+        // Auto-detect light theme from bg luminance — overrides LLM style classification
+        if (visionBrand.bg) {
+          const hex = visionBrand.bg.replace("#", "");
+          if (/^[0-9a-fA-F]{6}$/.test(hex)) {
+            const r = parseInt(hex.slice(0, 2), 16) / 255;
+            const g = parseInt(hex.slice(2, 4), 16) / 255;
+            const b = parseInt(hex.slice(4, 6), 16) / 255;
+            const luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+            if (luminance > 0.5) {
+              visionBrand.style = "light";
+              console.log(`Auto-detected light theme from bg luminance: ${luminance.toFixed(2)}`);
+            }
+          }
+        }
+
         console.log("Vision brand extraction:", visionBrand);
       } catch (e) {
         console.warn("Vision brand parse failed (non-fatal):", e);
@@ -523,6 +627,17 @@ export async function POST(req: Request) {
       } catch (e) {
         console.warn("Image description parse failed (non-fatal):", e);
       }
+    }
+
+    if (uiDecomposeSettled.status === "fulfilled") {
+      try {
+        uiSchemaResult = JSON.parse(uiDecomposeSettled.value.text ?? "{}") as Record<string, unknown>;
+        console.log("UI schema extracted:", (uiSchemaResult as any)?.layout?.type, "sections:", ((uiSchemaResult as any)?.mainContent?.sections ?? []).length);
+      } catch (e) {
+        console.warn("UI schema parse failed (non-fatal):", e);
+      }
+    } else {
+      console.warn("UI schema extraction failed (non-fatal):", uiDecomposeSettled.reason);
     }
 
     // -----------------------------------------------------------------------
@@ -777,16 +892,14 @@ Plan a complete 5–6 scene narrative video for this product, and extract brand 
                 required: ["id", "title", "prompt", "skill", "durationInFrames"],
               },
             },
+            bgSkill: { type: Type.STRING },
           },
           required: ["brand", "scenes"],
         },
       },
     }));
 
-    const parsed = JSON.parse(result.text ?? "{}") as {
-      scenes: ScenePlanRaw[];
-      brand: BrandTokensRaw;
-    };
+    const parsed = JSON.parse(result.text ?? "{}") as FullVideoPlanRaw & { brand: BrandTokensRaw };
 
     if (!parsed.scenes || !Array.isArray(parsed.scenes) || parsed.scenes.length === 0) {
       throw new Error("No scenes returned from planner");
@@ -835,7 +948,12 @@ Plan a complete 5–6 scene narrative video for this product, and extract brand 
         }
       }
 
-      return { ...s, imageIndex: imageIdx, interactionScript };
+      // Attach uiSchema to reconstructed-ui scenes (and optionally interactive-ui scenes)
+      const uiSchema = (s.skill === "premium-reconstructed-ui" || s.skill === "premium-interactive-ui")
+        ? uiSchemaResult ?? undefined
+        : undefined;
+
+      return { ...s, imageIndex: imageIdx, interactionScript, uiSchema };
     });
 
     console.log(
@@ -844,7 +962,9 @@ Plan a complete 5–6 scene narrative video for this product, and extract brand 
     );
     console.log("Final brand:", brand);
 
-    return new Response(JSON.stringify({ scenes, brand, imageDescriptions: finalDescriptions }), {
+    const bgSkill = brand.style === "light" ? "premium-light-arc-bg" : undefined;
+
+    return new Response(JSON.stringify({ scenes, brand, bgSkill, imageDescriptions: finalDescriptions }), {
       status: 200,
       headers: { "Content-Type": "application/json" },
     });

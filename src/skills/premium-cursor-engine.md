@@ -675,30 +675,23 @@ const keyOpacity = showKeyPill
 
 ## Bezier Arc Cursor Movement
 
-For maximum naturalness, use quadratic bezier interpolation instead of linear lerp between waypoints:
+Use the `cubicBezier()` helper (already in scope — do NOT declare it) for natural arc movement:
 
 ```tsx
-// Control point offset perpendicular to movement vector
-const controlOffset = 0.15;
-const dx = to.x - from.x;
-const dy = to.y - from.y;
-const cx = (from.x + to.x) / 2 + dy * controlOffset;
-const cy = (from.y + to.y) / 2 - dx * controlOffset;
-
-// Quadratic bezier at t (0-1):
-const x = (1-t)*(1-t)*from.x + 2*(1-t)*t*cx + t*t*to.x;
-const y = (1-t)*(1-t)*from.y + 2*(1-t)*t*cy + t*t*to.y;
+// t = spring progress (0→1) between waypoints
+const pos = cubicBezier(
+  { x: prevStep.x * width, y: prevStep.y * height },
+  { x: step.x * width, y: step.y * height },
+  springProgress,
+  0.15, // controlOffset — 0.15 for subtle arc, 0.25 for dramatic
+);
+const cursorX = pos.x;
+const cursorY = pos.y;
 ```
 
-Where `from` and `to` are the previous and current waypoint in video-coordinate space (multiply by width/height), and `t` is the spring progress (0→1).
-
-## Micro-Jitter During Dwell
-
-When the cursor is dwelling at a waypoint (not moving), add 1-2px sine-wave drift to simulate natural hand tremor:
-
+Add micro-jitter during dwell (when `springProgress >= 0.98`):
 ```tsx
-// Add to cursor x/y when progress >= 1 (cursor has arrived)
-const jitterX = Math.sin(frame * 0.3) * 1.5;
-const jitterY = Math.cos(frame * 0.4) * 1.0;
+const jitterX = springProgress >= 0.98 ? Math.sin(frame * 0.3) * 1.5 : 0;
+const jitterY = springProgress >= 0.98 ? Math.cos(frame * 0.4) * 1.0 : 0;
 // cursorX += jitterX; cursorY += jitterY;
 ```
