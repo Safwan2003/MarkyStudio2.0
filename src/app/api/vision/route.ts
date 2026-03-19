@@ -1,19 +1,51 @@
 import { GoogleGenAI, Type } from "@google/genai";
 
-const VISION_SYSTEM_PROMPT = `You are a UI element detector for interactive product screenshots.
+const VISION_SYSTEM_PROMPT = `You are a precision UI element detector for interactive product screenshots.
 
 Analyze the provided screenshot and identify all visible interactive elements: buttons, input fields, navigation links, tabs, checkboxes, toggles, dropdowns, cards, and other clickable UI components.
 
-For each element:
-- Provide a short descriptive label (e.g., "Sign Up button", "Search input", "Dashboard tab")
-- Provide the center position as normalized coordinates where (0,0) is top-left and (1,1) is bottom-right
+## COORDINATE PRECISION RULES — 0-1000 SCALE (CRITICAL)
 
-Return up to 10 of the most prominent interactive elements. Focus on elements that a user would typically click during a product demo.`;
+Use a strict 0–1000 coordinate system where 1000 = full image width or height.
+This 10× magnification forces precision that 0–1 decimals cannot express.
+
+- x, y = the CENTER of the element in 0–1000 space
+  e.g. element centered at 35% from left → x: 350
+- w, h = the element dimensions in 0–1000 space
+  e.g. button spanning 12% of width → w: 120
+
+MEASURE carefully — a 20-unit error (2% of image) causes cursor to visibly miss the target.
+
+Typical accurate ranges on 0–1000 scale:
+- Primary CTA button: w: 100–180, h: 50–70
+- Text input / search bar: w: 200–550, h: 40–60
+- Nav link / tab: w: 40–100, h: 30–50
+- Dashboard card: w: 220–400, h: 100–250
+- Dropdown trigger: w: 80–200, h: 40–60
+- Sidebar nav item: w: 100–180, h: 30–50
+
+## WHAT TO RETURN
+
+For each element provide:
+- label: a short descriptive label using the ACTUAL text on the element (e.g., "New Report button", "Search bar", "Analytics tab")
+- x, y: precise normalized CENTER coordinates
+- w, h: precise normalized bounding box dimensions
+- elementType: one of "input" | "button" | "dropdown" | "card" | "nav"
+
+Return up to 10 of the most prominent interactive elements, prioritized by:
+1. Primary CTA buttons (highest priority — these are cursor demo targets)
+2. Main input fields / search bars
+3. Navigation tabs and key links
+4. Interactive cards and panels`;
+
 
 interface UIElement {
   label: string;
   x: number;
   y: number;
+  w: number;
+  h: number;
+  elementType: string;
 }
 
 function parseDataUrl(dataUrl: string): { mimeType: string; data: string } | null {
@@ -59,7 +91,7 @@ export async function POST(req: Request) {
           role: "user",
           parts: [
             { inlineData: { mimeType: parsed.mimeType, data: parsed.data } },
-            { text: "Identify all interactive UI elements in this screenshot with their normalized center coordinates." },
+            { text: "Identify all interactive UI elements in this screenshot. Use 0–1000 scale for all coordinates (1000 = full image width/height). Return center x,y and bounding box w,h in this scale." },
           ],
         },
       ],
@@ -77,8 +109,11 @@ export async function POST(req: Request) {
                   label: { type: Type.STRING },
                   x: { type: Type.NUMBER },
                   y: { type: Type.NUMBER },
+                  w: { type: Type.NUMBER },
+                  h: { type: Type.NUMBER },
+                  elementType: { type: Type.STRING },
                 },
-                required: ["label", "x", "y"],
+                required: ["label", "x", "y", "w", "h", "elementType"],
               },
             },
           },
@@ -88,9 +123,21 @@ export async function POST(req: Request) {
     });
 
     const data = JSON.parse(result.text ?? "{}") as { elements: UIElement[] };
-    const elements = (data.elements ?? []).slice(0, 10);
+    // Normalize from 0–1000 scale back to 0–1
+    // If model returned 0–1 values (all < 2), keep as-is
+    const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
+    const elements = (data.elements ?? []).slice(0, 10).map((el) => {
+      const scale = el.x > 2 || el.y > 2 || el.w > 2 || el.h > 2 ? 1000 : 1;
+      return {
+        ...el,
+        x: clamp01(el.x / scale),
+        y: clamp01(el.y / scale),
+        w: clamp01(el.w / scale),
+        h: clamp01(el.h / scale),
+      };
+    });
 
-    console.log(`Vision detected ${elements.length} UI elements`);
+    console.log(`Vision detected ${elements.length} UI elements (0-1000 scale normalized)`);
 
     return new Response(JSON.stringify({ elements }), {
       status: 200,

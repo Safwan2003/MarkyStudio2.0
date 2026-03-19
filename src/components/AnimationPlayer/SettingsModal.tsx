@@ -13,6 +13,21 @@ import {
 import { Settings } from "lucide-react";
 import { useEffect, useState } from "react";
 
+export const ELEVENLABS_VOICES = [
+  { id: "21m00Tcm4TlvDq8ikWAM", name: "Rachel", description: "American female · calm & clear" },
+  { id: "TxGEqnHWrfWFTfGW9XjX", name: "Josh",   description: "American male · deep & warm" },
+  { id: "ErXwobaYiN019PkySvjV", name: "Antoni", description: "American male · well-rounded" },
+  { id: "EXAVITQu4vr4xnSDxMaL", name: "Bella",  description: "American female · soft" },
+  { id: "pNInz6obpgDQGcFmaJgB", name: "Adam",   description: "American male · powerful" },
+  { id: "onwK4e9ZLuTAKqWW03F9", name: "Daniel", description: "British male · authoritative" },
+  { id: "ThT5KcBeYPX3keUQqHPh", name: "Dorothy",description: "British female · pleasant" },
+  { id: "TX3LPaxmHKxFdv7VOQHJ", name: "Liam",   description: "American male · neutral" },
+  { id: "XrExE9yKIg1WjnnlVkGX", name: "Matilda",description: "American female · warm" },
+  { id: "IKne3meq5aSn9XLyUdCD", name: "Charlie",description: "Australian male · casual" },
+] as const;
+
+export const DEFAULT_VOICE_ID = ELEVENLABS_VOICES[0].id;
+
 interface SettingsModalProps {
   durationInFrames: number;
   onDurationChange: (duration: number) => void;
@@ -20,6 +35,8 @@ interface SettingsModalProps {
   onFpsChange: (fps: number) => void;
   qualityMode?: boolean;
   onQualityModeChange?: (enabled: boolean) => void;
+  voiceId?: string;
+  onVoiceIdChange?: (id: string) => void;
 }
 
 export function SettingsModal({
@@ -29,6 +46,8 @@ export function SettingsModal({
   onFpsChange,
   qualityMode = false,
   onQualityModeChange,
+  voiceId = DEFAULT_VOICE_ID,
+  onVoiceIdChange,
 }: SettingsModalProps) {
   const [open, setOpen] = useState(false);
   const [localDuration, setLocalDuration] = useState(String(durationInFrames));
@@ -146,6 +165,32 @@ export function SettingsModal({
                     }`}
                   />
                 </button>
+              </div>
+            </div>
+          )}
+
+          {onVoiceIdChange && (
+            <div className="grid gap-3">
+              <h3 className="text-sm font-medium text-foreground">Voiceover</h3>
+              <div className="grid gap-2">
+                <label htmlFor="voice" className="text-muted-foreground text-sm">
+                  ElevenLabs voice
+                </label>
+                <select
+                  id="voice"
+                  value={voiceId}
+                  onChange={(e) => onVoiceIdChange(e.target.value)}
+                  className="w-full px-3 py-2 rounded border border-border bg-input text-foreground text-sm font-sans focus:outline-none focus:border-primary"
+                >
+                  {ELEVENLABS_VOICES.map((v) => (
+                    <option key={v.id} value={v.id}>
+                      {v.name} — {v.description}
+                    </option>
+                  ))}
+                </select>
+                <p className="text-xs text-muted-foreground-dim">
+                  Applied to all scenes on next generation. Requires ELEVENLABS_API_KEY in .env.
+                </p>
               </div>
             </div>
           )}

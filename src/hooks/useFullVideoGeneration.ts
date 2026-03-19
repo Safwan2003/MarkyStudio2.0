@@ -8,7 +8,7 @@ import { compileCode, extractComponentBody } from "@/remotion/compiler";
 import { alignSceneDurations } from "@/lib/alignScenes";
 import type { BrandTokens, CursorWaypoint, ModelId, ScenePlan, ScreenFlow } from "@/types/generation";
 import React, { useCallback, useRef, useState } from "react";
-import { AbsoluteFill, Audio, Sequence, interpolate, useCurrentFrame } from "remotion";
+import { AbsoluteFill, Audio, Sequence, interpolate, useCurrentFrame, useVideoConfig } from "remotion";
 
 export interface CompiledScene {
   Component: React.ComponentType;
@@ -16,94 +16,214 @@ export interface CompiledScene {
   code: string;
   title: string;
   prompt: string;
-  skill: string;
+  skills: string[];
   imageIndex?: number;
   cursorWaypoints?: CursorWaypoint[];
-  transition?: "fade" | "slide" | "scale" | "flash" | "none";
+  transition?: "fade" | "slide" | "scale" | "flash" | "none" | "cameraPan" | "zoomThrough";
+  exitAnchor?: { x: number; y: number };
+  auditScore?: number;
+  hasVoiceover?: boolean;
+  isAhaMoment?: boolean;
+  emotionalIntent?: string;
+  musicVolume?: number;
+  voiceoverAudioUrl?: string | null;
+  wordTimings?: { word: string; startFrame: number; endFrame: number }[];
 }
 
 // Module-level cache — persists for the browser session
 const sceneCache = new Map<string, CompiledScene>();
 
+// Task 0.4: Module-level brand cache — avoids re-running brand extraction on re-generation
+let cachedBrandStore: { imageHash: string; brand: BrandTokens } | null = null;
+
 function cacheKey(scene: ScenePlan, brand: BrandTokens): string {
-  return `${scene.skill}::${brand.primary}::${scene.imageIndex ?? -1}::${scene.durationInFrames}::${scene.prompt.slice(0, 80)}`;
+  const vo = scene.voiceoverText?.slice(0, 40) ?? "";
+  const emotion = scene.emotionalIntent ?? "";
+  const aha = scene.isAhaMoment ? "aha" : "";
+  const wpts = scene.cursorWaypoints?.map((w) => `${w.x.toFixed(2)},${w.y.toFixed(2)}`).join("|") ?? "";
+  return `${scene.skills.join(",")}::${brand.primary}::${scene.imageIndex ?? -1}::${scene.durationInFrames}::${scene.prompt.slice(0, 60)}::${vo}::${emotion}::${aha}::${wpts}`;
 }
 
 const TRANSITION_FRAMES = 20;
+const HOLD_FRAMES = 24; // ~0.8s hold after animations complete before transition begins
 
-// Map musicStyle → path in public/audio/ (user populates these files)
+// ---------------------------------------------------------------------------
+// SceneErrorBoundary — catches ReferenceErrors from LLM-generated code
+// (e.g. undefined variables like "BadgeCoin is not defined") that occur
+// during React's render phase and cannot be caught with try/catch.
+// ---------------------------------------------------------------------------
+class SceneErrorBoundary extends React.Component<
+  { children: React.ReactNode; sceneName?: string },
+  { hasError: boolean; errorMessage: string }
+> {
+  constructor(props: { children: React.ReactNode; sceneName?: string }) {
+    super(props);
+    this.state = { hasError: false, errorMessage: "" };
+  }
+
+  static getDerivedStateFromError(error: Error) {
+    return { hasError: true, errorMessage: error.message ?? String(error) };
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return React.createElement("div", {
+        style: {
+          position: "absolute", inset: 0,
+          background: "#0f0f1a",
+          display: "flex", flexDirection: "column",
+          alignItems: "center", justifyContent: "center", gap: 8,
+        },
+      },
+        React.createElement("span", {
+          style: { color: "#ef4444", fontSize: 13, fontFamily: "monospace" },
+        }, "⚠ Render error"),
+        React.createElement("span", {
+          style: { color: "#555", fontSize: 11, fontFamily: "monospace", maxWidth: 400, textAlign: "center" },
+        }, this.state.errorMessage),
+      );
+    }
+    return this.props.children;
+  }
+}
+
+// Fallback silence — used when ElevenLabs music is unavailable
 const MUSIC_TRACKS: Record<string, string> = {
-  corporate:  "https://cdn.pixabay.com/audio/2023/11/13/audio_3c2e86c693.mp3",
-  energetic:  "https://cdn.pixabay.com/audio/2024/08/20/audio_6c53572dfa.mp3",
-  cinematic:  "https://cdn.pixabay.com/audio/2024/02/15/audio_b99e82e13f.mp3",
-  calm:       "https://cdn.pixabay.com/audio/2024/04/09/audio_9c659e933b.mp3",
-  playful:    "https://cdn.pixabay.com/audio/2023/09/07/audio_168f2040eb.mp3",
+  corporate:  "",
+  energetic:  "",
+  cinematic:  "",
+  calm:       "",
+  playful:    "",
 };
 
-type TransitionType = "fade" | "slide" | "scale" | "flash" | "none";
+type TransitionType = "fade" | "slide" | "scale" | "flash" | "none" | "cameraPan" | "zoomThrough";
+
+// ---------------------------------------------------------------------------
+// withTransition — wraps a scene component with entrance + exit motion
+//
+// enterType: how THIS scene enters (from the scene plan's `transition` field)
+// exitType:  how THIS scene exits (from the NEXT scene's `transition` field)
+//
+// cameraPan: scene enters from full-width right, exits to full-width left.
+//   Creates the WhatAStory "infinite canvas" feel — the camera pans laterally
+//   across a larger world rather than cross-dissolving between isolated slides.
+//   Motion blur is applied during the pan via a horizontal CSS blur filter.
+// ---------------------------------------------------------------------------
 
 function withTransition(
   SceneComp: React.ComponentType,
   duration: number,
   isFirst: boolean,
   isLast: boolean,
-  transitionType: TransitionType = "fade",
+  enterType: TransitionType = "fade",
+  exitType: TransitionType = "fade",
+  exitAnchor?: { x: number; y: number },
 ): React.ComponentType {
   const fadeIn  = isFirst ? 8 : TRANSITION_FRAMES;
   const fadeOut = isLast  ? 8 : TRANSITION_FRAMES;
 
   return function TransitionScene() {
     const frame = useCurrentFrame();
+    const { width } = useVideoConfig();
     const easeOut = (t: number) => 1 - Math.pow(1 - t, 3);
 
-    const opacity = interpolate(
+    // ── Determine if we're in the exit window ──────────────────────────────
+    const inExit = !isLast && frame >= duration + HOLD_FRAMES - fadeOut;
+    const exitProgress = inExit
+      ? Math.min(1, Math.max(0, (frame - (duration + HOLD_FRAMES - fadeOut)) / fadeOut))
+      : 0;
+
+    // ── Opacity (used by all non-cameraPan/zoomThrough transitions) ────────
+    // Guard: ensure fadeIn doesn't exceed the fade-out start (short scenes)
+    const fadeOutStart = Math.max(fadeIn + 1, duration + HOLD_FRAMES - fadeOut);
+    let opacity = interpolate(
       frame,
-      [0, fadeIn, duration - fadeOut, duration],
+      [0, fadeIn, fadeOutStart, duration + HOLD_FRAMES],
       [0, 1, 1, 0],
       { extrapolateLeft: "clamp", extrapolateRight: "clamp" },
     );
 
+    // ── Transform (entrance) ───────────────────────────────────────────────
     let transform = "none";
-    if (transitionType === "slide" && !isFirst) {
+    let filter = "none";
+    let transformOrigin = "50% 50%";
+
+    if (enterType === "zoomThrough" && !isFirst) {
+      // Arrive from a zoomed-in portal — scale 10→1, eases out from center
+      const zoomOutScale = interpolate(frame, [0, fadeIn], [10, 1], {
+        extrapolateRight: "clamp",
+        easing: (t) => 1 - Math.pow(1 - t, 3), // ease-out cubic
+      });
+      transform = `scale(${zoomOutScale.toFixed(4)})`;
+      opacity = 1;
+    } else if (enterType === "cameraPan" && !isFirst) {
+      // Enter from the right — full off-screen to center
+      const slideInX = interpolate(frame, [0, fadeIn], [width, 0], {
+        extrapolateRight: "clamp",
+        easing: easeOut,
+      });
+      transform = `translateX(${slideInX}px)`;
+      opacity = 1; // pure position pan, no opacity fade on entry
+      // Horizontal motion blur — strongest at frame 0, gone by fadeIn
+      const blurPx = interpolate(frame, [0, Math.round(fadeIn * 0.6), fadeIn], [18, 6, 0], {
+        extrapolateLeft: "clamp", extrapolateRight: "clamp",
+      });
+      if (blurPx > 0.5) filter = `blur(${blurPx.toFixed(1)}px)`;
+    } else if (enterType === "slide" && !isFirst) {
       const slideX = interpolate(frame, [0, fadeIn], [80, 0], {
         extrapolateRight: "clamp", easing: easeOut,
       });
       transform = `translateX(${slideX}px)`;
-    } else if (transitionType === "scale" && !isFirst) {
+    } else if (enterType === "scale" && !isFirst) {
       const scale = interpolate(frame, [0, fadeIn], [1.06, 1], {
         extrapolateRight: "clamp", easing: easeOut,
       });
       transform = `scale(${scale})`;
-    } else if (transitionType === "flash") {
-      // Flash is handled by the white overlay — scene itself just fades normally
     }
 
-    // Flash overlay — white burst at transition point (frame 0-6 of incoming scene)
-    const flashOpacity = transitionType === "flash"
+    // ── Transform (exit) — overrides entrance transform in exit window ─────
+    if (inExit) {
+      if (exitType === "zoomThrough") {
+        // Zoom INTO the exitAnchor — scale explodes 1→10, cubic ease-in (accelerates into portal)
+        const zoomScale = interpolate(exitProgress, [0, 1], [1, 10], {
+          easing: (t) => t * t * t,
+        });
+        transform = `scale(${zoomScale.toFixed(4)})`;
+        transformOrigin = exitAnchor
+          ? `${(exitAnchor.x * 100).toFixed(1)}% ${(exitAnchor.y * 100).toFixed(1)}%`
+          : "50% 50%";
+        opacity = 1; // pure zoom, no fade
+      } else if (exitType === "cameraPan") {
+        // Exit to the left — center to full off-screen
+        const slideOutX = interpolate(exitProgress, [0, 1], [0, -width], {
+          easing: (t) => t * t, // ease-in — accelerates as it leaves
+        });
+        transform = `translateX(${slideOutX}px)`;
+        opacity = 1; // no opacity fade during camera pan exit
+        // Motion blur increases as scene accelerates out
+        const blurPx = interpolate(exitProgress, [0, 0.4, 1], [0, 6, 18], {
+          extrapolateLeft: "clamp", extrapolateRight: "clamp",
+        });
+        if (blurPx > 0.5) filter = `blur(${blurPx.toFixed(1)}px)`;
+      }
+      // Other exit types already handled by opacity interpolation above
+    }
+
+    // ── Flash overlay ──────────────────────────────────────────────────────
+    const flashOpacity = enterType === "flash"
       ? interpolate(frame, [0, 6], [0.85, 0], { extrapolateLeft: "clamp", extrapolateRight: "clamp" })
       : 0;
 
-    // Wrap SceneComp render — if it throws, show a dark placeholder
-    let sceneElement: React.ReactNode;
-    try {
-      sceneElement = React.createElement(SceneComp);
-    } catch {
-      sceneElement = React.createElement("div", {
-        style: {
-          position: "absolute", inset: 0,
-          background: "#111",
-          display: "flex", alignItems: "center", justifyContent: "center",
-        },
-      }, React.createElement("span", {
-        style: { color: "#555", fontSize: 14, fontFamily: "Inter" },
-      }, "Scene render error"));
-    }
+    const sceneElement = React.createElement(
+      SceneErrorBoundary,
+      null,
+      React.createElement(SceneComp),
+    );
 
     return React.createElement(
       AbsoluteFill,
-      { style: { opacity, transform, willChange: "transform, opacity" } },
+      { style: { opacity, transform, transformOrigin, filter, willChange: "transform, opacity, filter", overflow: "hidden" } },
       sceneElement,
-      // White flash burst overlaid on top of scene
       flashOpacity > 0
         ? React.createElement("div", {
             style: {
@@ -124,31 +244,60 @@ function createMasterComponent(
   bgColor?: string,
   musicUrl?: string,
   brand?: Partial<BrandTokens> | null,
+  sfxUrls: Record<string, string> = {},
 ): React.ComponentType {
   // Build overlapping sequence offsets for cross-dissolve transitions
   const entries: Array<{ from: number; Component: React.ComponentType; duration: number }> = [];
   let offset = 0;
   for (let i = 0; i < scenes.length; i++) {
     const s = scenes[i];
-    const transition = s.transition as TransitionType | undefined;
-    const Wrapped = withTransition(s.Component, s.durationInFrames, i === 0, i === scenes.length - 1, transition ?? "fade");
-    entries.push({ from: offset, Component: Wrapped, duration: s.durationInFrames });
-    // Overlap next scene by TRANSITION_FRAMES for cross-dissolve (except after last)
+    const enterType = (s.transition as TransitionType | undefined) ?? "fade";
+    // exitType: if THIS scene has exitAnchor, it zooms through on exit.
+    // Otherwise fall back to the next scene's enter transition for directional consistency.
+    const exitAnchor = s.exitAnchor;
+    const exitType: TransitionType = exitAnchor
+      ? "zoomThrough"
+      : ((scenes[i + 1]?.transition as TransitionType | undefined) ?? "fade");
+    const Wrapped = withTransition(s.Component, s.durationInFrames, i === 0, i === scenes.length - 1, enterType, exitType, exitAnchor);
+    entries.push({ from: offset, Component: Wrapped, duration: s.durationInFrames + HOLD_FRAMES });
+    // Overlap next scene by TRANSITION_FRAMES for cross-dissolve (except after last).
+    // HOLD_FRAMES pads each scene's slot so animations fully settle before the dissolve begins.
     if (i < scenes.length - 1) {
-      offset += s.durationInFrames - TRANSITION_FRAMES;
+      offset += s.durationInFrames + HOLD_FRAMES - TRANSITION_FRAMES;
     }
   }
 
-  // Import FilmGrain from compiler scope via a wrapper
-  // We reference it by name — it's injected as a global in compiled code,
-  // but here in the hook we need the actual component from compiler.ts exports
+  // Build emotionalIntent map: frame range → intent for adaptive grain + vignette
+  const sceneIntentMap = entries.map((e, i) => ({
+    from: e.from,
+    to: e.from + e.duration,
+    emotionalIntent: scenes[i]?.emotionalIntent ?? "",
+  }));
+
+  // Build section label map: frame range → label for persistent feature labels
+  const sceneSectionLabelMap = entries.map((e, i) => ({
+    from: e.from,
+    to: e.from + e.duration,
+    label: (scenes[i] as any)?.sectionLabel ?? null,
+  })).filter(s => s.label);
+
+  // FilmGrain overlay — opacity and speed adapt to the current scene's emotionalIntent.
+  // FRUSTRATION/PAIN → heavier grain (gritty, oppressive)
+  // RELIEF/CONFIDENCE → lighter grain (clean, elevated)
+  // EXCITEMENT/URGENCY → fast grain shift (kinetic energy)
   const FilmGrainLayer = function FilmGrainLayer() {
     const frame = useCurrentFrame();
-    const shift = (frame * 37) % 100;
+    const intent = sceneIntentMap.find(s => frame >= s.from && frame < s.to)?.emotionalIntent ?? "";
+    const opacity = intent === "FRUSTRATION" || intent === "PAIN" ? 0.06
+      : intent === "RELIEF" || intent === "CONFIDENCE" ? 0.02
+      : intent === "EXCITEMENT" || intent === "URGENCY" ? 0.04
+      : 0.03;
+    const grainSpeed = intent === "EXCITEMENT" || intent === "URGENCY" ? 72 : 37;
+    const shift = (frame * grainSpeed) % 100;
     return React.createElement("div", {
       style: {
         position: "absolute", inset: 0, zIndex: 9999, pointerEvents: "none",
-        opacity: 0.03,
+        opacity,
         backgroundImage: `url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E")`,
         backgroundSize: "180px 180px",
         backgroundPosition: `${shift}px ${(shift * 0.7).toFixed(0)}px`,
@@ -157,44 +306,219 @@ function createMasterComponent(
     });
   };
 
-  // Global background layer — renders subtle corner gradient blobs for light-themed videos
-  const globalBg = brand?.style === "light"
-    ? React.createElement("div", {
-        style: {
-          position: "absolute", inset: 0, zIndex: 0,
-          background: brand.bg || "#f8f9fc",
+  // SectionLabel — top-left persistent feature label driven by scene.sectionLabel
+  // Renders only when a scene has a sectionLabel set, fades in at scene start.
+  const SectionLabelLayer = sceneSectionLabelMap.length > 0
+    ? function SectionLabelLayer() {
+        const frame = useCurrentFrame();
+        const active = sceneSectionLabelMap.find(s => frame >= s.from && frame < s.to);
+        if (!active) return null;
+        const fadeIn = Math.min(1, (frame - active.from) / 12);
+        return React.createElement("div", {
+          style: {
+            position: "absolute",
+            top: 28, left: 36,
+            zIndex: 200,
+            pointerEvents: "none" as const,
+            opacity: fadeIn,
+          },
         },
+          React.createElement("div", {
+            style: {
+              fontFamily: brand?.font || "Inter",
+              fontSize: 13,
+              fontWeight: 600,
+              letterSpacing: "0.18em",
+              textTransform: "uppercase" as const,
+              color: brand?.primary || "#6366f1",
+              background: brand?.style === "dark" ? "rgba(0,0,0,0.35)" : "rgba(255,255,255,0.7)",
+              backdropFilter: "blur(8px)",
+              WebkitBackdropFilter: "blur(8px)",
+              borderRadius: 6,
+              padding: "4px 10px",
+              border: `1px solid ${brand?.border || "rgba(255,255,255,0.12)"}`,
+            },
+          }, active.label),
+        );
+      }
+    : null;
+
+  // Vignette — dark radial border around frame edges.
+  // FRUSTRATION/PAIN → strong vignette (moody, claustrophobic)
+  // RELIEF → subtle vignette (open, clean)
+  const VignetteLayer = function VignetteLayer() {
+    const frame = useCurrentFrame();
+    const intent = sceneIntentMap.find(s => frame >= s.from && frame < s.to)?.emotionalIntent ?? "";
+    const vignetteOpacity = intent === "FRUSTRATION" || intent === "PAIN" ? 0.15
+      : intent === "RELIEF" ? 0.05
+      : 0.08;
+    return React.createElement("div", {
+      style: {
+        position: "absolute", inset: 0,
+        background: `radial-gradient(ellipse at center, transparent 50%, rgba(0,0,0,${vignetteOpacity}) 100%)`,
+        pointerEvents: "none" as const,
+        zIndex: 9998,
       },
+    });
+  };
+
+  // Global background layer — renders animated LightArcBg for light-themed videos
+  // Replicates the compiler-scope LightArcBg "arcs" variant inline so the master
+  // composition has the same animated arc texture as individual scenes.
+  const bgColor_ = brand?.bg || "#f8f9fc";
+  const primary_ = brand?.primary || "#6366f1";
+  const secondary_ = brand?.secondary || "#ec4899";
+
+  // PersistentBg — renders ONE background for the ENTIRE video across all scenes.
+  // This is the core of WhatAStory's "infinite canvas" feel: the background never
+  // changes, so cuts feel like camera moves through one world, not separate slides.
+  // Light brands: animated arc SVG overlay on brand.bg
+  // Dark brands: subtle animated radial mesh gradient on brand.bg
+  const AnimatedArcBg = function PersistentBg() {
+    const frame = useCurrentFrame();
+    const { width: W, height: H } = useVideoConfig();
+    const isLight = brand?.style === "light";
+
+    if (isLight) {
+      // Light: animated concentric arc lines from bottom-left origin
+      const ARC_COUNT = 8;
+      const ORIGIN_X = W * 0.3;
+      const ORIGIN_Y = H * 0.6;
+      const rotation = frame * 0.05;
+      const arcs = Array.from({ length: ARC_COUNT }, (_, i) => ({
+        radius: 180 + i * 130,
+        opacity: Math.max(0, 0.04 - i * 0.003),
+        dashArray: `${55 + i * 18} ${180 + i * 36}`,
+        dashOffset: i * 40,
+      }));
+      return React.createElement("div", {
+        style: { position: "absolute", inset: 0, zIndex: 0, background: bgColor_ },
+      },
+        React.createElement("div", {
+          style: {
+            position: "absolute", inset: 0,
+            background: `radial-gradient(ellipse at 0% 100%, ${primary_}12 0%, transparent 50%), radial-gradient(ellipse at 100% 0%, ${secondary_}0e 0%, transparent 45%), radial-gradient(ellipse at 100% 100%, ${primary_}0b 0%, transparent 40%)`,
+          },
+        }),
+        React.createElement("svg", {
+          style: { position: "absolute", inset: 0, width: "100%", height: "100%", overflow: "visible" },
+        },
+          ...arcs.map((arc, i) =>
+            React.createElement("circle", {
+              key: i,
+              cx: ORIGIN_X, cy: ORIGIN_Y, r: arc.radius,
+              fill: "none",
+              stroke: `rgba(0,0,0,${arc.opacity.toFixed(3)})`,
+              strokeWidth: 1,
+              strokeDasharray: arc.dashArray,
+              strokeDashoffset: arc.dashOffset,
+              transform: `rotate(${rotation + i * 5}, ${ORIGIN_X}, ${ORIGIN_Y})`,
+            }),
+          ),
+        ),
+      );
+    }
+
+    // Dark: slowly drifting radial mesh gradient blobs on brand.bg
+    const t = frame * 0.003;
+    const g1x = 30 + Math.sin(t) * 18;
+    const g1y = 25 + Math.cos(t * 0.7) * 14;
+    const g2x = 72 + Math.cos(t * 1.1) * 16;
+    const g2y = 65 + Math.sin(t * 0.9) * 18;
+    const g3x = 18 + Math.sin(t * 0.8) * 12;
+    const g3y = 74 + Math.cos(t * 1.2) * 14;
+    return React.createElement("div", {
+      style: {
+        position: "absolute", inset: 0, zIndex: 0, background: bgColor_,
+      },
+    },
       React.createElement("div", {
         style: {
           position: "absolute", inset: 0,
-          background: `
-            radial-gradient(ellipse at 0% 100%, ${brand.primary || "#6366f1"}11 0%, transparent 50%),
-            radial-gradient(ellipse at 100% 0%, ${brand.secondary || "#ec4899"}0d 0%, transparent 45%),
-            radial-gradient(ellipse at 100% 100%, ${brand.primary || "#ef4444"}0a 0%, transparent 40%)
-          `,
+          background: [
+            `radial-gradient(ellipse at ${g1x}% ${g1y}%, ${primary_}1a 0%, transparent 52%)`,
+            `radial-gradient(ellipse at ${g2x}% ${g2y}%, ${secondary_}14 0%, transparent 48%)`,
+            `radial-gradient(ellipse at ${g3x}% ${g3y}%, ${primary_}10 0%, transparent 44%)`,
+          ].join(", "),
         },
       }),
-    )
-    : null;
+    );
+  };
+
+  // Build per-scene volume automation arrays for smooth music volume transitions
+  const hasVoiceover = scenes.some(s => s.hasVoiceover);
+  const baseVolume = hasVoiceover ? 0.08 : 0.18;
+  const volFrames: number[] = [];
+  const volValues: number[] = [];
+  {
+    const rawFrames: number[] = [];
+    const rawValues: number[] = [];
+    entries.forEach((e, i) => {
+      const sceneVol = (scenes[i]?.musicVolume ?? 1.0) * baseVolume;
+      const prevVol = i > 0 ? (scenes[i - 1]?.musicVolume ?? 1.0) * baseVolume : sceneVol;
+      rawFrames.push(e.from, e.from + 15);
+      rawValues.push(prevVol, sceneVol);
+    });
+    // Deduplicate: interpolate requires strictly monotonically increasing frames
+    rawFrames.forEach((f, idx) => {
+      if (volFrames.length === 0 || f > volFrames[volFrames.length - 1]) {
+        volFrames.push(f);
+        volValues.push(rawValues[idx]);
+      }
+    });
+  }
+
+  // Phase 5.1: Pre-compute transition SFX elements using ElevenLabs-generated URLs
+  const transitionSfxElements = scenes.map((scene, i) => {
+    if (i === 0) return null;
+    const transFrame = entries[i]?.from ?? 0;
+    const transType = scene.transition ?? "fade";
+    let sfxUrl: string | null = null;
+    if (transType === "cameraPan") sfxUrl = sfxUrls.swoosh ?? null;
+    else if (transType === "slide") sfxUrl = sfxUrls.whoosh ?? null;
+    else if (transType === "flash") sfxUrl = sfxUrls.pop ?? null;
+    if (!sfxUrl) return null;
+    return React.createElement(Sequence, { key: `sfx-${i}`, from: transFrame, durationInFrames: 30,
+      children: React.createElement(Audio, { src: sfxUrl, volume: 0.25 } as any)
+    } as any);
+  }).filter(Boolean);
 
   return function MasterVideo() {
+    const frame = useCurrentFrame();
+    const musicVol = volFrames.length > 1
+      ? interpolate(frame, volFrames, volValues, { extrapolateLeft: "clamp", extrapolateRight: "clamp" })
+      : baseVolume;
+
     return React.createElement(
       AbsoluteFill,
-      bgColor ? { style: { backgroundColor: bgColor } } : null,
-      globalBg,
-      // Background music (loop at low volume)
+      null,
+      React.createElement(AnimatedArcBg),
+      // Background music with per-scene volume automation
       musicUrl
-        ? React.createElement(Audio, { src: musicUrl, volume: 0.18, loop: true } as any)
+        ? React.createElement(Audio, {
+            src: musicUrl,
+            volume: musicVol,
+            loop: true,
+          } as any)
         : null,
       ...entries.map(({ from, Component: SceneComp, duration }, i) =>
         React.createElement(Sequence, {
           key: i,
           from,
           durationInFrames: duration,
-          children: React.createElement(SceneComp),
+          children: React.createElement(
+            SceneErrorBoundary,
+            { sceneName: scenes[i]?.title ?? `Scene ${i + 1}`, children: null },
+            React.createElement(SceneComp),
+          ),
         }),
       ),
+      // Phase 5.1: Transition SFX
+      ...transitionSfxElements,
+      // Vignette — emotionalIntent-adaptive dark radial border
+      React.createElement(VignetteLayer),
+      // Phase 5.2: Persistent section label — feature name in top-left corner
+      SectionLabelLayer ? React.createElement(SectionLabelLayer) : null,
       // FilmGrain overlay — topmost layer across entire video
       React.createElement(FilmGrainLayer),
     );
@@ -205,71 +529,108 @@ function createMasterComponent(
  * ATTACHED_IMAGES are passed separately via inputProps.images — not embedded in the code —
  * to avoid a variable-shadowing conflict with the compiler's scope parameter of the same name.
  */
-export function buildMasterCode(scenes: CompiledScene[]): string {
+export function buildMasterCode(
+  scenes: CompiledScene[],
+  musicUrl?: string | null,
+  sfxUrls?: Record<string, string>,
+): string {
   const sceneComponents = scenes
     .map((scene, i) => {
       const body = extractComponentBody(scene.code);
-      return `const Scene${i} = () => {\n${body}\n};`;
+      // Reference VOICEOVER_URLS (injected as scope variable by DynamicComp) instead of
+      // embedding 100KB+ base64 data URLs inline — keeps masterCode string lean.
+      const voiceoverLine = scene.voiceoverAudioUrl
+        ? `  const VOICEOVER_AUDIO_URL = typeof VOICEOVER_URLS !== "undefined" ? (VOICEOVER_URLS[${JSON.stringify(String(i))}] ?? null) : null;\n  const WORD_TIMINGS = ${JSON.stringify(scene.wordTimings ?? [])};\n`
+        : "";
+      return `const Scene${i} = () => {\n${voiceoverLine}${body}\n};`;
     })
     .join("\n\n");
 
   let offset = 0;
+  const sfxSequences: string[] = [];
   const sequences = scenes
     .map((scene, i) => {
       const from = offset;
+      if (i > 0) {
+        const transType = scene.transition ?? "fade";
+        let sfxUrl: string | null = null;
+        if (transType === "cameraPan") sfxUrl = sfxUrls?.swoosh ?? null;
+        else if (transType === "slide") sfxUrl = sfxUrls?.whoosh ?? null;
+        else if (transType === "flash") sfxUrl = sfxUrls?.pop ?? null;
+        if (sfxUrl) {
+          sfxSequences.push(`    <Sequence from={${from}} durationInFrames={30}><Audio src={${JSON.stringify(sfxUrl)}} volume={0.25} /></Sequence>`);
+        }
+      }
       offset += scene.durationInFrames;
       return `    <Sequence from={${from}} durationInFrames={${scene.durationInFrames}}><Scene${i} /></Sequence>`;
     })
     .join("\n");
+
+  const musicLine = musicUrl
+    ? `    <Audio src={${JSON.stringify(musicUrl)}} volume={0.3} loop />\n`
+    : "";
+
+  const allSequences = [sequences, ...sfxSequences].join("\n");
 
   return `${sceneComponents}
 
 export const DynamicAnimation = () => {
   return (
     <AbsoluteFill>
-${sequences}
+${musicLine}${allSequences}
     </AbsoluteFill>
   );
 };`;
 }
 
-function createPlaceholderScene(title: string): React.ComponentType {
+/** Extracts per-scene voiceover URLs as a keyed map for passing to DynamicComp as VOICEOVER_URLS scope var. */
+export function buildVoiceoverMap(scenes: CompiledScene[]): Record<string, string> {
+  const map: Record<string, string> = {};
+  scenes.forEach((scene, i) => {
+    if (scene.voiceoverAudioUrl) {
+      map[String(i)] = scene.voiceoverAudioUrl;
+    }
+  });
+  return map;
+}
+
+function createPlaceholderScene(title: string, reason?: string): React.ComponentType {
   return function PlaceholderScene() {
     return React.createElement(
       AbsoluteFill,
       {
         style: {
-          backgroundColor: "#1a1a1a",
+          backgroundColor: "#0f0f1a",
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
           flexDirection: "column" as const,
-          gap: 12,
+          gap: 10,
+          padding: "0 80px",
         },
       },
-      React.createElement(
-        "div",
-        {
-          style: {
-            fontSize: 22,
-            fontWeight: 600,
-            color: "#555",
-            fontFamily: "Inter, sans-serif",
-          },
+      React.createElement("div", {
+        style: { fontSize: 28, marginBottom: 4 },
+      }, "⚠"),
+      React.createElement("div", {
+        style: {
+          fontSize: 16, fontWeight: 600, color: "#666",
+          fontFamily: "Inter, sans-serif", textAlign: "center" as const,
         },
-        title,
-      ),
-      React.createElement(
-        "div",
-        {
-          style: {
-            fontSize: 13,
-            color: "#444",
-            fontFamily: "Inter, sans-serif",
-          },
+      }, title),
+      React.createElement("div", {
+        style: {
+          fontSize: 12, color: "#ef4444",
+          fontFamily: "Inter, sans-serif", textAlign: "center" as const,
         },
-        "Failed to generate",
-      ),
+      }, "Failed to generate — click Regenerate to retry"),
+      reason ? React.createElement("div", {
+        style: {
+          fontSize: 10, color: "#555", fontFamily: "monospace",
+          maxWidth: 500, textAlign: "center" as const,
+          wordBreak: "break-word" as const, marginTop: 4,
+        },
+      }, reason.split("\n")[0].slice(0, 120)) : null,
     );
   };
 }
@@ -289,11 +650,40 @@ BRAND is already injected into scope — DO NOT declare it. Use BRAND.bg, BRAND.
 // BRAND.textMuted = "${brand.textMuted}"  — subtitles, captions, metadata
 // BRAND.border    = "${brand.border}"     — glass card borders, divider lines
 // BRAND.font      = "${brand.font}"       — fontFamily on every text element
-// BRAND.style     = "${brand.style}"      — "dark" | "light" | "neon"`;
+// BRAND.style     = "${brand.style}"      — "dark" | "light" | "neon"
+// BRAND.musicStyle = "${brand.musicStyle ?? "cinematic"}" — "energetic" | "calm" | "cinematic" | "corporate" | "playful"`;
+}
+
+/** Fetch a background music track for the given style from ElevenLabs. Returns null on failure. */
+async function prefetchMusic(style: string): Promise<string | null> {
+  try {
+    const res = await fetch("/api/music", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ style }),
+    });
+    if (!res.ok) return null;
+    const { audioUrl } = await res.json();
+    return audioUrl ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** Pre-generate all ElevenLabs SFX sounds in one parallel call. Returns a URL map (empty on failure). */
+async function prefetchSfx(): Promise<Record<string, string>> {
+  try {
+    const res = await fetch("/api/sfx", { method: "POST" });
+    if (!res.ok) return {};
+    const { urls } = await res.json();
+    return urls ?? {};
+  } catch {
+    return {};
+  }
 }
 
 /** Pre-fetch ElevenLabs voiceover for every scene that has voiceoverText. Runs in parallel. */
-async function prefetchVoiceovers(scenes: ScenePlan[]): Promise<ScenePlan[]> {
+async function prefetchVoiceovers(scenes: ScenePlan[], voiceId?: string): Promise<ScenePlan[]> {
   return Promise.all(
     scenes.map(async (scene) => {
       if (!scene.voiceoverText?.trim()) return scene;
@@ -301,7 +691,7 @@ async function prefetchVoiceovers(scenes: ScenePlan[]): Promise<ScenePlan[]> {
         const res = await fetch("/api/tts", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ text: scene.voiceoverText }),
+          body: JSON.stringify({ text: scene.voiceoverText, voiceId }),
         });
         if (!res.ok) return scene;
         const { audioUrl, wordTimings } = await res.json();
@@ -323,20 +713,31 @@ async function prefetchVoiceovers(scenes: ScenePlan[]): Promise<ScenePlan[]> {
  * Also returns chameleon overlay JSX hints for input/button/dropdown elements
  * so the LLM knows exactly which overlay components to render.
  */
+/** Derive the SFX type for a cursor waypoint based on its action + elementType. */
+function waypointSfx(wp: CursorWaypoint): string | null {
+  if (wp.action === "none" || wp.action === "scroll") return null;
+  if (wp.elementType === "input") return "type";
+  if (wp.elementType === "dropdown") return "pop";
+  if (wp.action === "hover") return "whoosh";
+  // click / double-click / nav / button / card → click sound
+  return "click";
+}
+
 function buildInteractionScript(waypoints: CursorWaypoint[]): string {
   // TRAVEL = frames for cursor spring to settle at destination (must match cursor skill)
-  const TRAVEL = 25;
+  const TRAVEL = 22;
   // Start with cursor off-screen (initial anchor step at time=0)
   let frame = 20; // first spring starts at frame 20 (gives 20 frames of fade-in before cursor moves)
 
   const stepEntries: string[] = [];
   const chameleonHints: string[] = [];
   const commentLines: string[] = [];
+  const sfxEntries: string[] = []; // SFX_EVENTS for SfxSequencer
 
   // BUG FIX: Add initial anchor step so the first waypoint has a "from" position.
   // Without this, prevStep === currentStep === CURSOR_STEPS[0] for all frames before
   // the first time boundary, so the cursor is already at the destination from frame 0.
-  stepEntries.push(`  { x: 0.5, y: 0.85, label: "", time: 0, action: "none" }`);
+  stepEntries.push(`  { x: 0.5, y: 1.10, label: "", time: 0, action: "none" }`);
 
   waypoints.forEach((wp, i) => {
     // `arrive` = frame when this step's spring starts (cursor begins traveling)
@@ -361,6 +762,16 @@ function buildInteractionScript(waypoints: CursorWaypoint[]): string {
     commentLines.push(
       `// Step ${i}: spring starts f:${arrive}, cursor arrives+clicks at f:${actionFrame}${wp.box ? `, box:{x:${wp.box.x.toFixed(3)},y:${wp.box.y.toFixed(3)},w:${wp.box.w.toFixed(3)},h:${wp.box.h.toFixed(3)}}` : ''}${wp.elementType ? `, elementType:"${wp.elementType}"` : ''} — "${wp.label}"`,
     );
+
+    // Derive SFX for this waypoint and add to SFX_EVENTS
+    const sfx = waypointSfx(wp);
+    if (sfx) {
+      sfxEntries.push(`  { frame: ${actionFrame}, sfx: "${sfx}" }`);
+      // For input fields: also fire a "success" chime ~30 frames after typing starts
+      if (sfx === "type") {
+        sfxEntries.push(`  { frame: ${actionFrame + 30}, sfx: "success" }`);
+      }
+    }
 
     // Chameleon overlay hints use actionFrame (when cursor arrives and click fires)
     if (wp.box) {
@@ -390,18 +801,24 @@ function buildInteractionScript(waypoints: CursorWaypoint[]): string {
 
   const cursorStepsCode = `const CURSOR_STEPS = [\n${stepEntries.join(',\n')},\n];`;
 
+  // SFX_EVENTS — companion array for SfxSequencer (always emitted, may be empty)
+  const sfxEventsCode = `const SFX_EVENTS = [\n${sfxEntries.join(',\n')}${sfxEntries.length ? ',\n' : ''}];`;
+
   const chameleonSection = chameleonHints.length > 0
     ? `\n\n## CHAMELEON OVERLAYS — render these at the CLICK frame (uncomment and fill in text):\n${chameleonHints.join('\n')}`
     : '';
 
   return `## CURSOR WAYPOINTS (USER-CONFIRMED — MANDATORY CODE INJECTION)
-CRITICAL: You MUST paste the following constant VERBATIM in your component.
-Do NOT alter any x/y/box/time values — they are pixel-accurate from the uploaded screenshot.
+CRITICAL: You MUST paste BOTH constants VERBATIM in your component. Do NOT alter any values.
 
 TIMING MODEL: step.time = when spring/movement starts; click fires at step.time + 25 (TRAVEL frames later).
 Use this for chameleon overlay startFrame/triggerFrame: framesAfterArrival = frame - step.time - 25.
 
 ${cursorStepsCode}
+
+${sfxEventsCode}
+
+MANDATORY: Add <SfxSequencer events={SFX_EVENTS} /> as the FIRST child of AbsoluteFill so every cursor interaction has sound. SfxSequencer is already in scope — do NOT import or re-declare it.
 
 ${commentLines.join('\n')}${chameleonSection}`;
 }
@@ -413,6 +830,9 @@ async function consumeSceneGeneration(
   brand: BrandTokens,
   errorContext?: string,
   images?: string[],
+  continuityContext?: string,
+  /** "force" = use scene.skills as forcedSkills (default); "fallback" = pass as previouslyUsedSkills so LLM picks alternative */
+  skillMode: "force" | "fallback" = "force",
 ): Promise<string> {
   // Build the full prompt: brand block + scene creative brief
   const brandBlock = buildBrandBlock(brand);
@@ -425,12 +845,11 @@ async function consumeSceneGeneration(
   const VISION_SKILLS = new Set([
     "premium-cursor-engine",
     "premium-scroll-demo",
-    "premium-saas-showcase",
     "premium-chameleon-ui",
   ]);
   let detectedElementsBlock = "";
   if (
-    VISION_SKILLS.has(scene.skill) &&
+    scene.skills.some(sk => VISION_SKILLS.has(sk)) &&
     images &&
     images.length > 0 &&
     !errorContext // skip on retry — don't double-call vision
@@ -438,18 +857,62 @@ async function consumeSceneGeneration(
     // ── User-confirmed cursor waypoints (skip vision call) ─────────────────
     // Applies to both cursor-engine and chameleon-ui when user set waypoints
     if (
-      (scene.skill === "premium-cursor-engine" || scene.skill === "premium-chameleon-ui") &&
+      (scene.skills.includes("premium-cursor-engine") || scene.skills.includes("premium-chameleon-ui")) &&
       scene.cursorWaypoints &&
       scene.cursorWaypoints.length > 0
     ) {
-      console.log(
-        `Cursor path: using ${scene.cursorWaypoints.length} user-confirmed waypoints for "${scene.title}" (skipping /api/vision)`,
-      );
-      // buildInteractionScript now emits the full CURSOR_STEPS const + chameleon hints
-      detectedElementsBlock = `\n\n${buildInteractionScript(scene.cursorWaypoints)}`;
+      // User-confirmed waypoints: use them directly for CURSOR_STEPS.
+      // But if any waypoint lacks box data, still run vision to enrich them —
+      // without boxes, chameleon overlays can't target the right UI elements.
+      const missingBoxes = scene.cursorWaypoints.filter(wp => !wp.box || wp.box.w === 0);
+      if (missingBoxes.length > 0 && images[0]) {
+        try {
+          const vRes = await fetch("/api/vision", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ image: images[0] }),
+          });
+          if (vRes.ok) {
+            const vData = await vRes.json();
+            const vElements: Array<{ label: string; x: number; y: number; w?: number; h?: number }> = vData.elements ?? [];
+            // Enrich each waypoint that lacks a box by finding the nearest vision element
+            const enriched = scene.cursorWaypoints.map(wp => {
+              if (wp.box && wp.box.w > 0) return wp;
+              const nearest = vElements.reduce<{ el: typeof vElements[0] | null; d: number }>(
+                (best, el) => {
+                  const d = Math.hypot(el.x / 1000 - wp.x, el.y / 1000 - wp.y);
+                  return d < best.d ? { el, d } : best;
+                },
+                { el: null, d: Infinity },
+              );
+              if (nearest.el && nearest.d < 0.2) {
+                const el = nearest.el;
+                return { ...wp, box: { x: (el.x - (el.w ?? 80) / 2) / 1000, y: (el.y - (el.h ?? 40) / 2) / 1000, w: (el.w ?? 80) / 1000, h: (el.h ?? 40) / 1000 } };
+              }
+              return wp;
+            });
+            console.log(`Vision-enriched ${enriched.filter(w => w.box).length}/${enriched.length} user waypoints with box data`);
+            scene = { ...scene, cursorWaypoints: enriched };
+          }
+        } catch { /* non-fatal */ }
+      }
+      const wpts = scene.cursorWaypoints ?? [];
+      console.log(`Cursor path: using ${wpts.length} user-confirmed waypoints for "${scene.title}"`);
+      detectedElementsBlock = `\n\n${buildInteractionScript(wpts)}`;
     } else {
       // ── Fallback: auto-detect via /api/vision ──────────────────────────
+      // Skip /api/vision only when ALL waypoints already have valid box data.
+      // Using .some() was a bug — if only 1/4 waypoints had a box, vision was skipped
+      // and the remaining 3 stayed boxless, breaking chameleon overlays on those targets.
+      const allHaveBoxData = scene.cursorWaypoints?.length
+        ? scene.cursorWaypoints.every(wp => wp.box && wp.box.w > 0)
+        : false;
+      const needsVisionDetection = !allHaveBoxData;
+      if (!needsVisionDetection) {
+        console.log(`Skipping /api/vision for "${scene.title}" — box data already present in waypoints`);
+      }
       try {
+        if (!needsVisionDetection) throw new Error("skip-vision");
         const visionResponse = await fetch("/api/vision", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -460,7 +923,7 @@ async function consumeSceneGeneration(
           const elements: Array<{ label: string; x: number; y: number; w?: number; h?: number; elementType?: string }> =
             visionData.elements ?? [];
           if (elements.length > 0) {
-            if (scene.skill === "premium-chameleon-ui") {
+            if (scene.skills.includes("premium-chameleon-ui")) {
               // Merge vision elements with the interactionScript to produce
               // INTERACTION_SCRIPT comments including bounding boxes + frame timings.
               const script = scene.interactionScript ?? [];
@@ -504,7 +967,7 @@ ${steps.join("\n")}`;
 ## DETECTED UI SECTIONS FROM UPLOADED SCREENSHOT
 ${JSON.stringify(labels, null, 2)}`;
               }
-            } else if (scene.skill === "premium-cursor-engine") {
+            } else if (scene.skills.includes("premium-cursor-engine")) {
               const transformed = elements.map((el) => {
                 const videoW = el.w ?? 0.1;
                 const videoH = el.h ? el.h * 0.94 : 0.05;
@@ -544,7 +1007,7 @@ CRITICAL: You MUST include the following constant declaration in your generated 
 const DETECTED_SECTIONS = ${JSON.stringify(labels, null, 2)};`;
             }
             console.log(
-              `Vision bridge (${scene.skill}): ${elements.length} elements detected for "${scene.title}"`,
+              `Vision bridge (${scene.skills.join("+")}): ${elements.length} elements detected for "${scene.title}"`,
             );
           }
         }
@@ -572,7 +1035,7 @@ You MUST include the following in your component output:
     />
   )}
 
-Also add background music at reduced volume (≤ 0.2) using one of the FREE_MUSIC_TRACKS CDN URLs from the premium-audio skill.
+Do NOT add background music — the master composition already plays a global music track. Only include the voiceover Audio element above.
 Do NOT declare VOICEOVER_AUDIO_URL — it is already in scope.`;
   }
 
@@ -584,6 +1047,7 @@ Do NOT declare VOICEOVER_AUDIO_URL — it is already in scope.`;
 
   let uiSchemaBlock = "";
   if (hasValidUiSchema) {
+    const _schema = scene.uiSchema as any;
     uiSchemaBlock = `
 
 ## UI_SCHEMA (PRE-EXTRACTED — ALREADY IN SCOPE as UI_SCHEMA)
@@ -592,27 +1056,100 @@ UI_SCHEMA is injected into compiler scope — DO NOT declare it.
 Use ReconstructedAppShell or individual Animated* components with this data.
 
 // Reference only — schema shape:
-// UI_SCHEMA.layout.type = "${scene.uiSchema!.layout.type}"
-// UI_SCHEMA.layout.sidebar?.appName = "${scene.uiSchema!.layout.sidebar?.appName ?? "—"}"
-// UI_SCHEMA.mainContent.sections = [${(scene.uiSchema!.mainContent?.sections ?? []).map((s: any) => s.type).join(", ")}]
-// UI_SCHEMA.theme.isDark = ${scene.uiSchema!.theme?.isDark ?? false}
+// UI_SCHEMA.layout.type = "${_schema?.layout?.type ?? "sidebar-main"}"
+// UI_SCHEMA.layout.sidebar?.appName = "${_schema?.layout?.sidebar?.appName ?? "—"}"
+// UI_SCHEMA.mainContent.sections = [${(_schema?.mainContent?.sections ?? []).map((s: any) => s.type).join(", ")}]
+// UI_SCHEMA.theme.isDark = ${_schema?.theme?.isDark ?? false}
 
 Use: <ReconstructedAppShell uiSchema={UI_SCHEMA} brand={BRAND} />
 Or build manually with AnimatedSidebar, AnimatedMetricCards, AnimatedTable, AnimatedChart, AnimatedForm`;
   }
 
+  // Emotional intent + aha moment block
+  let narrativeBlock = "";
+  if ((scene as any).emotionalIntent || (scene as any).isAhaMoment) {
+    narrativeBlock = `\n\n## NARRATIVE DIRECTION`;
+    if ((scene as any).emotionalIntent) {
+      narrativeBlock += `\nEmotional intent: ${(scene as any).emotionalIntent}
+The visuals and animation must make the viewer feel this emotion. Choose colors, pacing, and motion that reinforce it:
+- FRUSTRATION: use crowded layouts, overlapping elements, red/orange accents, jerky motion
+- RELIEF: use open space, soft greens/blues, smooth springs, breathing room
+- CONFIDENCE: clean grid layout, precise typography, satisfying reveal order
+- TRUST: calm pacing, testimonial-style cards, real names/logos
+- URGENCY: fast cuts, countdown feel, strong CTA color
+- EXCITEMENT: bold colors, energetic spring physics, large type`;
+    }
+    if ((scene as any).isAhaMoment) {
+      narrativeBlock += `\n\nTHIS IS THE AHA MOMENT SCENE — the single most important scene in the video.
+Design it to deliver the product's core transformation as viscerally as possible:
+- Use SPRING_CONFIGS.snap (damping:160, stiffness:220) on the PRIMARY revealed element — the satisfying "pop" is the payoff
+- Secondary/supporting elements use SPRING_CONFIGS.entrance (damping:200, stiffness:120) so they don't compete
+- Add a 20-frame hold after the key element appears before anything else moves
+- Use a subtle scale pulse (1.0 → 1.03 → 1.0 over 30 frames) on the central element after it settles
+- The headline must use OUTCOME language: what the viewer's life looks like AFTER using the product
+- Wrap the hero element in GlowBloom (color=BRAND.primary, blurPx=80, opacity=0.4, animated=true) — the glow IS the aha signal
+- This scene should feel like a sigh of relief — all the previous pain dissolves here`;
+    }
+  }
+
+  const continuityBlock = continuityContext
+    ? `\n\n## SCENE CONTINUITY\n${continuityContext}`
+    : "";
+
+  // Zoom-through entrance note: tells the LLM this scene begins with the camera arriving from deep
+  const zoomThroughBlock = (scene as any).transition === "zoomThrough"
+    ? `\n\n## ZOOM-THROUGH ARRIVAL (cinematic match cut)
+This scene begins with a cinematic portal arrival — the previous scene's camera zoomed INTO a UI element and this scene receives the camera emerging from that element.
+Design rules for zoom-through arrival:
+- The primary content (UI, card, dashboard) must be VISIBLE at frame 0 — do NOT fly it in from off-screen.
+- Avoid large entrance animations in the first 15 frames — the zoom-out transition handles the arrival energy.
+- Supporting elements (text labels, section headers, badges) spring in from frame 15+ as normal.
+- The scene should feel like "arriving at a destination" — the viewer is already inside the product.`
+    : "";
+
+  const stageDirectionBlock = (scene as any).stageDirection
+    ? `\n\n## STAGE DIRECTION\n${(scene as any).stageDirection}`
+    : "";
+
+  // Visual anchor — emotional transformation throughline across problem/solution scenes
+  const va = (scene as any).visualAnchor as { icon: string; colorFrom: string; colorTo: string; label: string } | undefined;
+  const visualAnchorBlock = va
+    ? `\n\n## VISUAL ANCHOR TRANSFORMATION
+This scene is part of a visual anchor story. The anchor element "${va.icon}" (label: ${va.label}) must appear in this scene.
+- In PROBLEM/FRUSTRATION scenes: render "${va.icon}" in its BROKEN STATE — use color ${va.colorFrom} (red/alarm), show it visually distressed: pulsing alarm, cracked outline, overlapping chaos, or erratic jitter (useEntropy strength 0.7).
+- In SOLUTION/AHA scenes: render "${va.icon}" in its RESOLVED STATE — use color ${va.colorTo} (calm/success), show it healed: smooth reveal, satisfying scale-up 1.0→1.08, soft glow (GlowBloom color="${va.colorTo}"), settled spring (damping:200, stiffness:60).
+The viewer must RECOGNIZE this element from the problem scene and FEEL the transformation when they see it resolved. This is the emotional core of the video.
+Position it prominently: if the scene has a split layout, the anchor is the right-side hero element. If centered, it is the first element to appear.`
+    : "";
+
+  // MorphPortal import block: tells LLM that MORPH_FROM is in scope and what useMorphEntrance does
+  const morphImportBlock = (scene as any).morphImport
+    ? `\n\n## MORPH PORTAL ARRIVAL
+This scene receives a shape that morphed from the previous scene. MORPH_FROM is in scope (a normalized 0–1 rect).
+Use useMorphEntrance(MORPH_FROM, toRect, startFrame) to spring the element from its exported position into its natural position here.
+The morphing element should be the FIRST thing to appear (startFrame: 0). Other content enters once progress > 0.5.
+Example:
+  const { style, progress } = useMorphEntrance(MORPH_FROM, { x: 0.1, y: 0.15, w: 0.8, h: 0.65 });
+  <div style={{ ...style, background: BRAND.primary }}>
+    {progress > 0.5 && <AppShellContent />}
+  </div>
+Border-radius auto-interpolates from circular blob → card corner radius as the spring settles.`
+    : "";
+
   const scenePrompt = errorContext
-    ? `${brandBlock}\n\n${scene.prompt}${detectedElementsBlock}${uiSchemaBlock}${voiceoverBlock} \n\nPrevious attempt failed with this error: \n${errorContext} \nPlease fix the issues and regenerate.`
-    : `${brandBlock} \n\n${scene.prompt}${detectedElementsBlock}${uiSchemaBlock}${voiceoverBlock} `;
+    ? `${brandBlock}\n\n${scene.prompt}${detectedElementsBlock}${uiSchemaBlock}${voiceoverBlock}${narrativeBlock}${continuityBlock}${stageDirectionBlock}${visualAnchorBlock}${zoomThroughBlock}${morphImportBlock} \n\nPrevious attempt failed with this error: \n${errorContext} \nPlease fix the issues and regenerate.`
+    : `${brandBlock} \n\n${scene.prompt}${detectedElementsBlock}${uiSchemaBlock}${voiceoverBlock}${narrativeBlock}${continuityBlock}${stageDirectionBlock}${visualAnchorBlock}${zoomThroughBlock}${morphImportBlock} `;
 
   const response = await fetch("/api/generate", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
+    signal: AbortSignal.timeout(90_000),
     body: JSON.stringify({
       prompt: scenePrompt,
       model,
       isFollowUp: Boolean(errorContext),
-      forcedSkills: scene.skill ? [scene.skill] : undefined,
+      forcedSkills: skillMode === "force" && scene.skills?.length ? scene.skills : undefined,
+      previouslyUsedSkills: skillMode === "fallback" ? (scene.skills ?? []) : undefined,
       frameImages: images?.length ? images : undefined,
     }),
   });
@@ -679,6 +1216,50 @@ function reorderImagesForScene(images: string[] | undefined, scene: ScenePlan): 
   return [images[scene.imageIndex], ...images.filter((_, i) => i !== scene.imageIndex)];
 }
 
+/**
+ * Detect consecutive scenes that share the same app (same sidebar app name).
+ * Tags them with _isNavigationContinuation so the generation prompt can
+ * use a persistent shell pattern instead of re-rendering the full app.
+ */
+function detectNavigationSequences(
+  scenes: ScenePlan[],
+  uiSchemas: Record<number, Record<string, unknown>>,
+): ScenePlan[] {
+  return scenes.map((scene, i) => {
+    if (i === 0) return scene;
+    const prevScene = scenes[i - 1];
+
+    const currentSchema = scene.imageIndex != null ? uiSchemas[scene.imageIndex] : null;
+    const prevSchema = prevScene.imageIndex != null ? uiSchemas[prevScene.imageIndex] : null;
+
+    // Same app = both have sidebar with matching appName
+    const currentAppName = (currentSchema as any)?.layout?.sidebar?.appName;
+    const prevAppName = (prevSchema as any)?.layout?.sidebar?.appName;
+    const isSameApp = currentAppName && prevAppName && currentAppName === prevAppName;
+
+    if (!isSameApp) return scene;
+
+    return {
+      ...scene,
+      _isNavigationContinuation: true,
+      _persistentShellLayout: (prevSchema as any)?.layout ?? null,
+    } as ScenePlan;
+  });
+}
+
+/** Calculate the start frame offset for every scene in the plan. */
+function calculateSceneOffsets(scenes: { durationInFrames: number }[]): number[] {
+  const offsets: number[] = [];
+  let currentOffset = 0;
+  for (let i = 0; i < scenes.length; i++) {
+    offsets.push(currentOffset);
+    if (i < scenes.length - 1) {
+      currentOffset += scenes[i].durationInFrames + HOLD_FRAMES - TRANSITION_FRAMES;
+    }
+  }
+  return offsets;
+}
+
 /** Generate, compile, and error-recover a single scene. Never throws. */
 async function processScene(
   scene: ScenePlan,
@@ -687,6 +1268,10 @@ async function processScene(
   bypassCache: boolean,
   onProgress: (title: string) => void,
   images?: string[],
+  globalBg: string = "arcs",
+  continuityContext?: string,
+  globalFrameOffset: number = 0,
+  sfxUrls: Record<string, string> = {},
 ): Promise<CompiledScene> {
   const key = cacheKey(scene, brand);
 
@@ -706,45 +1291,135 @@ async function processScene(
       code: "",
       title: scene.title,
       prompt: scene.prompt,
-      skill: scene.skill,
+      skills: scene.skills,
     };
   }
 
   // Use scene-specific image ordering (imageIndex becomes ATTACHED_IMAGES[0])
   const sceneImages = reorderImagesForScene(images, scene);
 
+  // If this scene continues from the same app as the previous scene,
+  // hint the generator to use a persistent shell pattern
+  const enrichedScene = (scene as any)._isNavigationContinuation
+    ? {
+        ...scene,
+        prompt: scene.prompt + "\n\nNAVIGATION CONTEXT: This scene shows the SAME product as the previous scene (same sidebar/app shell). Use premium-app-walkthrough pattern: keep sidebar and topbar persistent, only transition the main content area. Match the sidebar items and app name from the previous scene.",
+      }
+    : scene;
+
+  // Resolve model — aha-moment scenes get thinking budget added (still free tier)
+  const resolvedModel = resolveModel(scene.skills[0] ?? "", model, (scene as any).isAhaMoment ?? false);
+  if (resolvedModel !== model) {
+    console.log(`Model routing: "${scene.title}" (${scene.skills.join("+")}) → ${resolvedModel}`);
+  }
+
   // First attempt
   try {
-    const code = await consumeSceneGeneration(scene, model, brand, undefined, sceneImages);
+    const code = await consumeSceneGeneration(enrichedScene, resolvedModel, brand, undefined, sceneImages, continuityContext);
     if (code.trim()) {
-      const result = compileCode(code, sceneImages, brand as Record<string, string>, scene.voiceoverAudioUrl ?? null, scene.wordTimings ?? [], (scene.uiSchema as unknown as Record<string, unknown> | null) ?? null);
+      const result = compileCode(code, sceneImages, brand as Record<string, string>, scene.voiceoverAudioUrl ?? null, scene.wordTimings ?? [], (scene.uiSchema as unknown as Record<string, unknown> | null) ?? null, globalBg, globalFrameOffset, (scene.morphImport?.rect ?? null), sfxUrls);
       if (!result.error && result.Component) {
+        // ── Quality audit gate ───────────────────────────────────────────────
+        // Audit compiled code for visual quality issues. If score < 70, retry
+        // with specific fix instructions. Non-fatal — if audit/retry fails,
+        // we keep the successfully-compiled original.
+        let finalCode = code;
+        let finalComponent = result.Component;
+        let auditScore: number | undefined;
+
+        // ── Audit gate ────────────────────────────────────────────────────────
+        // Audit every successfully-compiled scene. Catches quality issues before
+        // they ship. The audit route caches by code hash (5 min TTL) so repeated
+        // calls on the same code are free. Score < 70 → quality retry.
+        const shouldAudit = true;
+        try {
+          if (shouldAudit) {
+            const auditRes = await fetch("/api/audit", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                code,
+                prompt: scene.prompt,
+                brand: brand as Record<string, string>,
+              }),
+            });
+            if (auditRes.ok) {
+              const audit = await auditRes.json() as {
+                passed: boolean;
+                score: number;
+                issues: string[];
+                fixes: string[];
+              };
+              auditScore = audit.score;
+              console.log(`Audit "${scene.title}": score=${audit.score}, passed=${audit.passed}`);
+
+              if (!audit.passed && audit.score < 70 && audit.fixes?.length > 0) {
+                const fixContext = `QUALITY AUDIT FAILED (score: ${audit.score}/100). Code compiled but has visual quality issues.\n\nIssues found:\n${audit.issues.map(i => `- ${i}`).join('\n')}\n\nRequired fixes:\n${audit.fixes.map(f => `- ${f}`).join('\n')}\n\nApply ALL fixes and regenerate the complete component.`;
+                try {
+                  const qualityCode = await consumeSceneGeneration(enrichedScene, resolvedModel, brand, fixContext, sceneImages);
+                  if (qualityCode.trim()) {
+                    const qualityResult = compileCode(qualityCode, sceneImages, brand as Record<string, string>, scene.voiceoverAudioUrl ?? null, scene.wordTimings ?? [], (scene.uiSchema as unknown as Record<string, unknown> | null) ?? null, globalBg, globalFrameOffset, (scene.morphImport?.rect ?? null), sfxUrls);
+                    if (!qualityResult.error && qualityResult.Component) {
+                      finalCode = qualityCode;
+                      finalComponent = qualityResult.Component;
+                      auditScore = 75;
+                      console.log(`Quality retry succeeded for "${scene.title}"`);
+                    }
+                  }
+                } catch { /* non-fatal — use original compiled result */ }
+              }
+            }
+          }
+        } catch { /* audit failure is non-fatal */ }
+
         const compiled: CompiledScene = {
-          Component: result.Component,
+          Component: finalComponent,
           durationInFrames: scene.durationInFrames,
-          code: code,
+          code: finalCode,
           title: scene.title,
           prompt: scene.prompt,
-          skill: scene.skill,
+          skills: scene.skills,
           imageIndex: scene.imageIndex,
           cursorWaypoints: scene.cursorWaypoints,
           transition: scene.transition,
+          exitAnchor: (scene as any).exitAnchor,
+          auditScore,
+          hasVoiceover: !!scene.voiceoverAudioUrl,
+          isAhaMoment: (scene as any).isAhaMoment ?? false,
+          emotionalIntent: (scene as any).emotionalIntent,
+          musicVolume: (scene as any).musicVolume,
         };
         sceneCache.set(key, compiled);
         return compiled;
       }
 
-      // Retry with error context (use same sceneImages ordering)
+      // Retry with error context + skill fallback (let LLM pick an alternative skill)
       try {
+        const failedSkills = enrichedScene.skills.join(", ");
+        const retryErrorCtx = `COMPILATION FAILED — the previous attempt could not be rendered.
+
+Error: ${result.error ?? "JSX or syntax error"}
+
+Failed skills: ${failedSkills}
+
+RETRY INSTRUCTIONS:
+- Do NOT repeat the same code that caused the error
+- Use only built-in scope variables (BRAND, spring, interpolate, useCurrentFrame, AbsoluteFill, Sequence, Audio)
+- Avoid complex component patterns — use simple inline JSX
+- Keep all arrays (particles, items, etc.) defined OUTSIDE the component function
+- Guard all optional values: ATTACHED_IMAGES?.[0], UI_SCHEMA?.sections?.[0]
+- No template literal expressions inside JSX string attributes`;
         const retryCode = await consumeSceneGeneration(
-          scene,
-          model,
+          enrichedScene,
+          resolvedModel,
           brand,
-          result.error ?? "Compilation failed — JSX or syntax error",
+          retryErrorCtx,
           sceneImages,
+          undefined,
+          "fallback",
         );
         if (retryCode.trim()) {
-          const retryResult = compileCode(retryCode, sceneImages, brand as Record<string, string>, scene.voiceoverAudioUrl ?? null, scene.wordTimings ?? [], (scene.uiSchema as unknown as Record<string, unknown> | null) ?? null);
+          const retryResult = compileCode(retryCode, sceneImages, brand as Record<string, string>, scene.voiceoverAudioUrl ?? null, scene.wordTimings ?? [], (scene.uiSchema as unknown as Record<string, unknown> | null) ?? null, globalBg, globalFrameOffset, (scene.morphImport?.rect ?? null), sfxUrls);
           if (!retryResult.error && retryResult.Component) {
             const compiled: CompiledScene = {
               Component: retryResult.Component,
@@ -752,9 +1427,12 @@ async function processScene(
               code: retryCode,
               title: scene.title,
               prompt: scene.prompt,
-              skill: scene.skill,
+              skills: scene.skills,
               imageIndex: scene.imageIndex,
               cursorWaypoints: scene.cursorWaypoints,
+              transition: scene.transition,
+              exitAnchor: (scene as any).exitAnchor,
+              hasVoiceover: !!scene.voiceoverAudioUrl,
             };
             sceneCache.set(key, compiled);
             return compiled;
@@ -768,16 +1446,14 @@ async function processScene(
     // fall through to placeholder
   }
 
-  console.warn(
-    `Scene "${scene.title}" failed to compile after retry, using placeholder`,
-  );
+  console.warn(`Scene "${scene.title}" failed to compile after retry, using placeholder`);
   return {
-    Component: createPlaceholderScene(scene.title),
+    Component: createPlaceholderScene(scene.title, "Generation failed — click Regenerate on this scene to retry"),
     durationInFrames: scene.durationInFrames,
     code: "",
     title: scene.title,
     prompt: scene.prompt,
-    skill: scene.skill,
+    skills: scene.skills,
   };
 }
 
@@ -785,6 +1461,60 @@ export interface FullVideoProgress {
   current: number;
   total: number;
   sceneTitle: string;
+}
+
+// Skills that benefit from a more capable model — cursor demos, reconstructed UI, and
+// complex data-flow scenes require longer reasoning to produce pixel-accurate code.
+
+/**
+ * Resolve which model to use for a given skill/scene.
+ * For aha-moment scenes on flash:none — upgrade to flash:medium (adds a thinking
+ * budget). This is still flash tier (free-compatible) but with reasoning enabled,
+ * significantly improving output quality for the single most important scene.
+ * Full pro auto-upgrade is disabled — free tier has 0 pro requests and 429s fast.
+ */
+/** Build a visual continuity summary from a completed scene.
+ *  Passed to the next scene's prompt so the LLM maintains consistent visual language.
+ *  Now includes the Visual Thread exit state — the "handoff coordinate" that the next scene picks up. */
+function buildContinuityContext(prev: CompiledScene, prevPlan: ScenePlan, brand: BrandTokens): string {
+  const emotion = prevPlan.emotionalIntent ?? "";
+  const skills = prevPlan.skills.slice(0, 2).join(" + ");
+  const isAha = prevPlan.isAhaMoment ? " (AHA MOMENT)" : "";
+  const colorTemp = emotion === "RELIEF" || emotion === "CONFIDENCE"
+    ? "warm, open, bright — the pain is resolved"
+    : emotion === "FRUSTRATION" || emotion === "PAIN"
+    ? "cold, compressed, desaturated — still in problem territory"
+    : "match the brand palette established in earlier scenes";
+
+  // Visual Thread exit state — the global motif's final position/state from the previous scene
+  const va = (prevPlan as any).visualAnchor as { icon: string; colorFrom: string; colorTo: string; label: string } | undefined;
+  const visualThreadBlock = va
+    ? `\nVISUAL THREAD HANDOFF: The visual anchor "${va.icon}" (${va.label}) exited the previous scene in the following state:
+- If previous was FRUSTRATION/PAIN: anchor was in broken state (color: ${va.colorFrom}), jittering, positioned center-stage
+- If previous was RELIEF/CONFIDENCE/AHA: anchor was in resolved state (color: ${va.colorTo}), glowing, settled with GlowBloom
+This scene must open with the anchor already in that exit state — do NOT re-introduce it from scratch. The viewer tracks it across scenes as a continuous element. Then evolve it further: dim it (if heading toward a darker emotion) or let it grow/intensify (if heading toward resolution).`
+    : "";
+
+  // Global Visual Thread note — the design motif (ring/shape/color wash) must persist
+  const visualThreadNote = `\nGLOBAL VISUAL THREAD: Identify what geometric motif or persistent element was established in the previous scene. This scene MUST contain that same element, evolved to match its current emotional state. It should appear early (Act 1) and maintain its established position/size unless the story calls for explicit transformation.`;
+
+  return `Previous scene: "${prev.title}"${isAha} — skills: ${skills}${emotion ? `, emotional tone: ${emotion}` : ""}.
+Visual continuity rules for THIS scene:
+- Keep BRAND.bg (${brand.bg}) as the AbsoluteFill background — never drift from it
+- Font family must remain ${brand.font ?? "Inter"} on all text elements
+- Card border-radius, shadow elevation, and spacing must match the established visual language
+- If the previous scene showed a sidebar/app shell, maintain the same app chrome identity
+- Color temperature: ${colorTemp}${visualThreadBlock}${visualThreadNote}`;
+}
+
+function resolveModel(skill: string, userModel: string, isAhaMoment = false): string {
+  // Aha-moment scene on plain flash → add thinking budget (still free tier)
+  if (isAhaMoment && userModel.endsWith(":none") && userModel.includes("flash")) {
+    const upgraded = userModel.replace(":none", ":medium");
+    console.log(`AhaMoment model upgrade: ${userModel} → ${upgraded}`);
+    return upgraded;
+  }
+  return userModel;
 }
 
 const CONCURRENCY = 1;
@@ -810,6 +1540,7 @@ export function useFullVideoGeneration() {
   const [masterComponent, setMasterComponent] =
     useState<React.ComponentType | null>(null);
   const [masterCode, setMasterCode] = useState<string | null>(null);
+  const [masterVoiceovers, setMasterVoiceovers] = useState<Record<string, string>>({});
   const [totalDuration, setTotalDuration] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [pendingPlan, setPendingPlan] = useState<{
@@ -818,12 +1549,17 @@ export function useFullVideoGeneration() {
     imageDescriptions?: string[];
     screenFlow?: ScreenFlow;
     bgSkill?: string;
+    globalBg?: string;
+    globalVisualThread?: string;
   } | null>(null);
   const [pendingFlow, setPendingFlow] = useState<{
     images: string[];
     detectedFlow?: ScreenFlow;
   } | null>(null);
   const [isFlowDetecting, setIsFlowDetecting] = useState(false);
+  const [isPrefetchingAudio, setIsPrefetchingAudio] = useState(false);
+  const sfxUrlsRef = useRef<Record<string, string>>({});
+  const musicUrlRef = useRef<string | null>(null);
   const [regeneratingSceneIndex, setRegeneratingSceneIndex] = useState<
     number | null
   >(null);
@@ -834,6 +1570,7 @@ export function useFullVideoGeneration() {
   const pendingScreenFlowRef = useRef<ScreenFlow | undefined>(undefined);
   const pendingPromptRef = useRef<string>("");
   const pendingDescriptionsRef = useRef<string[]>([]);
+  const effectiveGlobalBgRef = useRef<string>("arcs");
 
   /** Core generation loop — runs scenes sequentially with brand threading. */
   const runGeneration = useCallback(
@@ -843,6 +1580,8 @@ export function useFullVideoGeneration() {
       brand: BrandTokens,
       images: string[] = [],
       screenFlow?: ScreenFlow,
+      globalBg: string = "arcs",
+      globalVisualThread?: string,
     ) => {
       setIsGenerating(true);
       setError(null);
@@ -866,16 +1605,38 @@ export function useFullVideoGeneration() {
           return { ...scene, prompt: scene.prompt + contextBlock };
         });
 
-        const compiledScenesArr: CompiledScene[] = new Array(enrichedScenes.length);
+        // Detect same-app navigation sequences for persistent shell optimization
+        const uiSchemasByImageIndex: Record<number, Record<string, unknown>> = {};
+        for (const scene of planScenes) {
+          if (scene.imageIndex != null && scene.uiSchema) {
+            uiSchemasByImageIndex[scene.imageIndex] = scene.uiSchema as unknown as Record<string, unknown>;
+          }
+        }
+        const scenesWithNavContext = detectNavigationSequences(enrichedScenes, uiSchemasByImageIndex);
 
-        for (let i = 0; i < enrichedScenes.length; i += CONCURRENCY) {
-          const batch = enrichedScenes.slice(i, i + CONCURRENCY);
+        const compiledScenesArr: CompiledScene[] = new Array(scenesWithNavContext.length);
+        const sceneOffsets = calculateSceneOffsets(scenesWithNavContext);
+
+        for (let i = 0; i < scenesWithNavContext.length; i += CONCURRENCY) {
+          const batch = scenesWithNavContext.slice(i, i + CONCURRENCY);
 
           setProgress({
             current: i + 1,
             total: planScenes.length,
             sceneTitle: batch[0].title,
           });
+
+          // Pass the previous scene's visual context to maintain continuity
+          // Only available from scene 2 onwards; skip for scene 0 (first scene, no predecessor)
+          const prevCompiled = i > 0 ? compiledScenesArr[i - 1] : undefined;
+          const prevPlan = i > 0 ? scenesWithNavContext[i - 1] : undefined;
+          const continuityBase = prevCompiled && prevPlan
+            ? buildContinuityContext(prevCompiled, prevPlan, brand)
+            : undefined;
+          // Prepend the global visual thread (from planner) to every scene's continuity block
+          const continuityCtx = globalVisualThread
+            ? `GLOBAL VISUAL THREAD: ${globalVisualThread}\n\n${continuityBase ?? ""}`.trim()
+            : continuityBase;
 
           const batchResults = await Promise.allSettled(
             batch.map((scene, j) =>
@@ -885,7 +1646,7 @@ export function useFullVideoGeneration() {
                   total: planScenes.length,
                   sceneTitle: title,
                 });
-              }, images),
+              }, images, globalBg, continuityCtx, sceneOffsets[i + j], sfxUrlsRef.current),
             ),
           );
 
@@ -900,7 +1661,7 @@ export function useFullVideoGeneration() {
                 code: "",
                 title: batch[j].title,
                 prompt: batch[j].prompt,
-                skill: batch[j].skill,
+                skills: batch[j].skills,
               };
             }
           }
@@ -908,17 +1669,19 @@ export function useFullVideoGeneration() {
 
         const validScenes = compiledScenesArr.filter(Boolean);
         const musicStyle = brand.musicStyle ?? brand.accentName ?? "cinematic";
-        const musicUrl = MUSIC_TRACKS[musicStyle] ?? MUSIC_TRACKS["cinematic"];
-        const master = createMasterComponent(validScenes, brand.bg, musicUrl, brand);
-        const masterCodeStr = buildMasterCode(validScenes);
-        // Total duration accounts for TRANSITION_FRAMES overlap between scenes
-        const total = validScenes.reduce((sum, s) => sum + s.durationInFrames, 0)
+        const musicUrl = musicUrlRef.current ?? MUSIC_TRACKS[musicStyle] ?? "";
+        const master = createMasterComponent(validScenes, brand.bg, musicUrl, brand, sfxUrlsRef.current);
+        const masterCodeStr = buildMasterCode(validScenes, musicUrl, sfxUrlsRef.current);
+        // Total duration accounts for HOLD_FRAMES padding and TRANSITION_FRAMES overlap between scenes
+        const total = validScenes.reduce((sum, s) => sum + s.durationInFrames + HOLD_FRAMES, 0)
           - Math.max(0, validScenes.length - 1) * TRANSITION_FRAMES;
 
         setScenes(validScenes);
         setMasterComponent(() => master);
         setMasterCode(masterCodeStr);
+        setMasterVoiceovers(buildVoiceoverMap(validScenes));
         setTotalDuration(total);
+
       } catch (err) {
         setError(
           err instanceof Error ? err.message : "An unexpected error occurred",
@@ -951,6 +1714,13 @@ export function useFullVideoGeneration() {
       setPendingPlan(null);
 
       try {
+        // Task 0.4: Include cached brand if images haven't changed
+        const imageHash = images.length > 0 ? images[0].slice(0, 100) : "";
+        const shouldUseCachedBrand = cachedBrandStore && cachedBrandStore.imageHash === imageHash;
+        if (shouldUseCachedBrand) {
+          console.log("Plan: using cached brand tokens (skipping brand re-extraction)");
+        }
+
         const planResponse = await fetch("/api/plan", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -960,6 +1730,7 @@ export function useFullVideoGeneration() {
             images: images.length ? images : undefined,
             imageUserDescriptions: imageUserDescriptions?.length ? imageUserDescriptions : undefined,
             screenFlow,
+            cachedBrand: shouldUseCachedBrand ? cachedBrandStore!.brand : undefined,
           }),
         });
 
@@ -971,8 +1742,14 @@ export function useFullVideoGeneration() {
         const data = await planResponse.json();
         const planScenes: ScenePlan[] = data.scenes ?? [];
         const brand: BrandTokens = { ...DEFAULT_BRAND, ...(data.brand ?? {}) };
+        // Task 0.4: Cache brand for future regenerations
+        if (images.length > 0 && data.brand) {
+          cachedBrandStore = { imageHash: images[0].slice(0, 100), brand };
+        }
         const imageDescriptions: string[] = data.imageDescriptions ?? [];
         const bgSkill: string | undefined = data.bgSkill;
+        const globalBgFromPlan: string = data.globalBg ?? "arcs";
+        const globalVisualThread: string | undefined = data.globalVisualThread;
 
         if (!planScenes.length) {
           throw new Error("No scenes returned from planner");
@@ -994,7 +1771,7 @@ export function useFullVideoGeneration() {
               }))
             : planScenes;
 
-        setPendingPlan({ scenes: scenesWithWaypoints, brand, imageDescriptions, screenFlow, bgSkill });
+        setPendingPlan({ scenes: scenesWithWaypoints, brand, imageDescriptions, screenFlow, bgSkill, globalBg: globalBgFromPlan, globalVisualThread });
       } catch (err) {
         setError(err instanceof Error ? err.message : "Planning failed");
       } finally {
@@ -1026,25 +1803,36 @@ export function useFullVideoGeneration() {
       setPendingFlow(null);
 
       if (images.length >= 2) {
-        // Show flow editor immediately (empty), then fill in once detection completes
-        setIsFlowDetecting(true);
-        setPendingFlow({ images });
-
-        try {
-          const res = await fetch("/api/flow-analyze", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ images, userDescriptions: imageUserDescriptions }),
-          });
-          const data = res.ok ? await res.json() : null;
-          const detectedFlow: ScreenFlow | undefined =
-            Array.isArray(data?.transitions) && data.transitions.length > 0 ? data : undefined;
-          setPendingFlow({ images, detectedFlow });
-        } catch {
-          // non-fatal — show empty flow for user to fill in
-          setPendingFlow({ images });
-        } finally {
+        // Task 0.6: Skip flow-analyze for ≤4 images — use minimal synthetic ScreenFlow
+        if (images.length <= 4) {
+          console.log(`Skipping flow-analyze for ${images.length} images — using synthetic flow`);
+          const minimalFlow: ScreenFlow = {
+            screens: images.map((_, i) => ({ index: i, description: `Screen ${i + 1}` })),
+            transitions: [],
+          };
+          setPendingFlow({ images, detectedFlow: minimalFlow });
           setIsFlowDetecting(false);
+        } else {
+          // Show flow editor immediately (empty), then fill in once detection completes
+          setIsFlowDetecting(true);
+          setPendingFlow({ images });
+
+          try {
+            const res = await fetch("/api/flow-analyze", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ images, userDescriptions: imageUserDescriptions }),
+            });
+            const data = res.ok ? await res.json() : null;
+            const detectedFlow: ScreenFlow | undefined =
+              Array.isArray(data?.transitions) && data.transitions.length > 0 ? data : undefined;
+            setPendingFlow({ images, detectedFlow });
+          } catch {
+            // non-fatal — show empty flow for user to fill in
+            setPendingFlow({ images });
+          } finally {
+            setIsFlowDetecting(false);
+          }
         }
       } else {
         // No multi-image flow needed — go straight to planning
@@ -1054,20 +1842,41 @@ export function useFullVideoGeneration() {
     [runPlan],
   );
 
-  /** Step 1b: User approves the flow → run /api/plan WITH the flow. */
+  /** Step 1b: User approves the flow → run /api/plan WITH the flow.
+   *  For video recordings, keyFrameIndices narrows the images to only the
+   *  key moments identified by flow-analyze, saving quota and improving quality.
+   */
   const approveFlow = useCallback(
     async (
       screenFlow: ScreenFlow,
       waypointsByImage: Record<number, CursorWaypoint[]>,
       descriptions?: string[],
+      keyFrameIndices?: number[],
     ) => {
       setPendingFlow(null);
       pendingScreenFlowRef.current = screenFlow;
+
+      // For video recordings: use only key frames for planning (saves API quota,
+      // gives planner focused context instead of 20 near-duplicate frames)
+      const allImages = pendingImagesRef.current;
+      const planImages = keyFrameIndices && keyFrameIndices.length >= 2
+        ? keyFrameIndices.map((i) => allImages[i]).filter(Boolean)
+        : allImages;
+
+      const allDescs = descriptions ?? pendingDescriptionsRef.current;
+      const planDescs = keyFrameIndices && keyFrameIndices.length >= 2
+        ? keyFrameIndices.map((i) => allDescs[i] ?? "")
+        : allDescs;
+
+      if (keyFrameIndices && keyFrameIndices.length >= 2) {
+        console.log(`Approving flow: using ${planImages.length} key frames from ${allImages.length} total`);
+      }
+
       await runPlan(
         pendingPromptRef.current,
         pendingModelRef.current,
-        pendingImagesRef.current,
-        descriptions ?? pendingDescriptionsRef.current,
+        planImages,
+        planDescs,
         screenFlow,
         waypointsByImage,
       );
@@ -1081,14 +1890,27 @@ export function useFullVideoGeneration() {
       editedScenes: ScenePlan[],
       screenFlow?: ScreenFlow,
       _imageDescriptions?: string[],
+      voiceId?: string,
     ) => {
       // ScenePlanEditor calls onConfirm without screenFlow — fall back to the ref
       // that was stored by approveFlow so multi-image story context is preserved.
       const effectiveFlow = screenFlow ?? pendingScreenFlowRef.current;
       pendingScreenFlowRef.current = effectiveFlow;
+      const effectiveGlobalBg = pendingPlan?.globalBg ?? "arcs";
+      const effectiveGlobalVisualThread = pendingPlan?.globalVisualThread;
+      effectiveGlobalBgRef.current = effectiveGlobalBg;
       setPendingPlan(null);
-      // Pre-fetch ElevenLabs TTS for all scenes (parallel, non-blocking on failure)
-      const scenesWithAudio = await prefetchVoiceovers(editedScenes);
+      // Pre-fetch ElevenLabs TTS + SFX + Music in parallel (non-blocking on failure)
+      setIsPrefetchingAudio(true);
+      const musicStyle = pendingPlan?.brand?.musicStyle ?? "cinematic";
+      const [scenesWithAudio, sfxUrls, musicUrl] = await Promise.all([
+        prefetchVoiceovers(editedScenes, voiceId),
+        prefetchSfx(),
+        prefetchMusic(musicStyle),
+      ]);
+      sfxUrlsRef.current = sfxUrls;
+      musicUrlRef.current = musicUrl;
+      setIsPrefetchingAudio(false);
       // Phase 3: Auto-align scene durations to match audio timing
       const { scenes: alignedScenes, adjustments } = alignSceneDurations(scenesWithAudio);
       if (adjustments.length > 0) {
@@ -1100,6 +1922,8 @@ export function useFullVideoGeneration() {
         pendingBrandRef.current,
         pendingImagesRef.current,
         effectiveFlow,
+        effectiveGlobalBg,
+        effectiveGlobalVisualThread,
       );
     },
     [runGeneration],
@@ -1121,28 +1945,95 @@ export function useFullVideoGeneration() {
           id: index,
           title: scene.title,
           prompt: scene.prompt,
-          skill: scene.skill,
+          skills: scene.skills,
           durationInFrames: scene.durationInFrames,
           imageIndex: scene.imageIndex,
           cursorWaypoints: scene.cursorWaypoints,
+          // Preserve narrative + voiceover context so regenerated code keeps VO + emotion
+          voiceoverText: (scene as any).voiceoverText,
+          voiceoverAudioUrl: scene.voiceoverAudioUrl ?? undefined,
+          wordTimings: scene.wordTimings,
+          emotionalIntent: scene.emotionalIntent,
+          isAhaMoment: scene.isAhaMoment,
+          uiSchema: (scene as any).uiSchema,
+          // Preserve scene identity context
+          visualAnchor: (scene as any).visualAnchor,
+          stageDirection: (scene as any).stageDirection,
+          transition: scene.transition,
         };
 
-        const updated = await processScene(scenePlan, model, brand, true, () => { }, images);
+        const sceneOffsets = calculateSceneOffsets(scenes);
+        const globalFrameOffset = sceneOffsets[index] ?? 0;
+
+        const updated = await processScene(scenePlan, model, brand, true, () => { }, images, effectiveGlobalBgRef.current ?? "arcs", undefined, globalFrameOffset, sfxUrlsRef.current);
 
         setScenes((prev) => {
           const next = [...prev];
           next[index] = updated;
           const brand = pendingBrandRef.current;
           const musicStyle = brand.musicStyle ?? brand.accentName ?? "cinematic";
-          const musicUrl = MUSIC_TRACKS[musicStyle] ?? MUSIC_TRACKS["cinematic"];
-          const master = createMasterComponent(next, brand.bg, musicUrl, brand);
-          const masterCodeStr = buildMasterCode(next);
+          const musicUrl = musicUrlRef.current ?? MUSIC_TRACKS[musicStyle] ?? "";
+          const master = createMasterComponent(next, brand.bg, musicUrl, brand, sfxUrlsRef.current);
+          const masterCodeStr = buildMasterCode(next, musicUrl, sfxUrlsRef.current);
           setMasterComponent(() => master);
           setMasterCode(masterCodeStr);
+          setMasterVoiceovers(buildVoiceoverMap(next));
           return next;
         });
       } catch (err) {
         console.error("Scene regeneration failed:", err);
+      } finally {
+        setRegeneratingSceneIndex(null);
+      }
+    },
+    [scenes],
+  );
+
+  /** Re-generate a single scene with an explicit edit instruction appended to its prompt. */
+  const regenerateSceneWithEdit = useCallback(
+    async (index: number, editInstruction: string, editModel?: string) => {
+      const scene = scenes[index];
+      if (!scene) return;
+
+      const model = editModel ?? pendingModelRef.current;
+      const brand = pendingBrandRef.current;
+      const images = pendingImagesRef.current;
+      setRegeneratingSceneIndex(index);
+
+      try {
+        const scenePlan: ScenePlan = {
+          id: index,
+          title: scene.title,
+          prompt: scene.prompt + `\n\n## USER EDIT REQUEST\n${editInstruction}\nApply this change while keeping all other aspects of the scene intact.`,
+          skills: scene.skills,
+          durationInFrames: scene.durationInFrames,
+          imageIndex: scene.imageIndex,
+          cursorWaypoints: scene.cursorWaypoints,
+          voiceoverText: (scene as any).voiceoverText,
+          voiceoverAudioUrl: scene.voiceoverAudioUrl ?? undefined,
+          wordTimings: scene.wordTimings,
+          emotionalIntent: scene.emotionalIntent,
+          isAhaMoment: scene.isAhaMoment,
+          uiSchema: (scene as any).uiSchema,
+          visualAnchor: (scene as any).visualAnchor,
+          stageDirection: (scene as any).stageDirection,
+          transition: scene.transition,
+        };
+
+        const updated = await processScene(scenePlan, model, brand, true, () => { }, images, effectiveGlobalBgRef.current ?? "arcs", undefined, 0, sfxUrlsRef.current);
+
+        setScenes((prev) => {
+          const next = [...prev];
+          next[index] = updated;
+          const b = pendingBrandRef.current;
+          const musicStyle = b.musicStyle ?? b.accentName ?? "cinematic";
+          const musicUrl = musicUrlRef.current ?? MUSIC_TRACKS[musicStyle] ?? "";
+          setMasterComponent(() => createMasterComponent(next, b.bg, musicUrl, b, sfxUrlsRef.current));
+          setMasterCode(buildMasterCode(next, musicUrl, sfxUrlsRef.current));
+          return next;
+        });
+      } catch (err) {
+        console.error("Scene edit failed:", err);
       } finally {
         setRegeneratingSceneIndex(null);
       }
@@ -1156,7 +2047,18 @@ export function useFullVideoGeneration() {
       if (index === null) return;
       setScenes((prev) => {
         if (!prev[index]) return prev;
-        const result = compileCode(newCode, images, pendingBrandRef.current as Record<string, string>);
+        const result = compileCode(
+          newCode,
+          images,
+          pendingBrandRef.current as Record<string, string>,
+          prev[index].voiceoverAudioUrl ?? null,
+          prev[index].wordTimings ?? [],
+          (prev[index] as any).uiSchema ?? null,
+          effectiveGlobalBgRef.current ?? "arcs",
+          0,
+          (prev[index] as any).morphImport?.rect ?? null,
+          sfxUrlsRef.current,
+        );
         if (result.error || !result.Component) return prev;
         const next = [...prev];
         next[index] = {
@@ -1166,9 +2068,9 @@ export function useFullVideoGeneration() {
         };
         const brand = pendingBrandRef.current;
         const musicStyle = brand.musicStyle ?? brand.accentName ?? "cinematic";
-        const musicUrl = MUSIC_TRACKS[musicStyle] ?? MUSIC_TRACKS["cinematic"];
-        const master = createMasterComponent(next, brand.bg, musicUrl, brand);
-        const masterCodeStr = buildMasterCode(next);
+        const musicUrl = musicUrlRef.current ?? MUSIC_TRACKS[musicStyle] ?? "";
+        const master = createMasterComponent(next, brand.bg, musicUrl, brand, sfxUrlsRef.current);
+        const masterCodeStr = buildMasterCode(next, musicUrl, sfxUrlsRef.current);
         setMasterComponent(() => master);
         setMasterCode(masterCodeStr);
         return next;
@@ -1194,14 +2096,17 @@ export function useFullVideoGeneration() {
     approveFlow,
     confirmPlan,
     regenerateScene,
+    regenerateSceneWithEdit,
     editSceneCode,
     isPlanning,
     isFlowDetecting,
+    isPrefetchingAudio,
     isGenerating,
     progress,
     scenes,
     masterComponent,
     masterCode,
+    masterVoiceovers,
     totalDuration,
     error,
     pendingPlan,

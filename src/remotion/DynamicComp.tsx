@@ -11,11 +11,14 @@ interface DynamicCompProps {
   code: string;
   images?: string[];
   brand?: Record<string, string>;
+  uiSchema?: Record<string, unknown> | null;
+  globalBg?: string;
+  voiceovers?: Record<string, string>;
   [key: string]: unknown;
 }
 
 export const DynamicComp: React.FC = () => {
-  const { code, images = [], brand = {} } = getInputProps() as DynamicCompProps;
+  const { code, images = [], brand = {}, uiSchema = null, globalBg = "arcs", voiceovers = {} } = getInputProps() as DynamicCompProps;
 
   const [handle] = useState(() => delayRender("Compiling code..."));
   const [Component, setComponent] = useState<React.ComponentType | null>(null);
@@ -23,7 +26,7 @@ export const DynamicComp: React.FC = () => {
 
   useEffect(() => {
     try {
-      const result = compileCode(code, images, brand);
+      const result = compileCode(code, images, brand, null, [], uiSchema ?? null, globalBg, 0, null, {}, voiceovers);
 
       if (result.error) {
         setError(result.error);

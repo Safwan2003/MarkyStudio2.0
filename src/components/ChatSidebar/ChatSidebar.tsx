@@ -27,6 +27,7 @@ interface ChatSidebarProps {
   onGenerate: (promptText: string, model: ModelId, images?: string[]) => void;
   isLoading: boolean;
   initialModel?: ModelId;
+  hasExistingScenes?: boolean;
 }
 
 export const ChatSidebar = forwardRef<ChatSidebarRef, ChatSidebarProps>(
@@ -41,6 +42,7 @@ export const ChatSidebar = forwardRef<ChatSidebarRef, ChatSidebarProps>(
       onGenerate,
       isLoading,
       initialModel,
+      hasExistingScenes = false,
     },
     ref,
   ) {
@@ -129,6 +131,7 @@ export const ChatSidebar = forwardRef<ChatSidebarRef, ChatSidebarProps>(
               onModelChange={setModel}
               isLoading={isLoading}
               onGenerate={handleGenerate}
+              hasExistingScenes={hasExistingScenes}
             />
           </div>
         )}

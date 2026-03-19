@@ -9,8 +9,8 @@ const inter = Inter({
 });
 
 export const metadata: Metadata = {
-  title: "MarkyStudio ",
-  description: "Prompt to Motion Graphics - Remotion",
+  title: "MarkyStudio — AI SaaS Video Generator",
+  description: "Generate agency-quality SaaS product demo videos in minutes. Powered by MarkyTech.",
 };
 
 export const viewport: Viewport = {

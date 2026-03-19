@@ -1,4 +1,4 @@
-import puppeteer from "puppeteer";
+import puppeteer, { type Page } from "puppeteer";
 
 interface Interaction {
   type: "click" | "scroll" | "hover" | "wait";
@@ -27,12 +27,25 @@ interface CaptureRequest {
 }
 
 interface CaptureResponse {
-  /** Base64-encoded PNG screenshots */
+  /** Base64-encoded JPEG screenshots */
   frameImages: string[];
 }
 
 const TIMEOUT_MS = 20_000;
 const MAX_SCREENSHOTS = 10;
+const SCREENSHOT_QUALITY = 82; // JPEG quality — same as extractVideoFrames
+
+/**
+ * Wait for navigation OR network idle after a click.
+ * Races networkidle0 (full page load) against an 800ms fallback (in-page update).
+ * The .catch(() => null) ensures a timeout never throws.
+ */
+async function waitAfterClick(page: Page): Promise<void> {
+  await Promise.race([
+    page.waitForNavigation({ waitUntil: "networkidle0", timeout: 5000 }).catch(() => null),
+    new Promise<void>((r) => setTimeout(r, 800)),
+  ]);
+}
 
 export async function POST(req: Request) {
   let body: CaptureRequest;
@@ -73,9 +86,18 @@ export async function POST(req: Request) {
 
     const frameImages: string[] = [];
 
+    // Helper: take a JPEG screenshot and push as data URL
+    const capture = async () => {
+      const shot = await page.screenshot({
+        encoding: "base64",
+        type: "jpeg",
+        quality: SCREENSHOT_QUALITY,
+      });
+      frameImages.push(`data:image/jpeg;base64,${shot}`);
+    };
+
     // Capture initial state
-    const initialShot = await page.screenshot({ encoding: "base64", type: "png" });
-    frameImages.push(`data:image/png;base64,${initialShot}`);
+    await capture();
 
     // Execute interactions
     for (const action of interactions) {
@@ -89,8 +111,8 @@ export async function POST(req: Request) {
           } else if (action.x !== undefined && action.y !== undefined) {
             await page.mouse.click(action.x, action.y);
           }
-          // Brief wait for UI to settle after click
-          await page.waitForNetworkIdle({ timeout: 3000, idleTime: 300 }).catch(() => null);
+          // Wait for navigation (full page load) or in-page update to settle
+          await waitAfterClick(page);
           break;
 
         case "hover":
@@ -100,6 +122,8 @@ export async function POST(req: Request) {
           } else if (action.x !== undefined && action.y !== undefined) {
             await page.mouse.move(action.x, action.y);
           }
+          // Brief settle for hover animations
+          await new Promise((r) => setTimeout(r, 300));
           break;
 
         case "scroll":
@@ -113,17 +137,14 @@ export async function POST(req: Request) {
       }
 
       if (captureAfterEach) {
-        const shot = await page.screenshot({ encoding: "base64", type: "png" });
-        frameImages.push(`data:image/png;base64,${shot}`);
+        await capture();
       }
     }
 
     // Always capture final state
     if (!captureAfterEach || interactions.length === 0) {
-      const finalShot = await page.screenshot({ encoding: "base64", type: "png" });
-      // Avoid duplicate if no interactions ran
       if (interactions.length > 0) {
-        frameImages.push(`data:image/png;base64,${finalShot}`);
+        await capture();
       }
     }
 

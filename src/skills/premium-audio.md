@@ -1,108 +1,105 @@
 # Premium Audio Skill
 
-Use Remotion's `<Audio>` component to add background music, per-frame sound effects,
+Use Remotion's `<Audio>` component to add background music, voiceover narration,
 and volume automation. `Audio` is already in scope — do NOT import it.
 
 ---
 
-## 1. Background Music (looping)
+## 1. Background Music (royalty-free CDN, no API key needed)
+
+Pick a genre based on `BRAND.style` and the scene mood:
 
 ```tsx
-// Audio is already in scope — no import needed
+// ── MUSIC TRACKS — select by BRAND.musicStyle (injected from plan route) ─────
+const FREE_MUSIC_TRACKS = {
+  "energetic":     "https://cdn.pixabay.com/audio/2024/08/20/audio_6c53572dfa.mp3",
+  "cinematic":     "https://cdn.pixabay.com/audio/2024/02/15/audio_b99e82e13f.mp3",
+  "corporate":     "https://cdn.pixabay.com/audio/2023/11/13/audio_3c2e86c693.mp3",
+  "calm":          "https://cdn.pixabay.com/audio/2023/09/07/audio_168f2040eb.mp3",
+  "playful":       "https://cdn.pixabay.com/audio/2024/04/09/audio_9c659e933b.mp3",
+} as const;
+
+// SELECTION RULES — use BRAND.musicStyle first:
+// BRAND.musicStyle === "energetic" → "energetic" (fast-paced UI, high energy recording)
+// BRAND.musicStyle === "calm"      → "calm" (minimal UI, deliberate pace)
+// BRAND.musicStyle === "cinematic" → "cinematic" (dark SaaS, dramatic brand moments)
+// BRAND.musicStyle === "corporate" → "corporate" (light B2B, enterprise)
+// BRAND.musicStyle === "playful"   → "playful" (consumer SaaS, collaboration tools)
+// Fallback if musicStyle not set: dark → "cinematic", light → "corporate"
+const trackKey = (BRAND.musicStyle ?? (BRAND.style === "dark" ? "cinematic" : "corporate")) as keyof typeof FREE_MUSIC_TRACKS;
+const SELECTED_TRACK = FREE_MUSIC_TRACKS[trackKey] ?? FREE_MUSIC_TRACKS["cinematic"];
+
 export const MyAnimation = () => {
   const { durationInFrames, fps } = useVideoConfig();
-
-  return (
-    <AbsoluteFill>
-      {/* Background music — loops for entire video */}
-      <Audio
-        src="https://example.com/bg-music.mp3"
-        volume={0.4}                         // 0–1 master volume
-        startFrom={0}
-        endAt={durationInFrames}
-        loop                                 // loop if track shorter than video
-      />
-
-      {/* … visual scene content … */}
-    </AbsoluteFill>
-  );
-};
-```
-
-**Key props:**
-- `volume` — scalar 0–1 or per-frame function `(f) => number`
-- `loop` — repeat track when it ends
-- `startFrom` / `endAt` — trim the audio clip (in frames)
-- `playbackRate` — speed factor (1 = normal)
-
----
-
-## 2. Volume Automation (fade-in / fade-out)
-
-```tsx
-export const MyAnimation = () => {
   const frame = useCurrentFrame();
-  const { durationInFrames, fps } = useVideoConfig();
 
-  const FADE_IN  = fps * 1;   // 1-second fade in
-  const FADE_OUT = fps * 1.5; // 1.5-second fade out
+  const FADE_IN  = fps * 1.5;
+  const FADE_OUT = fps * 2;
 
   const musicVolume = interpolate(
     frame,
     [0, FADE_IN, durationInFrames - FADE_OUT, durationInFrames],
-    [0,  0.5,    0.5,                          0],
+    [0,  0.35,   0.35,                         0],
     { extrapolateLeft: "clamp", extrapolateRight: "clamp" },
   );
 
   return (
     <AbsoluteFill>
       <Audio
-        src="https://example.com/ambient.mp3"
+        src={SELECTED_TRACK}
         volume={musicVolume}
         loop
       />
+      {/* … visual scene content … */}
     </AbsoluteFill>
   );
 };
 ```
 
-The `volume` prop accepts a **per-frame callback** `(frame: number) => number` —
-Remotion calls it for each rendered frame, enabling smooth automation curves.
-
 ---
 
-## 3. Per-Frame SFX at Specific Frames
+## 2. Voiceover + Background Music (when VOICEOVER_AUDIO_URL is in scope)
 
-Trigger a sound effect at an exact frame by computing volume as 0 except at the
-target window:
+When a scene has pre-generated ElevenLabs narration, `VOICEOVER_AUDIO_URL` is
+injected into scope as a constant. Use it like this:
 
 ```tsx
 export const MyAnimation = () => {
+  const { durationInFrames, fps } = useVideoConfig();
   const frame = useCurrentFrame();
-  const { fps } = useVideoConfig();
 
-  // Play a click sound at frame 30 (0.5 s into a 60-fps video)
-  const clickFrame = fps * 0.5;
-  const SFX_DURATION = 12; // frames the SFX plays for
+  const FADE_IN  = fps * 0.5;
+  const FADE_OUT = fps * 1;
 
-  const sfxVolume = (f: number) =>
-    f >= clickFrame && f < clickFrame + SFX_DURATION ? 1 : 0;
+  // Voiceover — prominent volume
+  const voVolume = interpolate(
+    frame,
+    [0, FADE_IN, durationInFrames - FADE_OUT, durationInFrames],
+    [0,  0.9,    0.9,                          0],
+    { extrapolateLeft: "clamp", extrapolateRight: "clamp" },
+  );
 
-  // Play a chime at 2 s
-  const chimeFrame = fps * 2;
-  const chimeVolume = (f: number) =>
-    f >= chimeFrame && f < chimeFrame + SFX_DURATION ? 0.8 : 0;
+  // Background music — ducked under voiceover
+  const bgVolume = interpolate(
+    frame,
+    [0, FADE_IN, durationInFrames - FADE_OUT, durationInFrames],
+    [0,  0.15,   0.15,                          0],
+    { extrapolateLeft: "clamp", extrapolateRight: "clamp" },
+  );
 
   return (
     <AbsoluteFill>
-      {/* Background music */}
-      <Audio src="https://example.com/bg.mp3" volume={0.35} loop />
-
-      {/* Click SFX */}
-      <Audio src="https://example.com/click.mp3" volume={sfxVolume} />
-
-      {/* Chime SFX */}
-      <Audio src="https://example.com/chime.mp3" volume={chimeVolume} />
+      {/* Voiceover narration */}
+      {VOICEOVER_AUDIO_URL && (
+        <Audio src={VOICEOVER_AUDIO_URL} volume={voVolume} />
+      )}
+      {/* Ducked background music — SELECTED_TRACK chosen from BRAND.musicStyle */}
+      <Audio
+        src={SELECTED_TRACK}
+        volume={bgVolume}
+        loop
+      />
+      {/* … visual scene content … */}
     </AbsoluteFill>
   );
 };
@@ -110,42 +107,46 @@ export const MyAnimation = () => {
 
 ---
 
-## 4. Audio Inside a `<Sequence>`
-
-When `<Audio>` lives inside a `<Sequence>`, frame 0 of the Audio aligns with the
-Sequence's `from` prop — no manual offset needed:
+## 3. Volume Automation (fade-in / fade-out)
 
 ```tsx
-export const MyAnimation = () => {
-  const { fps } = useVideoConfig();
+const musicVolume = interpolate(
+  frame,
+  [0, FADE_IN, durationInFrames - FADE_OUT, durationInFrames],
+  [0,  0.4,    0.4,                          0],
+  { extrapolateLeft: "clamp", extrapolateRight: "clamp" },
+);
+<Audio src="..." volume={musicVolume} loop />
+```
 
-  return (
-    <AbsoluteFill>
-      {/* Intro scene (0–90 frames) */}
-      <Sequence from={0} durationInFrames={90}>
-        <Audio src="https://example.com/intro-sting.mp3" volume={0.9} />
-        {/* … intro visuals … */}
-      </Sequence>
+The `volume` prop accepts a **per-frame callback** `(frame: number) => number`.
 
-      {/* Main scene (90–270 frames) */}
-      <Sequence from={90} durationInFrames={180}>
-        <Audio src="https://example.com/main-loop.mp3" volume={0.4} loop />
-        {/* … main visuals … */}
-      </Sequence>
-    </AbsoluteFill>
-  );
-};
+---
+
+## 4. Per-Frame SFX at Specific Frames
+
+```tsx
+// Click SFX at frame 45
+const sfxVolume = (f: number) => f >= 45 && f < 57 ? 1 : 0;
+<Audio src="https://cdn.pixabay.com/audio/2022/03/10/audio_c5816a04bc.mp3" volume={sfxVolume} />
 ```
 
 ---
 
-## 5. Rules & Best Practices
+## 5. Audio Inside a `<Sequence>`
+
+When `<Audio>` lives inside a `<Sequence>`, frame 0 aligns with the Sequence's `from` prop — no manual offset needed.
+
+---
+
+## 6. Rules & Best Practices
 
 | Rule | Detail |
 |------|--------|
-| **Do NOT import Audio** | It is already in scope — declaring it again causes a `ReferenceError` |
-| **Use public URLs or data URIs** | Audio src must be a reachable URL at render time |
-| **Keep bg music ≤ 0.45 volume** | Prevents music from overpowering narration |
-| **Avoid per-frame logs inside volume fn** | The callback fires every frame — no console.log |
-| **Loop short tracks** | Add `loop` whenever the music track may be shorter than the scene |
-| **Fade out before scene end** | Interpolate volume to 0 in the last 30–45 frames for clean cuts |
+| **Do NOT import Audio** | Already in scope — re-importing causes `ReferenceError` |
+| **`FREE_MUSIC_TRACKS` must be declared** | Copy the const from Section 1 into your component file |
+| **Check `VOICEOVER_AUDIO_URL` before use** | It may be `null` if TTS was not generated — always guard with `{VOICEOVER_AUDIO_URL && <Audio ... />}` |
+| **Duck bg music under voiceover** | BG music ≤ 0.2 vol when voiceover is present |
+| **Fade out before scene end** | Interpolate to 0 in last 30–45 frames for clean cuts |
+| **Loop short tracks** | Always add `loop` to background music |
+| **No per-frame logs in volume fn** | Fires every frame — never `console.log` inside |

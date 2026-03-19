@@ -1,225 +1,253 @@
 ---
-title: Premium SaaS Product Showcase
+title: Premium SaaS Showcase
 impact: HIGH
-impactDescription: creates polished browser-framed dashboard demos with smooth entrance animations and mesh backgrounds
-tags: saas, showcase, browser, dashboard, product-demo, mockup, slide-up
+impactDescription: The workhorse scene for displaying UI features, strictly enforcing the 40/60 split layout and isometric product presentation.
+tags: showcase, split-layout, isometric, ui-demo, 40-60, browser, dashboard
+qualityBar: The scene uses a strict 40/60 split. The left 40% holds the 3-Layer Text Stack. The right 60% holds the product UI, tilted in 3D space, anchored by a floating glass feature badge, with a slow cinematic zoom wrapping the entire scene.
 ---
 
-## Premium Product Showcase Pattern
+## Scene Purpose
 
-The gold standard for SaaS product demos: a **browser window** (OS chrome + URL bar + traffic-light dots) that slides up from below and gently floats. Inside: a realistic dashboard or feature UI.
+The core "Show, Don't Tell" scene. Introduces a specific feature by pairing highly readable contextual text with a dynamic, physicalized view of the product interface.
 
-### Core Entrance Animation
+## Visual Blueprint
 
-```tsx
-const frame = useCurrentFrame();
-const { fps, width, height } = useVideoConfig();
-
-// Slide-up entrance with spring
-const slideUp = spring({ frame, fps, config: { damping: 20, stiffness: 80 } });
-const BROWSER_Y = interpolate(slideUp, [0, 1], [120, 0]);
-
-// Subtle float loop after entrance
-const FLOAT_AMPLITUDE = 8; // px
-const floatY = Math.sin(frame * 0.04) * FLOAT_AMPLITUDE;
-```
-
-Apply combined transform:
-
-```tsx
-style={{ transform: `translateY(${BROWSER_Y + floatY}px)` }}
+```text
+[      Cinematic Camera Wrapper (1.0 -> 1.05 Zoom)              ]
+[                                                               ]
+[   (Left 40%: The 3-Layer Stack)    (Right 60%: Isometric UI)  ]
+[                                                               ]
+[   S E A M L E S S   S Y N C             [Floating Badge]      ]
+[                                               \               ]
+[   Connect all your                           +-----------+    ]
+[   favorite tools.                           / Screenshot/     ]
+[                                            /   or UI   /      ]
+[   No coding required. Just                /   Replica /       ]
+[   click, authenticate, and go.           +-----------+        ]
+[                                                               ]
 ```
 
 ---
 
-## Browser Window Chrome
-
-Replicate a macOS-style browser window for instant product credibility:
+## Core Animation Pattern
 
 ```tsx
+import { useCurrentFrame, useVideoConfig, spring, interpolate, AbsoluteFill } from "remotion";
+
+export const SaasShowcaseScene = ({ BRAND, textStack, uiImage, badgeText }) => {
+  const frame = useCurrentFrame();
+  const { fps } = useVideoConfig();
+
+  // 1. TIMING
+  const TEXT_START  = 5;
+  const UI_START    = 15;
+  const BADGE_START = 28;
+
+  // 2. TEXT SPRINGS
+  const labelSpring    = spring({ frame: frame - TEXT_START,        fps, config: { damping: 16, stiffness: 140 } });
+  const headlineSpring = spring({ frame: frame - (TEXT_START + 5),  fps, config: { damping: 18, stiffness: 120 } });
+  const sublineSpring  = spring({ frame: frame - (TEXT_START + 12), fps, config: { damping: 18, stiffness: 120 } });
+
+  // 3. UI + BADGE SPRINGS
+  const uiSpring    = spring({ frame: frame - UI_START,    fps, config: { damping: 18, stiffness: 110 } });
+  const badgeSpring = spring({ frame: frame - BADGE_START, fps, config: { damping: 14, stiffness: 150 } }); // Snappy pop
+
+  // 4. SCENE SETTLE (zoom out for finality if this is a CTA-adjacent scene)
+  const cameraZoom = interpolate(frame, [0, 150], [1.0, 1.05], { extrapolateRight: "clamp" });
+
+  return (
+    <AbsoluteFill style={{ backgroundColor: BRAND.bg || "#0f172a", overflow: "hidden" }}>
+      <div style={{ position: "absolute", inset: 0, transform: `scale(${cameraZoom})`, transformOrigin: "center center", display: "flex", flexDirection: "row" }}>
+
+        {/* LEFT 40%: TEXT STACK */}
+        <div style={{
+          width: "40%",
+          paddingLeft: "8%",
+          display: "flex",
+          flexDirection: "column",
+          justifyContent: "center",
+          zIndex: 20,
+        }}>
+          {/* Section Label */}
+          <div style={{ overflow: "hidden", marginBottom: 16 }}>
+            <div style={{
+              fontSize: 13, fontWeight: 700,
+              letterSpacing: "0.22em", textTransform: "uppercase",
+              color: BRAND.primary || "#6366f1",
+              fontFamily: "Inter, sans-serif",
+              transform: `translateY(${interpolate(labelSpring, [0, 1], [100, 0])}%)`,
+            }}>
+              {textStack.label}
+            </div>
+          </div>
+          {/* Hero Headline */}
+          <div style={{ overflow: "hidden", paddingBottom: 4, marginBottom: 24 }}>
+            <div style={{
+              fontSize: 80, fontWeight: 900, lineHeight: 1.05,
+              letterSpacing: "-0.04em", color: "#ffffff",
+              fontFamily: "Inter, sans-serif",
+              transform: `translateY(${interpolate(headlineSpring, [0, 1], [100, 0])}%)`,
+            }}>
+              {textStack.headline}
+            </div>
+          </div>
+          {/* Sub-line */}
+          <div style={{ overflow: "hidden" }}>
+            <div style={{
+              fontSize: 24, fontWeight: 400, lineHeight: 1.5,
+              color: "#94a3b8", maxWidth: "90%",
+              fontFamily: "Inter, sans-serif",
+              transform: `translateY(${interpolate(sublineSpring, [0, 1], [100, 0])}%)`,
+              opacity: sublineSpring,
+            }}>
+              {textStack.subline}
+            </div>
+          </div>
+        </div>
+
+        {/* RIGHT 60%: ISOMETRIC UI */}
+        <div style={{
+          width: "60%",
+          position: "relative",
+          perspective: 1200,
+          display: "flex",
+          alignItems: "center",
+          paddingLeft: "5%",
+        }}>
+
+          {/* Main UI Container — intentionally bleeds off right edge */}
+          <div style={{
+            width: "120%", // Bleeds off the right edge to imply expansive software
+            height: "70%",
+            transformStyle: "preserve-3d",
+            transform: `
+              rotateY(-12deg) rotateX(4deg)
+              translateY(${interpolate(uiSpring, [0, 1], [100, 0])}px)
+              scale(${interpolate(uiSpring, [0, 1], [0.9, 1])})
+            `,
+            opacity: uiSpring,
+            borderRadius: 24,
+            boxShadow: "-30px 40px 80px rgba(0,0,0,0.4)", // Shadow leans left (matches rotation)
+            border: "1px solid rgba(255,255,255,0.1)",
+            overflow: "hidden",
+          }}>
+            {uiImage ? (
+              <img src={uiImage} style={{ width: "100%", height: "100%", objectFit: "cover", objectPosition: "left top" }} />
+            ) : (
+              // Fallback reconstructed UI shell
+              <div style={{ width: "100%", height: "100%", background: "#1e293b", display: "flex" }}>
+                {/* Sidebar */}
+                <div style={{ width: 240, height: "100%", background: "#0f172a", borderRight: "1px solid rgba(255,255,255,0.08)" }} />
+                {/* Content */}
+                <div style={{ flex: 1, padding: 32 }}>
+                  <div style={{ height: 24, width: 200, background: "rgba(255,255,255,0.1)", borderRadius: 6, marginBottom: 16 }} />
+                  <div style={{ height: 16, width: 320, background: "rgba(255,255,255,0.06)", borderRadius: 4 }} />
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Floating Feature Badge — bridges text and UI columns */}
+          {badgeText && (
+            <div style={{
+              position: "absolute",
+              left: "-5%", // Hangs off the left edge of the UI panel
+              top: "30%",
+              transform: `translateZ(50px) scale(${badgeSpring}) translateY(${interpolate(Math.sin(frame * 0.05), [-1, 1], [-8, 8])}px)`,
+              background: "rgba(255, 255, 255, 0.1)",
+              backdropFilter: "blur(24px) saturate(150%)",
+              WebkitBackdropFilter: "blur(24px) saturate(150%)",
+              borderTop: "1px solid rgba(255,255,255,0.3)",
+              borderLeft: "1px solid rgba(255,255,255,0.15)",
+              borderRight: "1px solid rgba(255,255,255,0.06)",
+              borderBottom: "1px solid rgba(255,255,255,0.04)",
+              padding: "16px 24px",
+              borderRadius: 16,
+              boxShadow: "0 20px 40px rgba(0,0,0,0.3)",
+              display: "flex", alignItems: "center", gap: 12,
+              zIndex: 30,
+            }}>
+              <div style={{ width: 12, height: 12, borderRadius: "50%", background: BRAND.primary || "#6366f1" }} />
+              <span style={{ color: "#fff", fontSize: 20, fontWeight: 600, fontFamily: "Inter, sans-serif" }}>{badgeText}</span>
+            </div>
+          )}
+        </div>
+
+      </div>
+    </AbsoluteFill>
+  );
+};
+```
+
+---
+
+## Spring / Timing Reference
+
+| Element | Start Frame | Config | Description |
+|---|---|---|---|
+| Section label | `5` | `stiff:140, damp:16` | MaskedReveal translateY |
+| Headline | `10` | `stiff:120, damp:18` | MaskedReveal translateY |
+| Subline | `17` | `stiff:120, damp:18` | MaskedReveal translateY |
+| UI panel | `15` | `stiff:110, damp:18` | Rise + scale entrance |
+| Feature badge | `28` | `stiff:150, damp:14` | Snappy pop after UI settles |
+
+---
+
+## Browser Frame Variant (Classic Mockup)
+
+For showing web apps in a realistic browser window — use when the product is web-first and the URL/nav chrome adds credibility:
+
+```tsx
+{/* Browser frame — traffic lights + URL bar */}
 <div style={{
-  width: "85%",
-  height: "85%",
-  background: "white",
-  borderRadius: "12px 12px 0 0",
-  boxShadow: "0 40px 80px rgba(0,0,0,0.25)",
-  border: "1px solid rgba(0,0,0,0.08)",
-  display: "flex",
-  flexDirection: "column",
+  width: "90%", maxWidth: 1100,
+  borderRadius: 16,
   overflow: "hidden",
+  boxShadow: "0 40px 80px rgba(0,0,0,0.5)",
+  border: "1px solid rgba(255,255,255,0.12)",
   transform: `translateY(${BROWSER_Y + floatY}px)`,
 }}>
-  {/* Title bar / toolbar */}
-  <div style={{
-    height: 40,
-    background: "#f1f5f9",
-    borderBottom: "1px solid #e2e8f0",
-    display: "flex",
-    alignItems: "center",
-    padding: "0 16px",
-    gap: 8,
-    flexShrink: 0,
-  }}>
-    {/* Traffic light dots */}
-    <div style={{ display: "flex", gap: 6 }}>
-      <div style={{ width: 12, height: 12, borderRadius: "50%", background: "#ef4444" }} />
-      <div style={{ width: 12, height: 12, borderRadius: "50%", background: "#eab308" }} />
-      <div style={{ width: 12, height: 12, borderRadius: "50%", background: "#22c55e" }} />
-    </div>
-    {/* URL bar */}
-    <div style={{
-      flex: 1, maxWidth: 400,
-      height: 24, marginLeft: 16,
-      background: "white",
-      border: "1px solid #e2e8f0",
-      borderRadius: 6,
-      display: "flex",
-      alignItems: "center",
-      paddingLeft: 10,
-      fontSize: 11,
-      color: "#64748b",
-      fontFamily: "Inter, sans-serif",
-    }}>
-      app.yourproduct.com/dashboard
-    </div>
-  </div>
-
-  {/* Dashboard content area */}
-  <div style={{ flex: 1, background: "#f8fafc", overflow: "hidden", position: "relative" }}>
-    {ATTACHED_IMAGES[0] ? (
-      <img
-        src={ATTACHED_IMAGES[0]}
-        style={{ width: "100%", height: "100%", objectFit: "cover", objectPosition: "top" }}
-      />
-    ) : (
-      /* Fallback: generic dashboard skeleton */
-      <div style={{ padding: 16, display: "flex", gap: 12 }}>
-        <div style={{ flex: 1, background: "#e2e8f0", borderRadius: 8, height: 120 }} />
-        <div style={{ flex: 2, display: "flex", flexDirection: "column", gap: 12 }}>
-          <div style={{ background: "#e2e8f0", borderRadius: 8, height: 40 }} />
-          <div style={{ background: "#f1f5f9", borderRadius: 8, flex: 1 }} />
-        </div>
-      </div>
-    )}
-  </div>
-</div>
-```
-
----
-
-## Dashboard Stat Card Pattern
-
-For metrics and KPI cards:
-
-```tsx
-{/* Stat Card */}
-<div style={{
-  background: "white",
-  borderRadius: 16,
-  padding: "24px 28px",
-  boxShadow: "0 1px 3px rgba(0,0,0,0.06), 0 4px 12px rgba(0,0,0,0.04)",
-  border: "1px solid #f1f5f9",
-  display: "flex",
-  flexDirection: "column",
-  gap: 8,
-}}>
-  <span style={{ fontSize: 12, fontWeight: 600, color: "#94a3b8", textTransform: "uppercase", letterSpacing: "0.08em" }}>
-    Active Users
-  </span>
-  <div style={{ fontSize: 48, fontWeight: 800, color: "#0f172a", lineHeight: 1 }}>
-    2,847
-  </div>
-  <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-    <span style={{ fontSize: 12, color: "#22c55e", fontWeight: 600 }}>↑ 12.5%</span>
-    <span style={{ fontSize: 11, color: "#94a3b8" }}>vs last month</span>
-  </div>
-</div>
-```
-
----
-
-## Sidebar + Main Content Layout
-
-Canonical SaaS dashboard two-column layout:
-
-```tsx
-<div style={{ display: "flex", height: "100%", fontFamily: "Inter, sans-serif" }}>
-  {/* Sidebar */}
-  <div style={{
-    width: 64, background: "#0f172a",
-    display: "flex", flexDirection: "column",
-    alignItems: "center", padding: "20px 0", gap: 20,
-  }}>
-    {/* Logo */}
-    <div style={{ width: 32, height: 32, borderRadius: 8, background: "#6366f1" }} />
-    {/* Nav icons */}
-    {["#6366f1", "#334155", "#334155", "#334155"].map((bg, i) => (
-      <div key={i} style={{ width: 32, height: 32, borderRadius: 8, background: bg }} />
+  {/* Chrome */}
+  <div style={{ height: 44, background: "#1e293b", display: "flex", alignItems: "center", padding: "0 16px", gap: 8 }}>
+    {/* Traffic lights */}
+    {["#ef4444", "#f59e0b", "#22c55e"].map((c, i) => (
+      <div key={i} style={{ width: 12, height: 12, borderRadius: "50%", backgroundColor: c }} />
     ))}
+    {/* URL bar */}
+    <div style={{ flex: 1, marginLeft: 12, height: 26, background: "rgba(255,255,255,0.08)", borderRadius: 6, display: "flex", alignItems: "center", paddingLeft: 12 }}>
+      <span style={{ fontSize: 13, color: "rgba(255,255,255,0.5)", fontFamily: "Inter, sans-serif" }}>
+        app.{BRAND.name?.toLowerCase() || "product"}.com/dashboard
+      </span>
+    </div>
   </div>
-
-  {/* Main area */}
-  <div style={{ flex: 1, padding: 24, display: "flex", flexDirection: "column", gap: 16 }}>
-    {/* Top row: stat cards */}
-    <div style={{ display: "flex", gap: 16 }}>
-      {["2,847", "94%", "$48K"].map((val, i) => (
-        <div key={i} style={{
-          flex: 1, background: "white", borderRadius: 12, padding: 20,
-          boxShadow: "0 1px 3px rgba(0,0,0,0.06)",
-          border: "1px solid #f1f5f9",
-        }}>
-          <div style={{ fontSize: 28, fontWeight: 800, color: "#0f172a" }}>{val}</div>
-          <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 4 }}>Metric label</div>
-        </div>
-      ))}
-    </div>
-
-    {/* Table rows */}
-    <div style={{ flex: 1, background: "white", borderRadius: 12, padding: 20, border: "1px solid #f1f5f9" }}>
-      {[1, 2, 3, 4, 5].map(i => (
-        <div key={i} style={{
-          display: "flex", alignItems: "center", gap: 12,
-          padding: "10px 0",
-          borderBottom: i < 5 ? "1px solid #f8fafc" : "none",
-        }}>
-          <div style={{ width: 32, height: 32, borderRadius: "50%", background: "#e2e8f0" }} />
-          <div style={{ flex: 1, height: 10, background: "#f1f5f9", borderRadius: 4 }} />
-          <div style={{ width: 60, height: 10, background: "#e2e8f0", borderRadius: 4 }} />
-        </div>
-      ))}
-    </div>
+  {/* Content */}
+  <div style={{ height: 480, background: "#0f172a" }}>
+    {uiImage && <img src={uiImage} style={{ width: "100%", height: "100%", objectFit: "cover", objectPosition: "top" }} />}
   </div>
 </div>
 ```
 
+**Use browser frame when:** the user's product is web-based and the URL/nav adds realism.
+**Use isometric directly when:** showing mobile, multi-platform, or abstract product capabilities.
+
 ---
 
-## Background: Mesh Orb Pattern
+## Anti-Patterns
 
-Premium light background with subtle orbs:
+- **NEVER center the UI and put text below.** It creates dead space and kills readability. Always use the 40/60 split.
+- **NEVER present the UI completely flat** unless doing a direct cursor interaction. Use `perspective:1200` + `rotateY(-12deg)` to create an isometric volume.
+- **NEVER fit the UI perfectly inside the 60% column.** Set width to `120%` so it bleeds off the right edge — this implies a larger, expansive software system.
+- **NEVER skip the floating badge.** The badge physically bridges the gap between the text column and UI panel — without it, the two halves feel disconnected.
+- **NEVER use `rotateY` without a matching shadow direction.** If `rotateY(-12deg)` (leaning left), the shadow must fall bottom-left: `boxShadow: "-30px 40px 80px rgba(0,0,0,0.4)"`.
 
-```tsx
-{/* Light background base */}
-<AbsoluteFill style={{ background: "#f8fafc" }} />
+---
 
-{/* Orbs */}
-<div style={{
-  position: "absolute", top: "-30%", left: "10%",
-  width: 900, height: 900, borderRadius: "50%",
-  background: "radial-gradient(circle, rgba(99,102,241,0.12) 0%, transparent 70%)",
-  filter: "blur(40px)",
-}} />
-<div style={{
-  position: "absolute", bottom: "-20%", right: "-10%",
-  width: 800, height: 800, borderRadius: "50%",
-  background: "radial-gradient(circle, rgba(59,130,246,0.10) 0%, transparent 70%)",
-  filter: "blur(40px)",
-}} />
+## Quality Checklist
 
-{/* Dot grid overlay */}
-<div style={{
-  position: "absolute", inset: 0, opacity: 0.3,
-  backgroundImage: "radial-gradient(#94a3b8 1px, transparent 1px)",
-  backgroundSize: "30px 30px",
-}} />
-```
+- [ ] Scene uses 40/60 split (not centered layout)
+- [ ] Text follows 3-Layer Stack: label → headline (MaskedReveal) → subline
+- [ ] UI container has `perspective:1200` + `rotateY(-12deg) rotateX(4deg)`
+- [ ] UI shadow direction matches rotation (left tilt = shadow falls bottom-left)
+- [ ] UI width is `120%` to bleed off right edge
+- [ ] Floating badge uses High-Depth glass formula with directional borders
+- [ ] Scene wrapped in slow cinematic zoom (`1.0→1.05` over 150f)

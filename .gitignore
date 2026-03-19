@@ -37,3 +37,8 @@ next-env.d.ts
 out/
 .env
 build
+# Reference videos (large binary files)
+*.mp4
+
+# Local render output
+.renders/

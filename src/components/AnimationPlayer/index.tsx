@@ -48,6 +48,8 @@ interface AnimationPlayerProps {
   renderImages?: string[];
   /** Brand tokens to inject into Lambda render scope as BRAND */
   renderBrand?: Record<string, string>;
+  /** Per-scene voiceover URLs keyed by scene index — passed as VOICEOVER_URLS scope variable */
+  renderVoiceovers?: Record<string, string>;
   onRuntimeError?: (error: string) => void;
   onFrameChange?: (frame: number) => void;
   /** When this value changes (and is non-null), the player seeks to this frame */
@@ -58,6 +60,8 @@ interface AnimationPlayerProps {
   isQualityChecking?: boolean;
   qualityMode?: boolean;
   onQualityModeChange?: (enabled: boolean) => void;
+  voiceId?: string;
+  onVoiceIdChange?: (id: string) => void;
 }
 
 export const AnimationPlayer: React.FC<AnimationPlayerProps> = ({
@@ -75,6 +79,7 @@ export const AnimationPlayer: React.FC<AnimationPlayerProps> = ({
   masterCode,
   renderImages = [],
   renderBrand = {},
+  renderVoiceovers = {},
   onRuntimeError,
   onFrameChange,
   seekFrame,
@@ -84,6 +89,8 @@ export const AnimationPlayer: React.FC<AnimationPlayerProps> = ({
   isQualityChecking = false,
   qualityMode = false,
   onQualityModeChange,
+  voiceId,
+  onVoiceIdChange,
 }) => {
   const playerRef = useRef<PlayerRef>(null);
   const overlayRef = useRef<HTMLDivElement>(null);
@@ -195,7 +202,7 @@ export const AnimationPlayer: React.FC<AnimationPlayerProps> = ({
             ref={playerRef}
             key={Component.toString()}
             component={Component}
-            durationInFrames={durationInFrames}
+            durationInFrames={Math.max(1, durationInFrames || 1)}
             fps={fps}
             compositionHeight={1080}
             compositionWidth={1920}
@@ -252,6 +259,7 @@ export const AnimationPlayer: React.FC<AnimationPlayerProps> = ({
             fps={fps}
             images={renderImages}
             brand={renderBrand}
+            voiceovers={renderVoiceovers}
           />
           <div className="flex items-center gap-2">
             {onToggleCursorMode && (
@@ -276,6 +284,8 @@ export const AnimationPlayer: React.FC<AnimationPlayerProps> = ({
               onFpsChange={onFpsChange}
               qualityMode={qualityMode}
               onQualityModeChange={onQualityModeChange}
+              voiceId={voiceId}
+              onVoiceIdChange={onVoiceIdChange}
             />
           </div>
         </div>

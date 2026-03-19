@@ -23,6 +23,9 @@ interface SceneTimelineProps {
   /** Parallel array — true if that scene failed to compile */
   failedScenes?: boolean[];
   onEditCursor?: (index: number) => void;
+  auditScores?: (number | null | undefined)[];
+  /** Parallel array — true for the aha moment scene */
+  ahaMomentScenes?: boolean[];
 }
 
 export function SceneTimeline({
@@ -36,6 +39,8 @@ export function SceneTimeline({
   hasCursorSteps,
   failedScenes,
   onEditCursor,
+  auditScores,
+  ahaMomentScenes,
 }: SceneTimelineProps) {
   if (!scenes.length || !totalDuration) return null;
 
@@ -66,6 +71,26 @@ export function SceneTimeline({
               {/* Failed badge */}
               {isFailed && (
                 <AlertTriangle className="w-3 h-3 text-red-200 shrink-0 mr-0.5" />
+              )}
+
+              {/* Audit quality dot */}
+              {!isFailed && auditScores?.[i] != null && (
+                <span
+                  title={`Quality score: ${auditScores[i]}/100`}
+                  className={`absolute left-1 top-1 w-1.5 h-1.5 rounded-full ${
+                    (auditScores[i] ?? 0) >= 80 ? "bg-green-400" :
+                    (auditScores[i] ?? 0) >= 65 ? "bg-yellow-400" :
+                    "bg-red-400"
+                  }`}
+                />
+              )}
+
+              {/* Aha moment star */}
+              {!isFailed && ahaMomentScenes?.[i] && (
+                <span
+                  title="Aha moment scene"
+                  className="absolute right-1 top-0.5 text-[9px] text-amber-300"
+                >✦</span>
               )}
 
               {/* Scene title */}

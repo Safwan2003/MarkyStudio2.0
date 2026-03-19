@@ -305,3 +305,32 @@ const sheenPos = interpolate(frame, [0, SHEEN_DURATION], [-100, 200]);
   pointerEvents: "none",
 }} />
 ```
+
+## Works Best with Reconstructed UI
+
+Camera zoom is dramatically more effective with vector-reconstructed UI than with screenshot overlays:
+
+- **Screenshot overlay**: Zoom past 1.5× causes pixelation and blur
+- **Reconstructed UI**: Vectors stay perfectly crisp at any zoom level — zoom 2× or 3× with no quality loss
+
+**Recommended pairing**: Use `premium-reconstructed-ui` for the showcase scene, then apply camera zoom to push into the specific UI element being demonstrated:
+
+```tsx
+// Zoom into a specific reconstructed component (e.g., a metric card)
+const zoomProgress = spring({ frame: frame - 60, fps, config: { damping: 200, stiffness: 80 } });
+const scale = interpolate(zoomProgress, [0, 1], [1.0, 1.8]);
+const targetX = 0.65 * width;  // metric card position
+const targetY = 0.3 * height;
+
+const translateX = (width / 2 - targetX) * (scale - 1);
+const translateY = (height / 2 - targetY) * (scale - 1);
+
+// Apply to the reconstructed UI container
+<div style={{
+  position: "absolute", inset: 0,
+  transform: `scale(${scale}) translate(${translateX / scale}px, ${translateY / scale}px)`,
+  transformOrigin: "center center",
+}}>
+  <ReconstructedAppShell uiSchema={UI_SCHEMA} brand={BRAND} />
+</div>
+```

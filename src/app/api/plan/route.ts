@@ -9,7 +9,9 @@ function buildInteractionScriptFromTransition(
   transition: ScreenTransition,
   durationInFrames: number,
 ): InteractionEvent[] {
-  const REVEAL_END = 60; // first ~2s for scene reveal
+  // Scale timings proportionally to scene duration so interactions fit any scene length
+  const ACTION_START = Math.round(durationInFrames * 0.33);        // 33% = first action
+  const SECOND_ACTION = Math.round(durationInFrames * 0.57);       // 57% = second action
   const actionText = transition.action ?? "";
 
   // Precision data extracted by Vision AI
@@ -28,7 +30,7 @@ function buildInteractionScriptFromTransition(
     case "submit":
       return [
         {
-          frame: REVEAL_END,
+          frame: ACTION_START,
           action: "type",
           target: targetLabel,
           value: typeValue ?? "search query",
@@ -38,7 +40,7 @@ function buildInteractionScriptFromTransition(
           sfx: "type" as const,
         },
         {
-          frame: REVEAL_END + 60,
+          frame: SECOND_ACTION,
           action: "click",
           target: `Submit`,
           elementType: "button" as const,
@@ -49,7 +51,7 @@ function buildInteractionScriptFromTransition(
     case "navigate":
       return [
         {
-          frame: REVEAL_END + 15,
+          frame: ACTION_START,
           action: "click",
           target: targetLabel,
           elementType,
@@ -61,7 +63,7 @@ function buildInteractionScriptFromTransition(
     case "hover":
       return [
         {
-          frame: REVEAL_END + 15,
+          frame: ACTION_START,
           action: "hover",
           target: targetLabel,
           elementType,
@@ -112,7 +114,8 @@ async function withRetry<T>(
 // Brand extraction from screenshots (vision)
 // ---------------------------------------------------------------------------
 
-const BRAND_EXTRACTION_PROMPT = `You are a precision brand color extractor for a video generation system.
+// @ts-ignore -- kept for reference, not used in combined prompt path
+const _BRAND_EXTRACTION_PROMPT = `You are a precision brand color extractor for a video generation system.
 
 Analyze this product screenshot and extract the EXACT brand design system. Study carefully:
 - Primary CTA buttons, submit buttons, nav active states → primary color
@@ -135,17 +138,173 @@ Rules:
 // Narrative planning
 // ---------------------------------------------------------------------------
 
-const NARRATIVE_PLANNING_PROMPT = `You are a video narrative planner for SaaS product explainer videos.
+const NARRATIVE_PLANNING_PROMPT = `You are a Creative Director at a premium SaaS video agency (WhatAStory / Sandwich Video tier).
+Your job is not just to plan scenes — it is to craft a STORY that makes viewers feel something, then act.
 
-Given a product description, plan a complete 5–6 scene video narrative tailored to the product.
+Given a product description, write a complete video narrative plan.
+
+## THE AGENCY NARRATIVE FORMULA
+
+Premium SaaS explainer videos follow PAS (Problem → Agitation → Solution) not a feature walkthrough.
+The formula that converts: **Broken Reality → Empathy → Relief → Proof → Action**
+
+### Step 1 — Identify the BROKEN REALITY (write this first, before choosing scenes)
+What is the viewer's life like RIGHT NOW without this product?
+Be specific and visceral. NOT: "Teams struggle with collaboration."
+YES: "Every Monday, Sarah manually copies numbers from 4 spreadsheets into a report nobody reads until Thursday."
+The hook scene must show THIS broken reality — before the product is ever named.
+
+### Step 2 — Identify the AHA MOMENT
+What is the ONE thing that makes a prospect say "I need this immediately"?
+This is not a feature — it is a transformation. "From 4 hours of manual work to one click."
+One scene must be designed entirely around delivering this aha moment. Mark it as isAhaMoment: true.
+
+### Step 3 — Write OUTCOME-DRIVEN voiceover (never feature-driven)
+❌ WRONG: "Our platform has automated reporting with custom templates."
+✅ RIGHT: "Your report is ready before you finish your coffee — formatted, branded, and already in your inbox."
+Every voiceover sentence must describe what the VIEWER gains, not what the product does.
+
+### Step 4 — Assign an EMOTIONAL INTENT to every scene
+Each scene must make the viewer feel ONE specific emotion:
+- Hook: FRUSTRATION or RECOGNITION ("that's exactly my problem")
+- Problem: PAIN or COST (quantify the loss — time, money, stress)
+- Solution reveal: RELIEF ("oh thank god")
+- Feature demos: CONFIDENCE ("I can see exactly how this works")
+- Social proof: TRUST ("others have already solved this")
+- CTA: URGENCY + EXCITEMENT ("I want this now")
+
+## EMOTIONAL VISUAL GRAMMAR (mandatory — every emotion has a visual style)
+
+Emotion is not just in the words. It lives in animation speed, color temperature, and motion character.
+The LLM coder reads these rules from the scene prompt — write them explicitly.
+
+| emotionalIntent | Spring style | Animation character | Color temperature | Pacing |
+|---|---|---|---|---|
+| FRUSTRATION | damping:150, stiffness:200 | Jittery, staggered, uneven entrances | Desaturated, cold, low contrast | Fast, overlapping, chaotic |
+| PAIN | damping:300, stiffness:60 | Slow, heavy settle — elements drag in | Dark, low saturation, muted grays | Slow, weighted, oppressive |
+| RECOGNITION | damping:200, stiffness:120 | Clean reveal, one element at a time | Normal brand colors | Medium, deliberate |
+| RELIEF | damping:400, stiffness:80 | Smooth, almost floating settle | Warm, bright, high contrast | Slow, spacious, breathing room |
+| CONFIDENCE | damping:200, stiffness:140 | Synchronized, crisp, all elements arrive together | Vivid, full brand saturation | Medium-fast, precise |
+| TRUST | damping:300, stiffness:100 | Gentle, warm, no rush | Soft, warm tones | Slow, unhurried |
+| URGENCY | damping:120, stiffness:180 | Fast entrance, pulsing CTA, strong overshoots | High contrast, bright accent | Fast, pressing |
+| EXCITEMENT | damping:8, stiffness:200 | Elastic pop, bounce, overshoots | Vivid, energetic | Fast, playful |
+
+**In every scene prompt, explicitly state the animation style from this table.**
+Example: "RELIEF scene — use smooth floating settle (damping:400), warm palette, generous breathing room. Elements drift in gently from below."
+Example: "FRUSTRATION scene — use jittery staggered entrances (damping:150), desaturated colors, uneven timing. Elements don't all arrive at once."
+
+## SCENE ACT STRUCTURE (every scene has 3 internal acts)
+
+A scene is not a flat block of frames. It has setup → tension → resolve internally.
+For every scene, allocate frames across 3 acts and state this in the scene prompt:
+
+| Scene duration | Setup | Tension | Resolve |
+|---|---|---|---|
+| 150 frames (5s) | 0–30f: establish | 30–105f: main content | 105–150f: hold + breathe |
+| 180 frames (6s) | 0–40f: establish | 40–130f: main content | 130–180f: hold + breathe |
+| 210 frames (7s) | 0–50f: establish | 50–155f: main content | 155–210f: hold + breathe |
+| 240 frames (8s) | 0–60f: establish | 60–180f: main content | 180–240f: hold + breathe |
+| 270 frames (9s) | 0–70f: establish | 70–200f: main content | 200–270f: hold + breathe |
+
+**Act definitions:**
+- **Setup (0–20%)**: Background reveals, single anchor element enters, viewer orients. One thing. No information yet.
+- **Tension (20–75%)**: The main content unfolds. Multiple elements enter sequentially. The narrative builds. Cursor moves, data animates, story progresses.
+- **Resolve (75–100%)**: Animation stops. Final state holds. Viewer absorbs. No new elements. Spring physics settle. Hold 20–30 frames minimum before transition.
+
+**State the act timing in every scene prompt:**
+"Act 1 (0–50f): Background + headline enters. Act 2 (50–155f): [specific visual content]. Act 3 (155–210f): Final state holds. No new elements."
+
+**Problem scenes:** Tension act shows the chaos, resolve act shows the cost (the number, the damage).
+**Solution/AHA scenes:** Tension act shows the transformation happening, resolve act holds on the transformed state — this is the emotional payoff. Hold extra long (30–40f minimum).
+**CTA scenes:** Tension act is the kinetic build-up, resolve act is the static final frame with CTA button pulsing.
+
+## STAGE DIRECTIONS (mandatory in every scene prompt)
+
+Each scene prompt must end with a "Stage Direction" sentence that describes the physical camera and emotional arc:
+- "Camera holds wide on the chaos; elements drift in with jitter. The emotional arc shifts from anxiety to recognition."
+- "Camera slowly pushes into the dashboard. Each metric card enters crisply, one by one — confidence building."
+- "Elements snap into a clean grid alignment. The scene breathes. Viewer absorbs the outcome."
+Include this as the LAST line of each scene's prompt string. This is the emotional stage direction for the animator.
+
+## VISUAL ANCHORS (use when the story has a clear before/after transformation)
+
+Identify 1–2 "Visual Anchors" — elements that appear in broken form in problem scenes and transform to resolved form in the solution/AHA scene:
+- Example: a "⚠️" icon (red) in the chaos scene becomes "✅" (green) in the AHA moment scene
+- Example: a clock icon (red glow) in the problem scene becomes a calendar check (green) in the solution reveal
+When you identify a visual anchor:
+1. In the problem scene prompt, describe the element in its broken/chaotic state
+2. In the AHA/solution scene prompt, explicitly reference that same element in its resolved state: "The same [icon] from the chaos scene now appears in [color], transformed"
+This creates visual continuity that makes the narrative arc emotionally resonant.
+
+## GLOBAL VISUAL THREAD (mandatory — this is what gives WhatAStory the "one-take" feel)
+
+Beyond visual anchors (which are narrative callbacks), a **Global Visual Thread** is a persistent *design motif* that appears in EVERY scene and makes the whole video feel like one continuous piece rather than a sequence of separate scenes.
+
+**Before writing any scene, identify the Global Visual Thread:**
+Pick ONE of:
+- A **geometric shape** (e.g. a circle/ring that starts as chaos rings in scene 1, becomes a brand badge in scene 3, becomes a success checkmark ring in the AHA scene, and becomes the CTA button border in the final scene)
+- A **color wash** (e.g. the BRAND.primary color starts as a dim glow in the problem scene, intensifies progressively until it fills the screen at the AHA moment, then settles as the dominant color in the CTA)
+- A **motion motif** (e.g. a horizontal sweep/wipe that transitions every scene — the same direction, the same speed, but different content each time)
+- A **floating element** (e.g. a single brand icon that exists in every scene — chaotic/red in problem scenes, calm/brand-colored in solution scenes)
+
+**In each scene prompt, include:**
+"VISUAL THREAD: [describe how the global motif appears in this scene — what state it is in, where it sits, how it has transformed from the previous scene]"
+
+**Rules:**
+1. The thread must EVOLVE — in problem scenes it is distorted/broken/cold; in solution scenes it is resolved/warm/complete
+2. The thread must be mentioned in every single scene prompt
+3. The thread must be the same element — not just a thematic reference but a literal visual element that re-appears
+4. Size/color/state transforms; position stays approximately the same OR follows a clear directional journey
+
+Example: "This video's global thread is a RING. Scene 1: fragmented arcs (chaotic, gray). Scene 2: full red circle (warning). Scene 3: transforms to BRAND.primary ring (the product is the fix). Scene 4: ring pulses as success indicator. Scene 5 CTA: ring becomes the CTA button border."
+
+## VOICEOVER WORD COUNT FORMULA
+Each scene's voiceover must fit within its duration.
+Formula: words = (durationInFrames / 30) × 2.5
+- 90 frames (3s) → ~7 words max (section title cards — no voiceover needed, use "")
+- 150 frames (5s) → ~12 words
+- 240 frames (8s) → ~20 words
+- 300 frames (10s) → ~25 words
+- 420 frames (14s) → ~35 words
+NEVER write voiceover longer than (durationInFrames / 30) × 2.8 words.
+If a scene has no voiceover (section titles, purely visual transitions), set voiceoverText: "".
 
 ## SCENE ARC
 Design scenes based on the product — vary the arc, do not always use the same 6 scenes.
-Common patterns:
-- Intro → Problem → Showcase → Features → Social Proof → CTA  (standard SaaS)
-- Intro → Before/After → Product Demo → Data/Stats → CTA       (data-driven product)
-- Intro → Problem → Solution Network → Device Demo → CTA       (platform/network product)
-- Hook → Scroll Demo → Feature List → Social Proof → CTA       (website/landing page product)
+Total video: 75–120 seconds. Each scene 3–15 seconds.
+
+Proven patterns:
+- **Hook → Problem → Solution reveal → Feature demo ×2–3 → Proof → CTA**  (standard B2B SaaS — most versatile)
+- **Hook → Broken reality ×2 → Aha moment → Feature walkthrough → Stats → CTA**  (data/analytics tools)
+- **Hook → Before chaos → After clarity → Product demo → Social proof → CTA**  (collaboration/workflow tools)
+- **Hook → Cost of problem → How it works → Feature showcase → Testimonial → CTA**  (enterprise/security tools)
+
+## THE CHAOS SCENE (Scene 1 — non-negotiable formula)
+
+The first scene is THE CHAOS SCENE. It must show the viewer's broken reality BEFORE the product exists.
+
+**MANDATORY rules for Scene 1:**
+1. ZERO product branding — no logo, no product name, no "Introducing X"
+2. Must show a SPECIFIC human in a SPECIFIC painful situation (not a generic abstract)
+3. Must include at least ONE concrete data point showing the cost: "3.5 hours every week", "73% of leads lost", "$12k in missed invoices"
+4. emotionalIntent MUST be "FRUSTRATION" or "RECOGNITION"
+5. The viewer must think "that's exactly my problem" — not "that sounds like a problem"
+6. Duration: 120–180 frames (4–6 seconds) — short enough to feel urgent, long enough to land
+
+**Chaos Scene visual formula:**
+- Use floating/scattered elements (scattered avatars, tool icons, disconnected nodes) to show fragmentation
+- Use desaturated/cold color temperature — the brand colors appear AFTER the solution
+- Text on screen must be THE PAIN POINT, not a feature name
+- Best skills: premium-team-orbit (scattered chaos), premium-floating-path-nodes (disconnected systems), premium-kinetic-text (bold pain statement), premium-gradient-hero (single brutal truth)
+
+**VIOLATION**: A Scene 1 that shows a clean product UI, a logo, or says "Introducing [Product]" is an automatic fail. The product name comes in scene 2 or 3 at the earliest.
+
+**VIOLATION (problem scenes 1–2)**: A problem scene where the ONLY content is text — bullet points, a headline, or a paragraph — is a quality fail. Problem scenes MUST use a visual metaphor that SHOWS the chaos, not just names it:
+- Disconnected/scattered elements (use premium-team-orbit or premium-floating-path-nodes)
+- A storm of notifications/feedback (use premium-feedback-storm)
+- Fragmented data/icons floating disconnected (use premium-floating-path-nodes)
+- A bold single painful stat that fills the frame (use premium-stat-counter or premium-gradient-hero)
+The viewer's pain must be FELT visually before it is named in text.
 
 ## LIGHT-THEME DEFAULTS (B2B SaaS)
 
@@ -207,6 +366,7 @@ Features / data:
 - premium-icon-concept-scene — oversized white icon circle on soft radial color glow + dark badge + dotted SVG path with triangle arrowhead; use for abstract problem/concept scenes
 - premium-confetti-celebration — confetti particles raining over full-screen product screenshot; optional dark header bar with animated text; use for "deal closed / launch day" showcase scenes
 - premium-real-photo-device — real environment photo (ATTACHED_IMAGES[0]) fills background; centered portrait tablet/phone mockup (white frame, realistic shadow) with product UI inside (ATTACHED_IMAGES[1]); ultra-realistic product-in-context social proof scene
+- premium-live-action-composite — real environment photo background (VideoPlateMockup) with floating UI metric cards, notification toasts, or annotation panels TiltWrapper-composited over the plate; the Viable/WhatAStory live-action look; use when ATTACHED_IMAGES[0] is an environment/office/context photo and UI elements should float IN that world rather than on a device mockup
 - premium-icon-bubble-row  — large colored filled circles with white SVG icons + label text; sequential spring pop-in; optional partial arc accent around one bubble; pastel gradient bg; use for feature categories, tech stack, or use-case showcase scenes
 - premium-integration-wall — solid brand-color background filled with white rounded-square app logo cards (scattered or explosion pattern); shows "we connect to all your data sources"; distinct from network-intro (no paths, no avatars)
 - premium-feedback-storm   — person photo centered (ATTACHED_IMAGES[0]); floating white feedback cards with urgency pills orbiting at two z-depths (front/back of person); shows raw customer voice for feedback/CX products
@@ -232,16 +392,16 @@ Punchy statements / social proof:
 - premium-gradient-hero    — full-screen bold headline with brand gradient text; zero chrome; single message; use for chapter title cards, bold problem statements, CTA openers
 - premium-logo-wall        — "trusted by" logo grid (3×2 or 4×2) or infinite marquee; company logos in glass cards; use for social-proof intro scenes or between problem and showcase
 - premium-stat-counter     — single dramatic metric (94%, $2.4M, 3×) that counts up at massive scale; radial glow behind number; use for data-proof scenes or after problem statement
+- premium-metric-flyout    — hero metric (280px) + 3–4 satellite stat pills flying in from screen edges + SVG arc ring + radial glow; for data-proof scenes with supporting evidence
 - premium-feature-grid     — 2×2 or 3×2 animated card grid with icon+title+description per cell; denser than feature-list; use for "here's what you get" or capabilities overview scene
-
-Sound (add to any scene that benefits from audio atmosphere):
-- premium-audio            — background music loop, per-frame SFX, volume fade automation
-
-## SKILL SELECTION RULES
-- Intro scene: prefer premium-kinetic-text or premium-saas-hook or premium-char-split (rotate between them across videos)
+- premium-before-after     — horizontal wipe split; left panel dark/desaturated "before" state, right panel vibrant product "after"; animated glowing divider sweeps left→right; problem-to-solution bridge scene
+- premium-testimonial-card — full-screen editorial pullquote; word-by-word animated text reveal + avatar circle + stars; strongest single-testimonial social proof scene
+- premium-phone-notification — iOS-style frosted-glass push notification slides from top; p## SKILL SELECTION RULES
+- Intro scene for light B2B brands: use premium-saas-hook with FloatingShapes + ContentCard wrapping the logo — this is the WhatAStory hook pattern (logo in white card, geometric shapes floating around it on grid bg). For dark brands: prefer premium-icon-arc-reveal (the Desklog template) for the most polished, professional hook.
 - Problem scene — choose based on WHAT the problem actually is:
   - Scattered team / communication chaos → premium-team-orbit
   - Technical failures / system slowness → premium-neon-dark
+  - Chaos / disconnected systems / data silos → premium-floating-path-nodes (the Desklog template, highly polished)
   - Left-vs-right literal old-vs-new comparison → premium-split-screen (use sparingly)
   - Bold single pain-point statement → premium-kinetic-text or premium-char-split
   - Data-backed cost-of-problem → premium-data-reveal
@@ -273,7 +433,7 @@ Sound (add to any scene that benefits from audio atmosphere):
 - Light-themed B2B / CRM / customer-success products: use premium-multi-corner-gradient as the background for intro, network-intro, and CTA scenes instead of dot-matrix
 - Customer lifecycle / pipeline / journey scenes: prefer premium-customer-journey for showcase scenes in CRM/CS products; shows the product's value through stage progression
 - Abstract concept scenes (cost of problem, how AI works, data sync): use premium-icon-concept-scene for problem or solution scenes when showing a concept visually is more powerful than showing the UI
-- Dark-themed products (tech, analytics, vertical SaaS): use premium-icon-arc-reveal for the hook/intro scene and premium-floating-path-nodes for the problem scene
+- Dark-themed products (tech, analytics, vertical SaaS): STRICTLY use premium-icon-arc-reveal for the hook/intro scene (Scene 1), premium-floating-path-nodes for the problem scene (Scene 3 or 4), and premium-confetti-celebration for the solution or CTA scene to match the polished Desklog templates!
 - Showcase scenes with a "win" moment (deal closed, launch, goal hit): add premium-confetti-celebration — works over any product screenshot
 - When user provides both an environment photo AND a product screenshot: use premium-real-photo-device for the social proof scene — strongest trust-builder available
 - Feedback/VoC/NPS/survey products: use premium-feedback-storm for social proof — floating feedback cards with urgency pills around a person photo; if no person photo available use the no-person card-only variant
@@ -283,13 +443,55 @@ Sound (add to any scene that benefits from audio atmosphere):
 - premium-social-proof now has an avatar-widget-orbit variant: central photo + orbiting mini data cards (donut, star-rating, quote, bar chart); prefer this for CRM/analytics products that show per-customer insights
 - premium-audio can optionally appear in any single scene for background music (e.g. intro, CTA) — do not use it in more than one scene
 - premium-gradient-hero for any scene that is purely a bold statement — replaces generic kinetic-text when the message is 1 sentence and no UI is shown
+- premium-chaos-to-ui-resolve: use for the AHA moment scene when the product solves a team/data/workflow chaos problem — floating chaotic elements (avatars, nodes, pills) spring-snap into product UI positions at triggerFrame; strongest problem→solution emotional transition available; requires useEntropyWithAttractor (already in compiler scope)
 - premium-logo-wall: always include in social proof scene when product has recognizable enterprise customers; place before or after testimonial content
 - premium-stat-counter: use for any scene anchored on a single data point (problem size, time saved, ROI); do not use premium-data-reveal when only 1 stat is needed
 - premium-feature-grid: use instead of premium-feature-list when 4+ features need to be shown — the grid format reads faster and fills the frame better
 - premium-interactive-ui: use for showcase/solution scene when NO screenshot is available and the scene needs a task creation, form filling, or CRUD interaction — builds the full SaaS app shell from scratch; pair with premium-cursor-engine for the cursor walkthrough
+- Before/after contrast scenes (old painful workflow vs. new product state): use premium-before-after — dramatic wipe reveal with glowing divider; ideal for problem-to-solution bridge scenes; stronger than premium-split-screen for narrative contrast
+- Data-proof / ROI scenes with multiple supporting statistics: use premium-metric-flyout — hero metric at 280px scale + 3–4 satellite stat pills flying in from edges; use when you have 1 hero number AND 3-4 supporting stats; use premium-stat-counter instead for single-stat scenes
+- Testimonial / customer quote social proof: use premium-testimonial-card for scenes anchored on a single strong customer quote — word-by-word reveal + attribution + stars; stronger than premium-social-proof when 1 powerful quote is more compelling than many cards
+- Mobile-first / notification-heavy products (HR, CRM, mobile SaaS, consumer apps, helpdesk): add premium-phone-notification as an overlay on a showcase scene OR as a dedicated 3s beat scene; especially effective for products with real-time events (new lead, approval, mention, deal closed); do NOT add to more than 1 scene
 - Light B2B products: use premium-light-arc-bg as the background layer for all scenes (instead of dark gradient); it provides subtle arc texture that matches agency-quality light-theme videos
 - Integration/multi-feature platform overview: use premium-feature-bundle-cards for a 3-card scene showing key product capabilities
 - Standard SaaS dashboards (sidebar + metric cards + charts): use premium-reconstructed-ui for the showcase scene instead of premium-chameleon-ui — reconstructed UI animates every element independently and stays crisp at any zoom
+- Showcase scenes 210+ frames: ALWAYS add click-zoom effect (1.0→1.06 punch-in) on at least one key metric/area — in cursor-engine prompts add "Use click-zoom punch-in effect on each click"; for reconstructed-ui scenes use CinematicCamera or premium-camera-zoom to slowly push in toward the primary metric card Showcase scenes 210+ frames: ALWAYS add click-zoom effect (1.0→1.06 punch-in) on at least one key metric/area — in cursor-engine prompts add \"Use click-zoom punch-in effect on each click\"; for reconstructed-ui scenes use CinematicCamera or premium-camera-zoom to slowly push in toward the primary metric card
+
+## SKILL STACKING RULES (MANDATORY — every scene outputs skills: [] array)
+
+Each scene's skills field is an ordered array of 1–3 skill names:
+- skills[0] = PRIMARY: the main visual pattern (REQUIRED)
+- skills[1] = BACKGROUND: atmosphere/texture behind the primary content (optional but strongly recommended for scenes that lack a built-in background)
+- skills[2] = POLISH: micro-pattern on top (optional, use sparingly)
+
+Recommended stacks by scene type:
+- Dark hook/intro: ["premium-icon-arc-reveal"] — self-contained, no bg needed
+- Dark problem/chaos: ["premium-floating-path-nodes"] — self-contained
+- Dark kinetic text: ["premium-kinetic-text", "premium-neon-dark"]
+- Dark metrics/data: ["premium-metric-flyout", "premium-ambient-environment"]
+- Dark CTA: ["premium-cta-scene"] — self-contained
+- Light hook: ["premium-saas-hook"] — self-contained
+- Light features/use-cases: ["premium-icon-bubble-row", "premium-light-textured-bg"]
+- Light cursor demo: ["premium-chameleon-ui", "premium-dot-matrix-bg"]
+- Light reconstructed UI: ["premium-reconstructed-ui"] — self-contained
+- Light social proof: ["premium-social-proof", "premium-multi-corner-gradient"]
+- Light stat/metric: ["premium-stat-counter", "premium-light-textured-bg"]
+- Light kinetic text: ["premium-kinetic-text", "premium-dot-matrix-bg"]
+- Logo wall: ["premium-logo-wall", "premium-light-textured-bg"]
+- Testimonial: ["premium-testimonial-card", "premium-multi-corner-gradient"]
+- Customer journey: ["premium-customer-journey", "premium-multi-corner-gradient"]
+- Network intro: ["premium-network-intro", "premium-multi-corner-gradient"]
+- Feature grid: ["premium-feature-grid", "premium-light-textured-bg"]
+- Integration wall: ["premium-integration-wall"] — self-contained
+- Before/after: ["premium-before-after"] — self-contained
+- Section title: ["premium-section-title"] — self-contained
+
+Stacking constraints:
+- NEVER combine two background skills (dot-matrix-bg + light-textured-bg is invalid)
+- NEVER combine two cursor/interaction skills
+- Self-contained skills (icon-arc-reveal, floating-path-nodes, cta-scene, before-after, integration-wall) already have rich backgrounds — do NOT add a background skill to these
+- premium-ambient-environment as skills[1] adds orbiting glow orbs + particles — best for metrics/proof/data scenes that need visual depth
+- premium-narrative-overlay as skills[2] (POLISH slot) can be added to ANY scene that needs explicit on-screen narrative text guidance — especially problem, solution/aha, and social proof scenes. Add it when the scene's narrative text layer is critical: ["premium-floating-path-nodes", "premium-narrative-overlay"] or ["premium-stat-counter", "premium-light-textured-bg", "premium-narrative-overlay"]
 
 ## TRANSITION ASSIGNMENT (required for every scene)
 
@@ -298,27 +500,145 @@ For each scene, assign a transition value that describes how the viewer moves IN
 - "slide" — scene slides in from the right; use for forward-momentum sequences (features → CTA, intro → problem)
 - "scale" — incoming scene scales up from center; cinematic for reveal moments (problem → solution)
 - "flash" — white flash burst between scenes; use for high-energy transitions after cursor clicks or CTA moments
+- "cameraPan" — scene enters from off-screen right, previous scene exits off-screen left; creates the WhatAStory "infinite canvas" feeling — the camera pans laterally across a larger world. Use for the most important narrative transitions. Includes cinematic horizontal motion blur.
+- "zoomThrough" — the most cinematic transition: the camera appears to travel THROUGH a UI element. The previous scene's camera zooms INTO a specific coordinate (set exitAnchor: {x, y} on that scene), and THIS scene receives the camera emerging from it at scale 10, then zooms out to reveal context. Creates true spatial continuity — the viewer feels like they traveled into the product. Set BOTH: transition "zoomThrough" on the receiving scene AND exitAnchor on the sending scene (e.g. exitAnchor: { "x": 0.6, "y": 0.5 }).
 - "none" — hard cut; use for deliberate shock/contrast (before/after, old/new)
 
 Rules:
 - First scene: always "fade" (fade in from black)
-- Problem → Solution/Showcase: "scale" or "slide"
+- Problem → Solution (AHA moment): PREFER "cameraPan" or "zoomThrough" — the spatial movement conveys "moving forward into a new world"
+- Intro → Problem: "slide" or "cameraPan"
+- Solution → Showcase: "cameraPan" or "scale"
 - Showcase → Social Proof: "fade"
 - Social Proof → CTA: "slide" or "flash"
 - Any cursor/CTA scene finale: "flash" into next scene
-- Do NOT use "fade" for more than 2 consecutive transitions — vary between fade, slide, scale, and flash
+- Do NOT use "fade" for more than 2 consecutive transitions — vary between fade, slide, scale, cameraPan, and flash
+- cameraPan is highest-impact lateral — use at 1–2 key narrative pivot points per video
+- zoomThrough is highest-cinematic-impact — use at MAX 1–2 cuts per video. Best at: cursor clicks CTA → "after" state; problem scene ends zoomed on a pain point → solution zooms out from the fix.
+- When using zoomThrough, set exitAnchor to the normalized center of the element the cursor last clicked (or the most visually dominant element). If a cursor waypoint exists, use its x/y directly.
+
+## MORPH PORTAL (cross-scene shape morphing)
+
+Use morphExport + morphImport to animate a UI element from its exact position in one scene into a different element in the next scene. The element visually morphs: its border-radius transitions from circular (50%) to card corner radius, and its position/size spring to the new rect.
+
+Fields:
+- morphExport (on Scene N): { id: string, rect: { x, y, w, h } } — normalized 0-1 bounding box of the EXITING element
+- morphImport (on Scene N+1): { id: string, rect: { x, y, w, h } } — normalized 0-1 bounding box of where that element ARRIVES in this scene
+
+The receiving scene gets MORPH_FROM injected automatically. The LLM uses:
+  const { style, progress } = useMorphEntrance(MORPH_FROM, { x, y, w, h });
+
+Rules:
+- Use SPARINGLY — max 1 morph portal per video. Best reserved for the most emotionally dramatic shape transition.
+- Best moments: floating badge → full AppShell container; icon circle → hero feature card; pill button → modal overlay
+- The morphing element should be the FIRST to appear in the receiving scene (startFrame: 0). Other content reveals once progress > 0.5.
+- Pair with a brief "hold" on the exporting element at scene end so the viewer registers its position before the morph.
+- Do NOT combine with zoomThrough in the same transition — they conflict.
+
+## ANCHOR ELEMENTS (visual continuity across scenes)
+
+Some visual elements must persist across multiple scenes to create a flowing story rather than isolated cuts.
+Identify 1–2 ANCHOR ELEMENTS per video and reference them explicitly in each scene prompt where they appear.
+
+**Common anchor patterns:**
+- **App identity**: If Scene 3 shows a sidebar with "Projects / Tasks / Reports" nav items — Scenes 4, 5 must reference those SAME nav items + app name so the shell feels continuous
+- **Key metric**: If Scene 3 introduces a stat (e.g. "12 hours saved") — Scene 4 or CTA can echo it ("That's 12 hours back, every week")
+- **Brand element**: The product logo/wordmark appears in Scene 1 (problem context), reappears in Scene 3 (solution reveal), and anchors the CTA
+
+**How to use in scene prompts:**
+Add a line like: "ANCHOR: This scene shares the same app shell as Scene 3 — sidebar items [X, Y, Z] and app name '[AppName]' must match exactly."
+Or: "ANCHOR: Echo the '12 hours saved' metric from the previous scene — reinforce it visually."
+
+## VISUAL ANCHOR TRANSFORMATION (emotional throughline)
+
+For every video, identify ONE visual anchor object that physically transforms between the problem and solution scenes. This creates the WhatAStory "same world, different state" effect — the viewer recognizes the element and feels the transformation.
+
+**What is a visual anchor?**
+A single icon, symbol, or shape that represents the core pain in the problem scene (broken state) and the same element in a resolved state in the solution/AHA scene. The transformation IS the story.
+
+**How to assign:**
+1. Choose a concrete metaphor for the product's core value (examples below)
+2. Assign visualAnchor to the PROBLEM scene(s) with colorFrom (red/orange = broken)
+3. Assign the SAME visualAnchor to the AHA/SOLUTION scene with colorTo (green/brand = resolved)
+4. Reference the anchor explicitly in each scene prompt: "VISUAL ANCHOR: show [icon] in [colorFrom] state — cracked, pulsing alarm, or visually broken"
+
+**Common anchor patterns by product type:**
+- **Reporting/analytics**: icon "📊" colorFrom "#ef4444" (chaos, cluttered bars) → colorTo "#22c55e" (clean rising bars)
+- **Communication/CRM**: icon "💬" colorFrom "#f97316" (garbled speech bubbles, question marks) → colorTo BRAND.primary (clear, organized)
+- **Task/project management**: icon "⚠️" colorFrom "#ef4444" (red alert, deadline missed) → colorTo "#22c55e" (green checkmark, done)
+- **Automation/workflow**: icon "⚙️" colorFrom "#ef4444" (spinning chaos, manual steps) → colorTo BRAND.primary (smooth single click)
+- **Data sync/integration**: icon "🔗" colorFrom "#f97316" (broken chain links) → colorTo "#22c55e" (solid connected chain)
+- **Finance/billing**: icon "💳" colorFrom "#ef4444" (red negative number) → colorTo "#22c55e" (green positive metric)
+
+Output visualAnchor on the PROBLEM scene AND on the AHA/SOLUTION scene. On other scenes it is optional (add it if the anchor naturally appears). The anchor must be the SAME icon across all scenes it appears in.
 
 ## SCENE PROMPT REQUIREMENTS
-Each scene prompt must include (2–4 sentences):
-1. Visual goal — what the viewer should see and feel, including dominant composition (e.g. "text left, device right" or "centered full-screen")
-2. Exact content — headline text, subheadline, CTA text (use actual product name and features); for hero/gradient-hero scenes specify the exact headline word count
-3. Animation note — what enters first, what moves, in what order; specify if headline should be gradient-colored
-4. If it is a device/showcase scene: explicitly mention "display ATTACHED_IMAGES inside the device shell"
-5. For light-themed brands (BRAND.style === "light"): always start the scene prompt with "Use LightArcBg as background. " — this ensures every scene gets the animated arc texture.
+Each scene prompt must include ALL of the following (write them as explicit instructions to the code generator):
 
-Each scene must also include a voiceoverText: a crisp 15–25 word spoken narration for that scene.
-Write it as natural spoken English — the viewer hears this while watching the visuals.
-Example: "Introducing [Product] — the fastest way your team moves from idea to shipped, without the chaos."
+1. **EMOTIONAL INTENT** — one word + the visual grammar: "RELIEF scene — smooth floating settle (damping:400), warm palette, elements drift in gently, generous spacing."
+2. **Scene act timing** — explicit frame allocations: "Act 1 (0–50f): headline enters. Act 2 (50–155f): [content]. Act 3 (155–210f): hold final state."
+3. **On-screen narrative text** — the EXACT headline text that appears visually (not just voiceover). This is separate from voiceover. Write it as: "Headline: '[text]' — 80–120px, weight 800, brand.text color, enters at f:20 from translateY(30px)." Include a sub-line if needed: "Subline: '[text]' — 22px, weight 400, textMuted color, appears at f:35."
+4. **Visual composition** — assign a layoutTopology to each scene and state it explicitly. Choose from:
+   - split-left: text 40% left / visual 60% right — classic showcase split
+   - split-right: visual 60% left / text 40% right — reversed for variety
+   - center-focus: UI centered full-screen, bold headline overlaid top or bottom with glass backing
+   - isometric-float: UI tilted at isometric angle floating in space, text anchored to a corner
+   - full-bleed-overlay: full-screen UI/image fills frame, text is a glass overlay panel
+   ⚠️ RULE: No two consecutive scenes may share the same layoutTopology. The planner MUST alternate. The 40/60 split (split-left/split-right) is one option among equals — not a default.
+5. **Animation choreography** — what enters first, in what order, at what frames
+6. **Background note** — confirm which background skill is active, any ambient/atmospheric elements
+7. If device/showcase scene: "display ATTACHED_IMAGES inside ContentCard (clean white frame, no browser chrome)"
+8. For light-themed brands: "Use LightArcBg variant='grid' as background."
+9. For showcase/cursor scenes: "Add PersistentSectionLabel top-left with featureName='[Feature Name]'."
+10. If AHA MOMENT: "THIS IS THE AHA MOMENT — slow the animation, hold on the key transformation (Act 3 = 40 frames minimum), make the viewer feel the relief."
+
+## ON-SCREEN NARRATIVE TEXT (WhatAStory standard — required on every scene)
+
+Every scene must have on-screen text that tells the story visually, independent of voiceover.
+Viewers often watch without sound — the text IS the story for them.
+
+**Text hierarchy per scene type:**
+
+PROBLEM / HOOK scenes:
+- Headline (96–120px, weight 900): Short, visceral problem statement. Max 6 words. e.g. "Hours lost. Every week." or "Your team is drowning."
+- Sub-line (24px, weight 400, textMuted): The specific cost. e.g. "12 hours of manual reporting — per person, per week"
+- Accent word: One word in BRAND.primary color within the headline
+
+SOLUTION / AHA scenes:
+- Headline (80–108px, weight 800): The transformation, OUTCOME language. e.g. "Done in 30 seconds." or "One click. Every time."
+- Sub-line (22px): How. e.g. "[Product] handles the rest — automatically"
+- The headline is the payoff. Make it the dominant element. Hold it for 30+ frames.
+
+FEATURE / SHOWCASE scenes:
+- Section label (13px, uppercase, letterSpacing: 0.18em, brand.primary): Feature category above the headline. e.g. "REPORTING" or "AUTOMATION"
+- Headline (56–72px, weight 800): What this feature DOES for the viewer. e.g. "See every project. Always."
+- Feature tag (14px pill badge): Specific feature name. e.g. "Live Dashboard"
+
+SOCIAL PROOF / TRUST scenes:
+- Stat headline (96px+, weight 900): The number. e.g. "94%"
+- Context line (22px): What the number means. e.g. "of teams report 3× faster delivery"
+- Logo or attribution (small, muted)
+
+CTA scenes:
+- Hero headline (120–160px, weight 900, gradient text): 3–5 words max. e.g. "Start in minutes."
+- CTA button text: Direct, outcome-driven. e.g. "Start Your Project →"
+- URL/support line (16px, muted): The URL typed character by character
+
+**CRITICAL**: Write the exact on-screen text strings in the scene prompt so the code generator uses them verbatim. Never let the LLM invent text — you define it here.
+
+Each scene MUST include a voiceoverText using OUTCOME language:
+- Problem scenes: make the pain visceral and specific ("Every week, your team loses 6 hours to...")
+- Solution scenes: describe the transformation ("Now, [outcome] — in seconds, not hours")
+- Feature scenes: "You can now [specific benefit] without [old pain]"
+- CTA scenes: direct and urgent ("Start your free trial — your first [outcome] is ready in minutes")
+Word count MUST match duration: (durationInFrames / 30) × 2.5 words max. Count your words before submitting.
+
+VOICEOVER QUALITY TEST — before finalizing, ask yourself:
+✅ Does it describe what the VIEWER gains? (not what the product does)
+✅ Is it specific? (mentions actual time, money, or pain saved)
+✅ Does it feel like something a human would say out loud?
+✅ Would someone recognize their own problem in it?
+If any answer is NO, rewrite it.
 
 ## CURSOR SCENE PROMPT REQUIREMENTS
 When writing prompts for premium-cursor-engine OR premium-chameleon-ui scenes, ALWAYS include:
@@ -368,7 +688,82 @@ Extract from product description and any provided images:
 
 ## BGSKILL OUTPUT
 When brand.style is "light", output bgSkill: "premium-light-arc-bg" at the top level of the response JSON.
-For dark themes, omit bgSkill (it defaults to no global background layer).`;
+For dark themes, omit bgSkill (it defaults to no global background layer).
+
+## UI RECONSTRUCTION vs SCREENSHOT OVERLAY
+
+For showcase/demo scenes, select the skill based on what best serves the content:
+
+RECONSTRUCTION (premium-reconstructed-ui skill) — PREFERRED when:
+- Standard SaaS layout (sidebar + dashboard, settings, forms, tables)
+- UI elements need to animate independently (cards stagger, charts draw)
+- Form/modal interaction (typing, dropdown selection)
+- Camera zoom is planned (vectors stay crisp at any scale)
+
+OVERLAY (premium-chameleon-ui skill) — use ONLY when:
+- Highly custom UI (maps, 3D views, photo-heavy, complex visualizations)
+- Brand fidelity is critical above animation quality
+- Screenshot contains irreplaceable real data
+
+DEFAULT: Always prefer RECONSTRUCTION for standard SaaS dashboards/forms/settings.
+
+## SECTION TITLE SCENES
+
+Insert a "section-title" scene (3-second duration, centered title text on light background) between major feature demos when the video has 4+ showcase scenes. This creates breathing room and helps viewers track the narrative arc.
+
+The section-title scene:
+- skill: "premium-section-title"
+- durationInFrames: 90 (3 seconds at 30fps)
+- prompt: "SectionTitle scene for [Feature Name]. Use LightArcBg as background. Title: '[Feature Name]', subtitle: '[brief context]', icon: '[relevant emoji]'."
+
+## PER-SCENE-TYPE DURATION DEFAULTS
+
+- intro: 150 frames (5s)
+- section-title: 90 frames (3s)
+- showcase: 210 frames (7s) — product demo screens
+- features: 180 frames (6s)
+- social-proof: 150 frames (5s)
+- cta: 150 frames (5s)
+
+## GLOBAL BACKGROUND STYLE
+
+Choose ONE background style for the entire video and output it as globalBg:
+- "arcs" — light lavender-white with concentric SVG arcs (best for light/modern brands)
+- "grid" — light gray with subtle cross-hatch grid (best for enterprise/B2B)
+- "dots" — light with dot matrix pattern (best for clean/minimal brands)
+
+For dark-themed brands, use "arcs" as default (still works but is less visible).
+ALL scenes in the video should use this same background style.
+
+## SCENE COUNT RULES
+- No screenshots: 4-5 scenes
+- 1-2 screenshots: 5-6 scenes
+- 3-5 screenshots: 6-7 scenes
+- 6+ screenshots/video: 7-8 scenes
+NEVER exceed 8 scenes. Combine related features into one showcase scene rather than splitting.
+
+## LIVE-ACTION COMPOSITE
+For Hook and Problem scenes of B2B products, consider using premium-live-action-composite skill. Conditions: B2B SaaS product, Hook or Problem scene (emotionalIntent: FRUSTRATION/PAIN/RECOGNITION), at least one user image available. When selected, add to scene prompt: "Use VideoPlateMockup with ATTACHED_IMAGES[0] as background plate."
+
+## APP WALKTHROUGH DETECTION
+When user uploads 3+ screenshots sharing the SAME sidebar/navigation (same app):
+1. Mark scenes as isWalkthroughScene: true on each related scene
+2. First scene uses premium-reconstructed-ui with full AppShell
+3. Subsequent walkthrough scenes: add to prompt "Maintain exact same sidebar and topbar from previous scene. Only replace main content area."
+4. Use "cameraPan" transition between walkthrough scenes
+5. Add to each walkthrough scene prompt: "Render feature name '[FEATURE]' as FeatureSectionHeader persistent label at top of content area"
+
+## PER-SCENE MUSIC VOLUME
+Include musicVolume on each scene (number, 0.5–1.5):
+- problem/pain/frustration scenes: 0.5 (quiet — let the pain breathe)
+- normal showcase/feature: 1.0
+- aha/relief/confidence scenes: 1.3
+- CTA scene: 1.5 (full energy for the ask)
+
+## UI SCHEMA EXTRACTION
+For each uploaded screenshot that will be used in a scene, extract its UI layout structure as a uiSchemas entry (one entry per image index).
+Identify: layout type (sidebar-main, topnav-main, full-width, split), sidebar items with emoji icons and active state, main content sections (metric-cards, table, chart, form, card-grid, list, detail-panel, hero-header), and theme colors (bgColor, cardBgColor, textColor, accentColor, borderRadius, isDark).
+Simplify data: max 6 table rows, 8 chart datapoints, 7 sidebar items. Use emoji for icons. Only extract for images that are visually complex enough to warrant UI reconstruction.`;
 
 // ---------------------------------------------------------------------------
 // Types
@@ -378,17 +773,32 @@ interface ScenePlanRaw {
   id: number;
   title: string;
   prompt: string;
-  skill: string;
+  skills: string[];
+  skill?: string; // deprecated — kept for backward compat with old LLM responses
   durationInFrames: number;
   imageIndex?: number;
   voiceoverText?: string;
   transition?: string;
+  emotionalIntent?: string;
+  isAhaMoment?: boolean;
+  stageDirection?: string;
+  musicVolume?: number;
+  isWalkthroughScene?: boolean;
+  sectionLabel?: string;
   interactionScript?: import("@/types/generation").InteractionEvent[];
+  visualAnchor?: {
+    icon: string;
+    colorFrom: string;
+    colorTo: string;
+    label: string;
+  };
 }
 
 interface FullVideoPlanRaw {
   scenes: ScenePlanRaw[];
   bgSkill?: string;
+  globalBg?: string;
+  globalVisualThread?: string;
 }
 
 interface BrandTokensRaw {
@@ -415,11 +825,66 @@ function parseDataUrl(dataUrl: string): { mimeType: string; data: string } | nul
 }
 
 // ---------------------------------------------------------------------------
+// Section-title injector
+// ---------------------------------------------------------------------------
+
+type EnrichedScene = ScenePlanRaw & {
+  durationInFrames: number;
+  imageIndex?: number;
+  interactionScript?: import("@/types/generation").InteractionEvent[];
+  uiSchema?: Record<string, unknown>;
+};
+
+/** Inserts a premium-section-title scene before every group of showcase scenes.
+ *  Groups are defined by consecutive showcase-skill scenes sharing the same imageIndex.
+ *  Only inserts a divider when the imageIndex changes (new feature area).
+ */
+function injectSectionTitles(scenes: EnrichedScene[]): EnrichedScene[] {
+  const SHOWCASE_SKILLS = new Set([
+    "premium-saas-showcase", "premium-cursor-engine", "premium-chameleon-ui",
+    "premium-app-walkthrough", "premium-reconstructed-ui",
+  ]);
+
+  const result: EnrichedScene[] = [];
+  let lastShowcaseImageIndex: number | undefined = undefined;
+
+  for (const scene of scenes) {
+    const isShowcase = scene.skills?.some(sk => SHOWCASE_SKILLS.has(sk)) ?? false;
+
+    if (isShowcase) {
+      const imgIdx = scene.imageIndex;
+      // Insert a section-title divider when moving to a new image/feature area
+      if (imgIdx !== undefined && imgIdx !== lastShowcaseImageIndex) {
+        // Derive a short title from the scene title (strip leading "Showcase:" etc.)
+        const rawTitle = scene.title.replace(/^(showcase|feature|step|scene)\s*[:\-–]?\s*/i, "").trim();
+        const sectionTitle = rawTitle.length > 3 ? rawTitle : `Feature ${(imgIdx + 1)}`;
+
+        result.push({
+          id: -1,
+          title: `${sectionTitle} — Overview`,
+          skills: ["premium-section-title"],
+          durationInFrames: 90,
+          prompt: `SectionTitle chapter card. Title: "${sectionTitle}". Subtitle: "See how it works". Use LightArcBg variant="grid" as background. Center the SectionTitle component. Keep it clean and minimal.`,
+          imageIndex: undefined,
+          interactionScript: undefined,
+          uiSchema: undefined,
+        } as EnrichedScene);
+        lastShowcaseImageIndex = imgIdx;
+      }
+    }
+
+    result.push(scene);
+  }
+
+  return result;
+}
+
+// ---------------------------------------------------------------------------
 // Route handler
 // ---------------------------------------------------------------------------
 
 export async function POST(req: Request) {
-  const { prompt, images, imageUserDescriptions, screenFlow } = await req.json();
+  const { prompt, images, imageUserDescriptions, screenFlow, cachedBrand } = await req.json();
 
   const apiKey = process.env.GOOGLE_GENERATIVE_AI_API_KEY;
   if (!apiKey) {
@@ -451,140 +916,106 @@ export async function POST(req: Request) {
   // -------------------------------------------------------------------------
   let visionBrand: Partial<BrandTokensRaw> = {};
   let imageDescriptions: string[] = [];
-  let uiSchemaResult: Record<string, unknown> | null = null;
+  // uiSchema per image index (up to first 3 images)
+  const uiSchemasByIndex: Record<number, Record<string, unknown>> = {};
 
   if (parsedImages.length > 0) {
-    // Run brand extraction and (if >1 image) description extraction in parallel
-    const brandPromise = withRetry(() => ai.models.generateContent({
-      model: FAST_MODEL,
-      contents: [
-        {
-          role: "user",
-          parts: [
-            { text: "Extract the brand design system from this product screenshot." },
-            { inlineData: parsedImages[0] },
-          ],
-        },
-      ],
-      config: {
-        systemInstruction: BRAND_EXTRACTION_PROMPT,
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            primary: { type: Type.STRING },
-            secondary: { type: Type.STRING },
-            bg: { type: Type.STRING },
-            surface: { type: Type.STRING },
-            text: { type: Type.STRING },
-            textMuted: { type: Type.STRING },
-            border: { type: Type.STRING },
-            style: { type: Type.STRING },
-          },
-          required: ["primary", "secondary", "bg", "surface", "text", "textMuted", "border", "style"],
-        },
-      },
-    }));
-
-    // For multiple images, ask the LLM to label each one so the planner can assign them
-    const descPromise = parsedImages.length > 1
-      ? withRetry(() => ai.models.generateContent({
-        model: FAST_MODEL,
-        contents: [
-          {
+    // Task 0.1+0.4: Single combined call for brand extraction + image descriptions
+    // If cachedBrand is provided by the client, skip brand extraction entirely.
+    const hasCachedBrand = cachedBrand && typeof cachedBrand === "object" && cachedBrand.primary;
+    const combinedBrandDescPromise = hasCachedBrand
+      // Only fetch descriptions when brand is cached
+      ? (parsedImages.length > 1
+          ? withRetry(() => ai.models.generateContent({
+              model: FAST_MODEL,
+              contents: [{
+                role: "user",
+                parts: [
+                  { text: `Describe each of these ${parsedImages.length} product screenshots in one short sentence (what screen/feature it shows). Return JSON with a "descriptions" array.` },
+                  ...parsedImages.map((p) => ({ inlineData: p })),
+                ],
+              }],
+              config: {
+                responseMimeType: "application/json",
+                responseSchema: {
+                  type: Type.OBJECT,
+                  properties: { descriptions: { type: Type.ARRAY, items: { type: Type.STRING } } },
+                  required: ["descriptions"],
+                },
+              },
+            }))
+          : Promise.resolve(null))
+      // No cached brand — do combined brand + descriptions in ONE call
+      : withRetry(() => ai.models.generateContent({
+          model: FAST_MODEL,
+          contents: [{
             role: "user",
             parts: [
-              {
-                text: `Describe each of these ${parsedImages.length} product screenshots in one short sentence (what screen/feature it shows). Return JSON.`,
-              },
               ...parsedImages.map((p) => ({ inlineData: p })),
+              { text: `Product: ${prompt}\n\nExtract brand tokens from image 1 and describe all ${parsedImages.length} images.` },
             ],
-          },
-        ],
-        config: {
-          responseMimeType: "application/json",
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              descriptions: { type: Type.ARRAY, items: { type: Type.STRING } },
-            },
-            required: ["descriptions"],
-          },
-        },
-      }))
-      : Promise.resolve(null);
-
-    // UI schema decomposition — runs in parallel with brand extraction
-    // Only for the first (most UI-rich) image; non-fatal if it fails
-    const uiDecomposePromise = withRetry(() => ai.models.generateContent({
-      model: FAST_MODEL,
-      contents: [
-        {
-          role: "user",
-          parts: [
-            { text: "Decompose this product screenshot into a structural UI schema for animation." },
-            { inlineData: parsedImages[0] },
-          ],
-        },
-      ],
-      config: {
-        systemInstruction: `You are a UI architect for a video animation system.
-Analyze this product screenshot and decompose it into a STRUCTURAL SCHEMA.
-Extract: layout type (sidebar-main/topnav-main/full-width/split), sidebar items (label+emoji icon+isActive), topbar presence, main content sections in order (metric-cards/table/chart/form/card-grid/list), and theme colors.
-Simplify: max 6 table rows, 8 chart datapoints normalized 0-100, 7 sidebar items, clean round numbers.
-Use emoji for all icons. Return only valid JSON.`,
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            layout: {
+          }],
+          config: {
+            systemInstruction: `You are a visual brand analyst. Given product screenshots:
+1. Extract the brand's color palette from the FIRST image: primary, secondary, bg, surface, text, textMuted, border colors as hex. Determine style: "dark"|"light"|"neon".
+2. Write a 1-sentence description of EACH image (what the UI shows, what feature it demonstrates).
+Return JSON only.`,
+            responseMimeType: "application/json",
+            responseSchema: {
               type: Type.OBJECT,
               properties: {
-                type: { type: Type.STRING },
-                sidebar: {
+                brand: {
                   type: Type.OBJECT,
                   properties: {
-                    appName: { type: Type.STRING },
-                    items: { type: Type.ARRAY, items: { type: Type.OBJECT, properties: { label: { type: Type.STRING }, icon: { type: Type.STRING }, isActive: { type: Type.BOOLEAN } }, required: ["label", "icon", "isActive"] } },
+                    primary: { type: Type.STRING }, secondary: { type: Type.STRING },
+                    bg: { type: Type.STRING }, surface: { type: Type.STRING },
+                    text: { type: Type.STRING }, textMuted: { type: Type.STRING },
+                    border: { type: Type.STRING },
+                    style: { type: Type.STRING },
                   },
-                  required: ["appName", "items"],
+                  required: ["primary", "secondary", "bg", "surface", "text", "textMuted", "border", "style"],
                 },
+                descriptions: { type: Type.ARRAY, items: { type: Type.STRING } },
               },
-              required: ["type"],
-            },
-            mainContent: {
-              type: Type.OBJECT,
-              properties: {
-                sections: {
-                  type: Type.ARRAY,
-                  items: { type: Type.OBJECT, properties: { type: { type: Type.STRING }, data: { type: Type.OBJECT } }, required: ["type", "data"] },
-                },
-              },
-              required: ["sections"],
-            },
-            theme: {
-              type: Type.OBJECT,
-              properties: {
-                bgColor: { type: Type.STRING },
-                cardBgColor: { type: Type.STRING },
-                textColor: { type: Type.STRING },
-                accentColor: { type: Type.STRING },
-                borderRadius: { type: Type.NUMBER },
-                isDark: { type: Type.BOOLEAN },
-              },
-              required: ["bgColor", "textColor", "accentColor", "isDark"],
+              required: ["brand", "descriptions"],
             },
           },
-          required: ["layout", "mainContent", "theme"],
-        },
-      },
-    }));
+        }));
 
-    const [brandResult, descResult, uiDecomposeSettled] = await Promise.allSettled([brandPromise, descPromise, uiDecomposePromise]);
+    // Task 0.2: UI schema extraction is now merged into the narrative planning call.
+    // We no longer run separate uiDecompose calls here — the planner returns uiSchemas inline.
+    const [combinedResult] = await Promise.allSettled([combinedBrandDescPromise]);
 
-    if (brandResult.status === "fulfilled") {
+    // Task 0.4: Use cached brand if provided, otherwise extract from combined result
+    if (hasCachedBrand) {
+      // Apply cached brand directly
+      const cb = cachedBrand as Record<string, string>;
+      const isColor = (v: unknown) =>
+        typeof v === "string" && (v.startsWith("#") || v.startsWith("rgb") || v.startsWith("hsl"));
+      if (isColor(cb.primary)) visionBrand.primary = cb.primary;
+      if (isColor(cb.secondary)) visionBrand.secondary = cb.secondary;
+      if (isColor(cb.bg)) visionBrand.bg = cb.bg;
+      if (isColor(cb.surface)) visionBrand.surface = cb.surface;
+      if (isColor(cb.text)) visionBrand.text = cb.text;
+      if (isColor(cb.textMuted)) visionBrand.textMuted = cb.textMuted;
+      if (isColor(cb.border)) visionBrand.border = cb.border;
+      if (["dark", "light", "neon"].includes(cb.style)) visionBrand.style = cb.style as "dark" | "light" | "neon";
+      console.log("Vision brand: using cached brand tokens");
+      // Still parse descriptions from combinedResult (which is desc-only in cached mode)
+      if (combinedResult.status === "fulfilled" && combinedResult.value) {
+        try {
+          const parsed = JSON.parse(combinedResult.value.text ?? "{}");
+          imageDescriptions = Array.isArray(parsed.descriptions) ? parsed.descriptions : [];
+          console.log("Image descriptions (cached-brand mode):", imageDescriptions);
+        } catch (e) {
+          console.warn("Image description parse failed (non-fatal):", e);
+        }
+      }
+    } else if (combinedResult.status === "fulfilled" && combinedResult.value) {
+      // Combined call: parse both brand and descriptions
       try {
-        const extracted = JSON.parse(brandResult.value.text ?? "{}");
+        const parsed = JSON.parse(combinedResult.value.text ?? "{}");
+        const extracted = parsed.brand ?? parsed; // fallback if LLM returned flat brand object
         const isColor = (v: unknown) =>
           typeof v === "string" && (v.startsWith("#") || v.startsWith("rgb") || v.startsWith("hsl"));
         if (isColor(extracted.primary)) visionBrand.primary = extracted.primary;
@@ -611,34 +1042,16 @@ Use emoji for all icons. Return only valid JSON.`,
           }
         }
 
-        console.log("Vision brand extraction:", visionBrand);
-      } catch (e) {
-        console.warn("Vision brand parse failed (non-fatal):", e);
-      }
-    } else {
-      console.warn("Vision brand extraction failed (non-fatal):", brandResult.reason);
-    }
-
-    if (descResult.status === "fulfilled" && descResult.value) {
-      try {
-        const parsed = JSON.parse(descResult.value.text ?? "{}");
         imageDescriptions = Array.isArray(parsed.descriptions) ? parsed.descriptions : [];
-        console.log("Image descriptions:", imageDescriptions);
+        console.log("Vision brand + descriptions (combined call):", visionBrand);
       } catch (e) {
-        console.warn("Image description parse failed (non-fatal):", e);
+        console.warn("Combined brand+desc parse failed (non-fatal):", e);
       }
+    } else if (combinedResult.status === "rejected") {
+      console.warn("Combined brand+desc extraction failed (non-fatal):", combinedResult.reason);
     }
 
-    if (uiDecomposeSettled.status === "fulfilled") {
-      try {
-        uiSchemaResult = JSON.parse(uiDecomposeSettled.value.text ?? "{}") as Record<string, unknown>;
-        console.log("UI schema extracted:", (uiSchemaResult as any)?.layout?.type, "sections:", ((uiSchemaResult as any)?.mainContent?.sections ?? []).length);
-      } catch (e) {
-        console.warn("UI schema parse failed (non-fatal):", e);
-      }
-    } else {
-      console.warn("UI schema extraction failed (non-fatal):", uiDecomposeSettled.reason);
-    }
+    // uiSchemasByIndex will be populated from the planner response (Task 0.2).
 
     // -----------------------------------------------------------------------
     // Phase 1 — Tiered Summarization
@@ -793,6 +1206,10 @@ Return JSON with: screenSummaries (array of {screen, keyElement, action}), narra
     userDescs[i]?.trim() || imageDescriptions[i] || `screenshot ${i + 1}`
   );
 
+  // Extract visual energy fields from flow-analyze result (if present)
+  const flowEnergy = (["high", "medium", "calm"].includes(screenFlow?.energyLevel) ? screenFlow.energyLevel : undefined) as "high" | "medium" | "calm" | undefined;
+  const flowUiPace = (["fast", "slow"].includes(screenFlow?.uiPace) ? screenFlow.uiPace : undefined) as "fast" | "slow" | undefined;
+
   // Build screenFlow narrative block when the user has confirmed a flow
   let screenFlowBlock = "";
   if (screenFlow && Array.isArray(screenFlow.transitions) && screenFlow.transitions.length > 0) {
@@ -835,7 +1252,12 @@ Return JSON with: screenSummaries (array of {screen, keyElement, action}), narra
       ? "1 product screenshot (index 0)"
       : `${parsedImages.length} product screenshots (indices 0–${parsedImages.length - 1})`;
     const descLines = finalDescriptions.map((d, i) => `  - Image ${i}: ${d}`).join("\n");
-    imageContextBlock = `\nATTACHED IMAGES: The user has uploaded ${countStr}.\n${descLines}\n${screenFlowBlock}\nFor showcase/cursor/device scenes, set imageIndex to the most relevant image index.\n`;
+    const energyNote = flowEnergy === "high"
+      ? `\nVISUAL ENERGY: HIGH (detected from recording). UI pace: ${flowUiPace ?? "fast"}. Add +40 to all spring stiffness values compared to table defaults. Prefer musicStyle: "energetic".`
+      : flowEnergy === "calm"
+        ? `\nVISUAL ENERGY: CALM (detected from recording). UI pace: ${flowUiPace ?? "slow"}. Use stiffness values as-is (do not boost). Prefer musicStyle: "calm".`
+        : "";
+    imageContextBlock = `\nATTACHED IMAGES: The user has uploaded ${countStr}.\n${descLines}\n${screenFlowBlock}${energyNote}\nFor showcase/cursor/device scenes, set imageIndex to the most relevant image index.\n`;
   }
 
   const textPart = {
@@ -843,7 +1265,9 @@ Return JSON with: screenSummaries (array of {screen, keyElement, action}), narra
 ${imageContextBlock}
 Plan a complete 5–6 scene narrative video for this product, and extract brand tokens.`,
   };
-  const imageParts = parsedImages.map((p) => ({ inlineData: p }));
+  // Cap inline images to 4 for the narrative planner — the imageContextBlock text already
+  // describes all screens; additional images beyond 4 add token cost with minimal planning value.
+  const imageParts = parsedImages.slice(0, 4).map((p) => ({ inlineData: p }));
 
   try {
     const result = await withRetry(() => ai.models.generateContent({
@@ -883,26 +1307,96 @@ Plan a complete 5–6 scene narrative video for this product, and extract brand 
                   id: { type: Type.NUMBER },
                   title: { type: Type.STRING },
                   prompt: { type: Type.STRING },
-                  skill: { type: Type.STRING },
+                  skills: { type: Type.ARRAY, items: { type: Type.STRING }, description: "Ordered skill stack: [primarySkill, backgroundSkill?, polishSkill?]. See SKILL STACKING RULES." },
                   durationInFrames: { type: Type.NUMBER },
                   imageIndex: { type: Type.NUMBER },
                   voiceoverText: { type: Type.STRING },
                   transition: { type: Type.STRING },
+                  emotionalIntent: { type: Type.STRING, description: "FRUSTRATION | RELIEF | CONFIDENCE | TRUST | URGENCY | EXCITEMENT" },
+                  isAhaMoment: { type: Type.BOOLEAN, description: "true for the single scene delivering the core product transformation" },
+                  stageDirection: { type: Type.STRING, description: "Cinematic stage direction for the animator: camera move, emotional arc shift, pacing" },
+                  musicVolume: { type: Type.NUMBER, description: "Volume multiplier: 0.5 for pain/problem scenes, 1.0 normal, 1.3 for aha/relief, 1.5 for CTA" },
+                  isWalkthroughScene: { type: Type.BOOLEAN, description: "true when this scene is part of a persistent-shell app walkthrough sequence" },
+                  sectionLabel: { type: Type.STRING, description: "Short label shown as persistent section header above browser chrome" },
+                  visualAnchor: {
+                    type: Type.OBJECT,
+                    properties: {
+                      icon: { type: Type.STRING, description: "Emoji representing the anchor element (e.g. '⚠️', '📊', '💬')" },
+                      colorFrom: { type: Type.STRING, description: "Hex color in broken/problem state (e.g. '#ef4444' red)" },
+                      colorTo: { type: Type.STRING, description: "Hex color in resolved/success state (e.g. '#22c55e' green or BRAND.primary)" },
+                      label: { type: Type.STRING, description: "Semantic label for prompt system (e.g. 'missed_deadline', 'cluttered_reports')" },
+                    },
+                    required: ["icon", "colorFrom", "colorTo", "label"],
+                  },
                 },
-                required: ["id", "title", "prompt", "skill", "durationInFrames"],
+                required: ["id", "title", "prompt", "skills", "durationInFrames"],
               },
             },
             bgSkill: { type: Type.STRING },
+            globalBg: { type: Type.STRING, description: "arcs | grid | dots" },
+            globalVisualThread: { type: Type.STRING, description: "One sentence describing the single geometric/color/motion motif that persists across ALL scenes and evolves from broken→resolved. E.g. 'A glowing ring: fragmented arcs in problem scenes, full brand-color ring in solution scenes, exploding into the logo on CTA.'" },
+            uiSchemas: {
+              type: Type.ARRAY,
+              description: "For each uploaded screenshot (by index), extract the UI layout structure. Return one entry per image.",
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  imageIndex: { type: Type.NUMBER, description: "0-based index of the screenshot this schema describes" },
+                  layout: {
+                    type: Type.OBJECT,
+                    properties: {
+                      type: { type: Type.STRING, description: "sidebar-main | topnav-main | full-width | split" },
+                      sidebar: {
+                        type: Type.OBJECT,
+                        properties: {
+                          appName: { type: Type.STRING },
+                          items: { type: Type.ARRAY, items: { type: Type.OBJECT, properties: { label: { type: Type.STRING }, icon: { type: Type.STRING }, isActive: { type: Type.BOOLEAN } }, required: ["label", "icon", "isActive"] } },
+                        },
+                        required: ["appName", "items"],
+                      },
+                    },
+                    required: ["type"],
+                  },
+                  mainContent: {
+                    type: Type.OBJECT,
+                    properties: {
+                      sections: { type: Type.ARRAY, items: { type: Type.OBJECT, properties: { type: { type: Type.STRING }, data: { type: Type.OBJECT } }, required: ["type", "data"] } },
+                    },
+                    required: ["sections"],
+                  },
+                  theme: {
+                    type: Type.OBJECT,
+                    properties: {
+                      bgColor: { type: Type.STRING }, cardBgColor: { type: Type.STRING },
+                      textColor: { type: Type.STRING }, accentColor: { type: Type.STRING },
+                      borderRadius: { type: Type.NUMBER }, isDark: { type: Type.BOOLEAN },
+                    },
+                    required: ["bgColor", "textColor", "accentColor", "isDark"],
+                  },
+                },
+                required: ["imageIndex", "layout", "mainContent", "theme"],
+              },
+            },
           },
           required: ["brand", "scenes"],
         },
       },
     }));
 
-    const parsed = JSON.parse(result.text ?? "{}") as FullVideoPlanRaw & { brand: BrandTokensRaw };
+    const parsed = JSON.parse(result.text ?? "{}") as FullVideoPlanRaw & { brand: BrandTokensRaw; uiSchemas?: Array<{ imageIndex: number } & Record<string, unknown>> };
 
     if (!parsed.scenes || !Array.isArray(parsed.scenes) || parsed.scenes.length === 0) {
       throw new Error("No scenes returned from planner");
+    }
+
+    // Task 0.2: Populate uiSchemasByIndex from the planner's inline uiSchemas
+    if (Array.isArray(parsed.uiSchemas)) {
+      parsed.uiSchemas.forEach((schema) => {
+        if (typeof schema.imageIndex === "number") {
+          uiSchemasByIndex[schema.imageIndex] = schema;
+          console.log(`UI schema[${schema.imageIndex}] (from planner):`, (schema as any)?.layout?.type, "sections:", ((schema as any)?.mainContent?.sections ?? []).length);
+        }
+      });
     }
 
     // Merge: vision-extracted colors take priority over text-inferred
@@ -921,7 +1415,12 @@ Plan a complete 5–6 scene narrative video for this product, and extract brand 
       name: textBrand.name,
       url: textBrand.url,
       cta: textBrand.cta,
-      musicStyle: textBrand.musicStyle,
+      // Flow-analyze energy overrides text-inferred musicStyle (stronger signal)
+      musicStyle: flowEnergy === "high"
+        ? "energetic"
+        : flowEnergy === "calm"
+          ? "calm"
+          : textBrand.musicStyle,
     };
 
     // Scene prompts are returned clean (no brand prefix) — the generation layer
@@ -939,8 +1438,13 @@ Plan a complete 5–6 scene narrative video for this product, and extract brand 
 
       // For chameleon-ui scenes with a confirmed screenFlow, derive an interactionScript
       // from the transition associated with this scene's primary image.
+      // Normalize skills: support old LLM responses that returned a single `skill` string
+      const resolvedSkills: string[] = Array.isArray(s.skills) && s.skills.length > 0
+        ? s.skills
+        : (s.skill ? [s.skill] : ["premium-saas-showcase"]);
+
       let interactionScript: InteractionEvent[] | undefined;
-      if (s.skill === "premium-chameleon-ui" && confirmedFlow && imageIdx !== undefined) {
+      if (resolvedSkills.includes("premium-chameleon-ui") && confirmedFlow && imageIdx !== undefined) {
         const transition = confirmedFlow.transitions.find((t) => t.from === imageIdx);
         if (transition) {
           const events = buildInteractionScriptFromTransition(transition, s.durationInFrames);
@@ -948,23 +1452,42 @@ Plan a complete 5–6 scene narrative video for this product, and extract brand 
         }
       }
 
-      // Attach uiSchema to reconstructed-ui scenes (and optionally interactive-ui scenes)
-      const uiSchema = (s.skill === "premium-reconstructed-ui" || s.skill === "premium-interactive-ui")
-        ? uiSchemaResult ?? undefined
-        : undefined;
+      // Attach uiSchema to any scene with an imageIndex — the generator decides whether to use it
+      const uiSchema = imageIdx !== undefined ? (uiSchemasByIndex[imageIdx] ?? undefined) : undefined;
 
-      return { ...s, imageIndex: imageIdx, interactionScript, uiSchema };
+      const safeDuration = Number.isFinite(s.durationInFrames) ? s.durationInFrames : 240;
+
+      return { ...s, skills: resolvedSkills, durationInFrames: safeDuration, imageIndex: imageIdx, interactionScript, uiSchema, emotionalIntent: s.emotionalIntent, isAhaMoment: s.isAhaMoment ?? false, stageDirection: s.stageDirection, visualAnchor: s.visualAnchor, musicVolume: s.musicVolume, isWalkthroughScene: s.isWalkthroughScene, sectionLabel: s.sectionLabel };
     });
+
+    // ── Auto-insert section-title dividers ─────────────────────────────────
+    // When a video has 4+ showcase/cursor/walkthrough scenes AND the LLM didn't
+    // already include any section-title scenes, inject them programmatically
+    // between groups of showcase scenes so the video has chapter breathing room.
+    const SHOWCASE_SKILLS = new Set([
+      "premium-saas-showcase", "premium-cursor-engine", "premium-chameleon-ui",
+      "premium-app-walkthrough", "premium-reconstructed-ui",
+    ]);
+    const showcaseCount = scenes.filter(s => s.skills?.some(sk => SHOWCASE_SKILLS.has(sk))).length;
+    const alreadyHasSectionTitles = scenes.some(s => s.skills?.includes("premium-section-title"));
+
+    const finalScenes = (showcaseCount >= 4 && !alreadyHasSectionTitles)
+      ? injectSectionTitles(scenes as EnrichedScene[])
+      : scenes;
 
     console.log(
       "Narrative plan:",
-      scenes.map((s) => `${s.title} (${s.skill}${s.imageIndex !== undefined ? `, img${s.imageIndex}` : ""})`).join(" → "),
+      finalScenes.map((s) => `${s.title} (${(s.skills ?? []).join("+")}${s.imageIndex !== undefined ? `, img${s.imageIndex}` : ""})`).join(" → "),
     );
     console.log("Final brand:", brand);
 
     const bgSkill = brand.style === "light" ? "premium-light-arc-bg" : undefined;
+    // Light-theme B2B demos use "grid" by default (WhatAStory style — clean static grid lines).
+    // "arcs" is reserved for brands that explicitly request a more dynamic feel.
+    const globalBg = parsed.globalBg ?? (brand.style === "light" ? "grid" : "arcs");
 
-    return new Response(JSON.stringify({ scenes, brand, bgSkill, imageDescriptions: finalDescriptions }), {
+    const globalVisualThread = parsed.globalVisualThread ?? undefined;
+    return new Response(JSON.stringify({ scenes: finalScenes, brand, bgSkill, globalBg, globalVisualThread, imageDescriptions: finalDescriptions }), {
       status: 200,
       headers: { "Content-Type": "application/json" },
     });

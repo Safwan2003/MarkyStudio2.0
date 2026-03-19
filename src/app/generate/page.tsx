@@ -5,17 +5,54 @@ import type { NextPage } from "next";
 import { useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { AnimationPlayer } from "../../components/AnimationPlayer";
+import { DEFAULT_VOICE_ID } from "../../components/AnimationPlayer/SettingsModal";
 import { ChatSidebar, type ChatSidebarRef } from "../../components/ChatSidebar";
 import { CodeEditor } from "../../components/CodeEditor";
 import { CursorEditor } from "../../components/CursorEditor";
 import { PageLayout } from "../../components/PageLayout";
 import { ScenePlanEditor } from "../../components/ScenePlanEditor";
+import { ScreenshotFlowEditor } from "../../components/ScenePlanEditor/ScreenshotFlowEditor";
 import { SceneTimeline } from "../../components/SceneTimeline";
 import { TabPanel } from "../../components/TabPanel";
 import { useCursorSteps } from "../../hooks/useCursorSteps";
 import { useFullVideoGeneration } from "../../hooks/useFullVideoGeneration";
 import type { ConversationMessage } from "../../types/conversation";
-import type { ModelId, ScenePlan } from "../../types/generation";
+import type { ModelId } from "../../types/generation";
+
+/** Parse an @mention from a chat prompt and return the matching scene index, or null.
+ *
+ * Handles these formats (case-insensitive):
+ *   @1          → scene index 0
+ *   @2          → scene index 1
+ *   @Scene1     → scene index 0
+ *   @scene-1    → scene index 0
+ *   @scene 1    → scene index 0
+ *   @intro      → fuzzy title match
+ *   @showcase   → fuzzy title match
+ *
+ * The mention is captured up to the first whitespace that is NOT part of
+ * a "scene N" pattern, so "@Scene 1 make it darker" correctly extracts "scene 1".
+ */
+function parseSceneMention(prompt: string, scenes: { title: string }[]): number | null {
+  // Match @word or @"scene N" (with optional separator and digit)
+  const match = prompt.match(/@(scene[-\s]?\d+|\d+|[\w-]+)/i);
+  if (!match) return null;
+  const mention = match[1].trim().toLowerCase();
+
+  // Numeric: @1, @2, @scene-1, @scene 2
+  const numMatch = mention.match(/^(?:scene[-\s]?)?(\d+)$/);
+  if (numMatch) {
+    const idx = parseInt(numMatch[1], 10) - 1;
+    return idx >= 0 && idx < scenes.length ? idx : null;
+  }
+
+  // Title fuzzy: @intro, @showcase, @cta
+  const idx = scenes.findIndex((s) => {
+    const t = s.title.toLowerCase();
+    return t.includes(mention) || mention.includes(t);
+  });
+  return idx >= 0 ? idx : null;
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -40,6 +77,15 @@ function GeneratePageContent() {
   const [fps, setFps] = useState(30);
   const [currentFrame, setCurrentFrame] = useState(0);
   const [seekFrame, setSeekFrame] = useState<number | null>(null);
+  const [voiceId, setVoiceId] = useState<string>(() => {
+    if (typeof window === "undefined") return DEFAULT_VOICE_ID;
+    return localStorage.getItem("preferredVoiceId") ?? DEFAULT_VOICE_ID;
+  });
+
+  const handleVoiceIdChange = (id: string) => {
+    setVoiceId(id);
+    localStorage.setItem("preferredVoiceId", id);
+  };
 
   // Attached images (passed to every scene as ATTACHED_IMAGES).
   // Lazy initializer restores images that were stored in sessionStorage by the landing page.
@@ -55,6 +101,21 @@ function GeneratePageContent() {
     } catch {}
     return [];
   });
+
+  // User-typed per-screenshot descriptions (from landing page)
+  const [imageUserDescriptions] = useState<string[]>(() => {
+    if (typeof window === "undefined") return [];
+    try {
+      const stored = sessionStorage.getItem("initialImageUserDescriptions");
+      if (stored) {
+        sessionStorage.removeItem("initialImageUserDescriptions");
+        const descs = JSON.parse(stored);
+        return Array.isArray(descs) ? descs : [];
+      }
+    } catch {}
+    return [];
+  });
+  const initialImageUserDescriptionsRef = useRef<string[]>(imageUserDescriptions);
 
   // Stable ref so the auto-start effect (empty deps) can read the initial images
   const initialImagesRef = useRef<string[]>(attachedImages);
@@ -74,10 +135,14 @@ function GeneratePageContent() {
 
   const {
     generateFullVideo,
+    approveFlow,
     confirmPlan,
     regenerateScene,
+    regenerateSceneWithEdit,
     editSceneCode,
     isPlanning,
+    isFlowDetecting,
+    isPrefetchingAudio,
     isGenerating: isFullVideoGenerating,
     progress: fullVideoProgress,
     scenes: fullVideoScenes,
@@ -86,12 +151,13 @@ function GeneratePageContent() {
     totalDuration,
     error: fullVideoError,
     pendingPlan,
+    pendingFlow,
     regeneratingSceneIndex,
     reset: resetFullVideo,
     pendingBrandRef,
   } = useFullVideoGeneration();
 
-  const isFullVideoBusy = isPlanning || isFullVideoGenerating;
+  const isFullVideoBusy = isPlanning || isPrefetchingAudio || isFullVideoGenerating;
 
   // Cursor steps for the currently-selected scene
   const selectedSceneCode = cursorSceneIndex !== null
@@ -110,6 +176,8 @@ function GeneratePageContent() {
 
   // Scenes where compilation failed — empty code = placeholder
   const failedScenes = fullVideoScenes.map((s) => s.code === "");
+  const auditScores = fullVideoScenes.map((s) => s.auditScore ?? null);
+  const ahaMomentScenes = fullVideoScenes.map((s) => s.isAhaMoment ?? false);
 
   const hasCursorContent =
     cursorSceneIndex !== null && sceneHasCursorSteps[cursorSceneIndex];
@@ -159,17 +227,45 @@ function GeneratePageContent() {
   // Completion + error side-effects
   // -------------------------------------------------------------------------
 
+  // Track which failed scenes have already been auto-retried this session
+  const autoRetriedRef = useRef<Set<number>>(new Set());
+
   // New masterCode = generation succeeded
   useEffect(() => {
     if (masterCode && masterCode !== prevMasterCode.current) {
       prevMasterCode.current = masterCode;
       setPendingMessage(undefined);
+      const failed = fullVideoScenes.filter((s) => s.code === "");
       const sceneNames = fullVideoScenes.map((s) => s.title).join(" → ");
       addAssistantMessage(
-        `Video ready — ${fullVideoScenes.length} scenes: ${sceneNames}`,
+        failed.length > 0
+          ? `Video ready — ${fullVideoScenes.length} scenes: ${sceneNames}\n\n⚠ ${failed.length} scene${failed.length > 1 ? "s" : ""} failed to generate and will auto-retry.`
+          : `Video ready — ${fullVideoScenes.length} scenes: ${sceneNames}`,
       );
     }
   }, [masterCode, fullVideoScenes, addAssistantMessage]);
+
+  // Auto-retry failed scenes after generation completes (staggered to avoid API hammering)
+  useEffect(() => {
+    if (isFullVideoBusy || regeneratingSceneIndex !== null) return;
+    if (!masterCode) return;
+
+    const failedIndices = fullVideoScenes
+      .map((s, i) => (s.code === "" ? i : -1))
+      .filter((i) => i !== -1 && !autoRetriedRef.current.has(i));
+
+    if (failedIndices.length === 0) return;
+
+    // Mark all as retried immediately to prevent re-triggering
+    failedIndices.forEach((i) => autoRetriedRef.current.add(i));
+
+    // Stagger retries: first one immediately, subsequent ones 2s apart
+    failedIndices.forEach((sceneIndex, offset) => {
+      setTimeout(() => {
+        regenerateScene(sceneIndex);
+      }, offset * 2000);
+    });
+  }, [isFullVideoBusy, regeneratingSceneIndex, masterCode, fullVideoScenes, regenerateScene]);
 
   // fullVideoError = generation failed
   useEffect(() => {
@@ -194,24 +290,36 @@ function GeneratePageContent() {
   // -------------------------------------------------------------------------
 
   const handleGenerate = useCallback(
-    (promptText: string, model: ModelId, images?: string[]) => {
+    async (promptText: string, model: ModelId, images?: string[], userDescriptions?: string[]) => {
       if (!promptText.trim() || isFullVideoBusy) return;
-      prevMasterCode.current = null; // reset so completion fires
+
+      // If a video already exists and no new images are being uploaded,
+      // check for an @mention targeting a specific scene — route to per-scene edit.
+      if (fullVideoScenes.length > 0 && !images?.length) {
+        const targetIndex = parseSceneMention(promptText, fullVideoScenes);
+        if (targetIndex !== null) {
+          addUserMessage(promptText);
+          setPendingMessage({ startedAt: Date.now() });
+          const targetTitle = fullVideoScenes[targetIndex]?.title ?? `Scene ${targetIndex + 1}`;
+          addAssistantMessage(`Editing "${targetTitle}" only…`);
+          await regenerateSceneWithEdit(targetIndex, promptText, model);
+          setPendingMessage(undefined);
+          addAssistantMessage(`"${targetTitle}" updated.`);
+          return;
+        }
+      }
+
+      // Default: full video regeneration
+      prevMasterCode.current = null;
       setAttachedImages(images ?? []);
       addUserMessage(promptText);
       setPendingMessage({ startedAt: Date.now() });
       resetFullVideo();
-      generateFullVideo(promptText, model, images);
+      generateFullVideo(promptText, model, images, userDescriptions);
     },
-    [isFullVideoBusy, addUserMessage, resetFullVideo, generateFullVideo],
+    [isFullVideoBusy, fullVideoScenes, addUserMessage, addAssistantMessage, resetFullVideo, generateFullVideo, regenerateSceneWithEdit],
   );
 
-  const handleConfirmPlan = useCallback(
-    (editedScenes: ScenePlan[]) => {
-      confirmPlan(editedScenes);
-    },
-    [confirmPlan],
-  );
 
   const handleSeek = useCallback((frame: number) => {
     setSeekFrame(frame);
@@ -222,7 +330,10 @@ function GeneratePageContent() {
     if (initialPrompt && !hasAutoStarted.current) {
       hasAutoStarted.current = true;
       const model = initialModel ?? ("gemini-2.5-flash:none" as ModelId);
-      setTimeout(() => handleGenerate(initialPrompt, model, initialImagesRef.current), 200);
+      setTimeout(
+        () => handleGenerate(initialPrompt, model, initialImagesRef.current, initialImageUserDescriptionsRef.current),
+        200,
+      );
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -239,7 +350,7 @@ function GeneratePageContent() {
         fullVideoScenes[cursorSceneIndex!]?.durationInFrames ?? durationInFrames
       }
       fps={fps}
-      preloadedImage={attachedImages[0]}
+      preloadedImage={attachedImages[fullVideoScenes[cursorSceneIndex!]?.imageIndex ?? 0]}
     />
   ) : undefined;
 
@@ -258,6 +369,7 @@ function GeneratePageContent() {
           onGenerate={handleGenerate}
           isLoading={isFullVideoBusy}
           initialModel={initialModel}
+          hasExistingScenes={fullVideoScenes.length > 0}
         />
 
         {/* Main area */}
@@ -295,6 +407,8 @@ function GeneratePageContent() {
                   isQualityChecking={false}
                   qualityMode={false}
                   onQualityModeChange={() => {}}
+                  voiceId={voiceId}
+                  onVoiceIdChange={handleVoiceIdChange}
                 />
 
                 {/* Scene timeline */}
@@ -312,6 +426,8 @@ function GeneratePageContent() {
                     regeneratingIndex={regeneratingSceneIndex}
                     hasCursorSteps={sceneHasCursorSteps}
                     failedScenes={failedScenes}
+                    auditScores={auditScores}
+                    ahaMomentScenes={ahaMomentScenes}
                     onEditCursor={setCursorSceneIndex}
                   />
                 )}
@@ -326,6 +442,15 @@ function GeneratePageContent() {
                           <p className="text-sm font-medium text-foreground">
                             Planning scenes...
                           </p>
+                        ) : isPrefetchingAudio ? (
+                          <>
+                            <p className="text-sm font-medium text-foreground">
+                              Generating voiceovers...
+                            </p>
+                            <p className="text-xs text-muted-foreground mt-1">
+                              Synthesising narration for each scene
+                            </p>
+                          </>
                         ) : (
                           <>
                             <p className="text-sm font-medium text-foreground">
@@ -363,13 +488,26 @@ function GeneratePageContent() {
               </div>
             }
             planContent={
-              pendingPlan ? (
+              pendingFlow ? (
+                // Step 1: flow approval (runs before planning)
+                <ScreenshotFlowEditor
+                  inline
+                  images={pendingFlow.images}
+                  initialFlow={pendingFlow.detectedFlow}
+                  onSave={(flow, descriptions, waypointsByImage, keyFrameIndices) =>
+                    approveFlow(flow, waypointsByImage, descriptions, keyFrameIndices)
+                  }
+                  isDetectingProp={isFlowDetecting}
+                />
+              ) : pendingPlan ? (
+                // Step 2: plan editor
                 <ScenePlanEditor
                   scenes={pendingPlan.scenes}
                   brand={pendingPlan.brand}
                   images={attachedImages.length > 0 ? attachedImages : undefined}
                   imageDescriptions={pendingPlan.imageDescriptions}
-                  onConfirm={handleConfirmPlan}
+                  onConfirm={(scenes, flow, descs) => confirmPlan(scenes, flow, descs, voiceId)}
+                  onImageRemove={(idx) => setAttachedImages((prev) => prev.filter((_, i) => i !== idx))}
                 />
               ) : undefined
             }

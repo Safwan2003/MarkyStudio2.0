@@ -72,12 +72,97 @@ The "Pro Standard" is: **damping:200** for all standard UI transitions (crisp in
 **damping:8** exclusively for intentionally playful/bouncy elements.
 
 Use SPRING_CONFIGS presets (already in scope) or these exact values:
-- Standard UI reveal (cards, panels, overlays, text): spring({ frame, fps, config: { damping: 200, stiffness: 120 } })
-- Gentle floating loop (device mockup, avatar): spring({ frame, fps, config: { damping: 22, stiffness: 70 } })
-- Playful pop ONLY (notification badge, emoji, confetti): spring({ frame, fps, config: { damping: 8, stiffness: 150 } })
-- Cinematic camera push-in: spring({ frame, fps, config: { damping: 200, stiffness: 80 } })
+- Standard UI reveal (cards, panels, overlays, text): spring({ frame, fps, config: SPRING_CONFIGS.entrance }) → damping:200, stiffness:120
+- **Snappy tactile reveal (hero cards, AHA moment UI, CTA elements)**: spring({ frame, fps, config: SPRING_CONFIGS.snap }) → damping:160, stiffness:220 — subtle overshoot, feels "physical". Use for the 1–2 most important elements per scene.
+- Gentle floating loop (device mockup, avatar): spring({ frame, fps, config: SPRING_CONFIGS.float }) → damping:22, stiffness:70
+- Playful pop ONLY (notification badge, emoji, confetti): spring({ frame, fps, config: SPRING_CONFIGS.pop }) → damping:8, stiffness:150
+- Cinematic camera push-in: spring({ frame, fps, config: SPRING_CONFIGS.cinematic }) → damping:200, stiffness:80
+
+**SNAP rule:** In every CONFIDENCE/URGENCY/EXCITEMENT scene, use SPRING_CONFIGS.snap for the primary hero element entrance. In RELIEF/AHA scenes, use SPRING_CONFIGS.snap for the "revealed" result element (the thing that makes the viewer say "oh wow").
 
 NEVER use \`{ damping: 14 }\` or \`{ damping: 28 }\` — these are low-quality defaults.
+
+## EMOTIONAL INTENT → ANIMATION STYLE (read from scene prompt, apply throughout)
+
+When the scene prompt contains an EMOTIONAL INTENT, apply the matching animation style to EVERY element:
+
+| Emotion | Spring config | Animation character | Spacing |
+|---|---|---|---|
+| FRUSTRATION | damping:150, stiffness:200 | Staggered, uneven, jittery entrances | Tight, crowded |
+| PAIN | damping:300, stiffness:60 | Slow, heavy, dragging settle | Compressed |
+| RECOGNITION | damping:200, stiffness:120 | Clean, deliberate, one at a time | Normal |
+| RELIEF | damping:400, stiffness:80 | Smooth floating, almost weightless | Generous (160px+ from edges) |
+| CONFIDENCE | damping:200, stiffness:140 | Synchronized, crisp, all arrive together | Clean, structured |
+| TRUST | damping:300, stiffness:100 | Gentle, warm, unhurried | Open, relaxed |
+| URGENCY | damping:120, stiffness:180 | Fast, pressing, strong entrance | Compact |
+| EXCITEMENT | damping:8, stiffness:200 | Elastic pop, bounce, overshoot | Energetic |
+
+**Application rule**: If prompt says "RELIEF scene", use damping:400 for ALL spring() calls (headlines, cards, icons). If it says "FRUSTRATION", stagger all entrances with random 5–15 frame offsets.
+
+## SCENE ACT STRUCTURE (read from scene prompt, implement exactly)
+
+The scene prompt specifies explicit frame allocations (e.g. "Act 1 (0–50f): ... Act 2 (50–155f): ... Act 3 (155–210f): hold").
+Follow these allocations precisely:
+
+- **Act 1 (Setup)**: ONE anchor element enters. Background reveals. Viewer orients. Nothing else.
+- **Act 2 (Tension/Content)**: Main content unfolds sequentially. Each element enters 8–15 frames after the previous.
+- **Act 3 (Resolve/Hold)**: ALL animation stops at the act 3 start frame. Final state holds motionless. No new elements. Let the viewer absorb. The hold IS part of the design.
+
+**Hard rule**: The resolve act must be fully static — no floating, no pulsing, no continuous animation after Act 3 begins (except the CTA button which may have a subtle 0.03 scale pulse).
+
+## ON-SCREEN NARRATIVE TEXT (mandatory — write it exactly as specified in the prompt)
+
+The scene prompt specifies exact on-screen text strings. Use them verbatim — do NOT invent alternatives.
+
+**Narrative text rendering pattern:**
+\`\`\`tsx
+// Headline text (read exact text + timing from scene prompt)
+const HEADLINE = "Done in 30 seconds."; // from scene prompt
+const SUBLINE = "Your team handles what matters."; // from scene prompt
+const SECTION_LABEL = "AUTOMATION"; // from scene prompt (uppercase)
+
+// Headline spring — use emotional intent config
+const headlineProgress = spring({ frame: frame - HEADLINE_START, fps, config: { damping: 200, stiffness: 120 } });
+
+// Section label (enters first, tiny, uppercase)
+{SECTION_LABEL && (
+  <div style={{
+    fontSize: 12, fontWeight: 700, letterSpacing: "0.22em",
+    color: BRAND.primary, fontFamily: BRAND.font + ", Inter, sans-serif",
+    textTransform: "uppercase",
+    opacity: interpolate(frame, [HEADLINE_START - 10, HEADLINE_START + 5], [0, 1], { extrapolateLeft: "clamp", extrapolateRight: "clamp" }),
+    marginBottom: 16,
+  }}>
+    {SECTION_LABEL}
+  </div>
+)}
+
+// Main headline — dominant element
+<div style={{
+  fontSize: 96, fontWeight: 900, letterSpacing: "-0.04em",
+  color: BRAND.text, fontFamily: BRAND.font + ", Inter, sans-serif",
+  lineHeight: 1.05, maxWidth: "80%", wordBreak: "break-word",
+  transform: \`translateY(\${interpolate(headlineProgress, [0, 1], [30, 0])}px)\`,
+  opacity: headlineProgress,
+}}>
+  {/* Accent word in BRAND.primary */}
+  {HEADLINE}
+</div>
+
+// Sub-line — enters 12 frames after headline
+{frame >= HEADLINE_START + 12 && (
+  <div style={{
+    fontSize: 22, fontWeight: 400, color: BRAND.textMuted,
+    fontFamily: BRAND.font + ", Inter, sans-serif",
+    marginTop: 20, maxWidth: "65%",
+    opacity: spring({ frame: frame - (HEADLINE_START + 12), fps, config: { damping: 200, stiffness: 100 } }),
+  }}>
+    {SUBLINE}
+  </div>
+)}
+\`\`\`
+
+**Accent word rule**: Identify the ONE most powerful word in the headline and render it in BRAND.primary. Wrap it in a span with the gradient text pattern.
 
 ## EASING PATTERNS (always add easing to visible interpolations)
 
@@ -97,18 +182,22 @@ easing: (t) => t * t
 ## GLASS CARD PATTERN (use for all UI cards on dark backgrounds)
 
 \`\`\`tsx
-// Standard glass card — copy exactly:
+// Standard glass card — copy exactly (WhatAStory High-Depth Formula):
 {
-  background: "linear-gradient(135deg, rgba(255,255,255,0.08) 0%, rgba(255,255,255,0.02) 100%)",
-  backdropFilter: "blur(16px)",
-  WebkitBackdropFilter: "blur(16px)",
-  border: "1px solid rgba(255,255,255,0.08)",
-  borderTop: "1px solid rgba(255,255,255,0.2)",
-  borderLeft: "1px solid rgba(255,255,255,0.15)",
+  background: "rgba(255, 255, 255, 0.08)",
+  backdropFilter: "blur(24px) saturate(150%)",  // saturate(150%) prevents muddy gray blur
+  WebkitBackdropFilter: "blur(24px) saturate(150%)",
+  // Directional borders: top+left brighter = simulated studio light from top-left
+  borderTop:    "1px solid rgba(255, 255, 255, 1.0)",  // full catch-light on top edge
+  borderLeft:   "1px solid rgba(255, 255, 255, 0.15)",
+  borderRight:  "1px solid rgba(255, 255, 255, 0.06)",
+  borderBottom: "1px solid rgba(255, 255, 255, 0.04)",
   borderRadius: 20,
-  boxShadow: "0 12px 40px rgba(0,0,0,0.4), inset 0 1px 1px rgba(255,255,255,0.15)",
+  // Two-layer shadow: sharp contact + deep ambient occlusion
+  boxShadow: "0 1px 2px rgba(0,0,0,0.12), 0 25px 50px -12px rgba(0,0,0,0.50)",
 }
-// For brand block, mix the custom background gradient but keep the lighter top/left borders and shadow
+// NEVER use blur(16px) — too shallow. NEVER use uniform border — it looks flat.
+// NEVER omit saturate(150%) — blur alone produces muddy gray haze.
 \`\`\`
 
 ## SHADOW DEPTH SCALE (mandatory for light themes, recommended for all)
@@ -135,6 +224,53 @@ When BRAND.style === "light":
 4. Text: BRAND.text (#0f172a), labels: BRAND.textMuted (rgba(15,23,42,0.5))
 5. Accent color (BRAND.primary) on max 2–3 elements — never as background fill
 6. Border: 1px solid rgba(0,0,0,0.08) on cards and dividers
+
+## UI_SCHEMA & RECONSTRUCTED UI (use when UI_SCHEMA block is present in prompt)
+
+When the prompt contains a "## UI_SCHEMA" block, Vision AI has extracted a structural schema of the product screenshot. In this case:
+
+1. DO NOT render the screenshot as an <img> tag
+2. Use <ReconstructedAppShell uiSchema={UI_SCHEMA} brand={BRAND} /> to render the full reconstructed UI
+3. Or use individual components: AnimatedSidebar, AnimatedTopbar, AnimatedMetricCards, AnimatedTable, AnimatedChart, AnimatedForm
+4. Place the reconstructed UI inside a device frame if appropriate
+5. Add <LightArcBg brand={BRAND} variant={GLOBAL_BG || "arcs"} /> as first child of AbsoluteFill
+
+UI_SCHEMA and GLOBAL_BG are already in scope (do NOT re-declare). Access UI_SCHEMA directly:
+- UI_SCHEMA.layout.sidebar.items → sidebar nav items
+- UI_SCHEMA.layout.topbar.items → tab items
+- UI_SCHEMA.mainContent.sections → content sections array
+- UI_SCHEMA.theme → extracted theme colors
+
+The Animated* components handle all spring animations, stagger timing, and interaction. You only need to pass data props.
+
+FALLBACK: If a section has _fallback: true, that zone's Vision extraction failed. For fallback zones, render a placeholder or use screenshot overlay instead.
+
+## RECONSTRUCTION CROSSFADE — MANDATORY HARD RULE
+
+When the prompt contains a UI_SCHEMA block AND ATTACHED_IMAGES is available, you MUST implement this exact crossfade:
+
+\`\`\`tsx
+// STEP 1: Screenshot layer fades OUT (f:0–50)
+const screenshotOpacity = interpolate(frame, [0, 25, 50], [1, 1, 0], { extrapolateLeft: "clamp", extrapolateRight: "clamp" });
+// STEP 2: Reconstructed UI fades IN (f:30–65)
+const uiOpacity = interpolate(frame, [30, 65], [0, 1], { extrapolateLeft: "clamp", extrapolateRight: "clamp" });
+
+// Overlay layout:
+<AbsoluteFill>
+  <LightArcBg brand={BRAND} variant={GLOBAL_BG || "arcs"} />
+  {/* Screenshot layer — dissolves away over first 50 frames */}
+  <div style={{ position: "absolute", inset: 0, opacity: screenshotOpacity, zIndex: 1 }}>
+    <img src={ATTACHED_IMAGES[0]} style={{ width: "100%", height: "100%", objectFit: "cover", objectPosition: "top" }} />
+  </div>
+  {/* Reconstructed UI — fades in starting at f:30, fully visible at f:65 */}
+  <div style={{ position: "absolute", inset: 0, opacity: uiOpacity, zIndex: 2 }}>
+    <ReconstructedAppShell uiSchema={UI_SCHEMA} brand={BRAND} />
+  </div>
+  {/* Cursor/interactive layers go here at zIndex 100+ */}
+</AbsoluteFill>
+\`\`\`
+
+VIOLATIONS: Jumping immediately to the reconstructed UI from frame 0 (skipping the screenshot crossfade) is **NOT allowed**. The crossfade is what gives the "come alive" premium effect.
 
 ## ATTACHED IMAGES (CRITICAL — mandatory when present)
 
@@ -199,6 +335,27 @@ Rigid rules:
 10. Add step annotation badges above cursor: "Step N of M" pill in brand.primary color
 11. After a button submit step: show loading spinner (rotate via frame*12) → green checkmark success state → slide-in toast
 12. For input steps: show keyboard key pill ("Enter ↵" or "Tab ⇥") near end of dwell frames
+13. Depth-of-field on ALL cursor scenes: wrap the screenshot background in DepthBlur. Background blurs during active interaction, sharpens in resolve act:
+\`\`\`tsx
+// Blur increases as cursor becomes active, relaxes in final hold
+const dofProgress = interpolate(frame, [ACT_1_END, ACT_1_END + 25, ACT_2_END, ACT_2_END + 20], [0, 0.7, 0.7, 0], { extrapolateLeft: "clamp", extrapolateRight: "clamp" });
+<DepthBlur focusDistance={dofProgress} maxBlur={7}>{/* screenshot */}</DepthBlur>
+\`\`\`
+14. ChromaticAberration on cursor speed (Rule 3 above) — intensity from cursor velocity
+15. **Approach deceleration (MANDATORY):** The cursor must slow down the last 8–12 frames before each target. This "magnetic pull" is the #1 difference between a robotic cursor and a human-looking one. Implement by applying an ease-in-out easing to the interpolation over the FINAL 12 frames of travel:
+\`\`\`tsx
+// Standard travel: spring() to target — fast, linear feel
+// Approach phase: switch to ease-in-out for last 12 frames before arrival
+// In useCursorPos / cursor spring: lerp speed drops from 0.18 → 0.04 as cursor enters
+// a proximity radius of ~80px from target. Approximate with a secondary interpolation:
+const approachFrames = 12;
+const isApproaching = framesUntilClick <= approachFrames && framesUntilClick >= 0;
+const approachEase = isApproaching
+  ? interpolate(framesUntilClick, [approachFrames, 0], [1, 0], { easing: EASINGS.easeInOutCubic, extrapolateLeft: "clamp", extrapolateRight: "clamp" })
+  : 1;
+// Multiply the cursor lerp speed by approachEase: speed * approachEase
+// Result: cursor decelerates as it nears the target, clicks with a "settling" micro-pause
+\`\`\`
 
 ## TYPOGRAPHY SCALE (MANDATORY — never deviate)
 
@@ -238,13 +395,260 @@ style={{
 
 Use gradient text on: hero/opener scene headlines, CTA scene primary headline, bold problem statements, brand name reveals.
 
+## WET HEADLINE (MANDATORY for AHA / RELIEF / EXCITEMENT scenes)
+
+The WhatAStory signature — hero text has a "glossy wet" quality via a light sheen sweep on entrance, plus a bloom glow behind it. This is what separates premium-studio output from generic LLM output.
+
+**Rule:** For any scene where emotionalIntent is RELIEF, AHA, CONFIDENCE, or EXCITEMENT — the headline MUST use both SheenOverlay and GlowBloom:
+
+\`\`\`tsx
+// Wet headline composite — copy exactly for hero text in premium scenes:
+const HEADLINE_START = 20; // frame when headline springs in
+const headlineProgress = spring({ frame: frame - HEADLINE_START, fps, config: SPRING_CONFIGS.snap });
+
+{/* Bloom layer — renders BEHIND the text */}
+<div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", zIndex: 10 }}>
+  <GlowBloom color={BRAND.primary} blurPx={80} opacity={0.35} spread={2.0}>
+    <div style={{ width: 1, height: 1 }} /> {/* point source — bloom expands outward */}
+  </GlowBloom>
+</div>
+
+{/* Headline with gradient text — springs in with snap config */}
+<div style={{
+  position: "relative", zIndex: 11,
+  fontSize: 120, fontWeight: 900, letterSpacing: "-0.05em",
+  background: \`linear-gradient(135deg, \${BRAND.primary} 0%, \${BRAND.secondary} 60%, \${BRAND.primary} 100%)\`,
+  WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", backgroundClip: "text",
+  transform: \`translateY(\${interpolate(headlineProgress, [0, 1], [40, 0])}px) scale(\${interpolate(headlineProgress, [0, 1], [0.92, 1])})\`,
+  opacity: headlineProgress,
+}}>
+  {HEADLINE}
+  {/* Sheen sweep over text — fires once on entrance */}
+  <SheenOverlay startFrame={HEADLINE_START + 8} width={600} angle={110} />
+</div>
+\`\`\`
+
+**VIOLATION:** A RELIEF or AHA scene where the hero headline fades in flatly (no sheen, no bloom) is an automatic quality fail.
+
+## MASKED HEADLINE REVEALS (MANDATORY — for all main scene headlines)
+
+WhatAStory's kinetic typography is NOT a fade-in from mid-air. Text is born **from the baseline** — it slides up from behind an invisible clip mask. This single change separates premium agency output from generic LLM output.
+
+**RULE: Wrap ALL main scene headlines in \`<MaskedReveal>\`. Only use opacity fades for subtitles, body text, and small labels.**
+
+\`\`\`tsx
+// Single headline — slides up from baseline (not a translateY on the outer div):
+<MaskedReveal startFrame={20}>
+  <div style={{ fontSize: 120, fontWeight: 900, letterSpacing: "-0.05em", color: BRAND.text }}>
+    Built for scale.
+  </div>
+</MaskedReveal>
+
+// Multi-line headline — stagger each line with delay:
+<div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+  <MaskedReveal startFrame={20}>
+    <div style={{ fontSize: 96, fontWeight: 900 }}>Stop chasing</div>
+  </MaskedReveal>
+  <MaskedReveal startFrame={20} delay={10}>
+    <div style={{ fontSize: 96, fontWeight: 900, color: BRAND.primary }}>customers.</div>
+  </MaskedReveal>
+</div>
+
+// AHA scene — combine MaskedReveal with WET HEADLINE (GlowBloom + SheenOverlay):
+<MaskedReveal startFrame={20} config={SPRING_CONFIGS.snap}>
+  <div style={{ fontSize: 128, fontWeight: 900, /* gradient text styles */ }}>
+    Done in seconds.
+    <SheenOverlay startFrame={28} width={600} angle={110} />
+  </div>
+</MaskedReveal>
+\`\`\`
+
+**VIOLATION:** A headline that just \`opacity\` fades in or \`translateY\` animates WITHOUT a surrounding \`<MaskedReveal>\` clip is a quality fail.
+
+## STAGGERED ARRAY ENTRY (MANDATORY — every list/array of elements)
+
+Never render multiple sibling elements (cards, features, avatars, icons) that all enter at the same frame. Use \`useStagger\` to derive per-element startFrames:
+
+\`\`\`tsx
+// CORRECT — 6 feature cards entering 6 frames apart:
+{features.map((feat, i) => {
+  const startFrame = useStagger(i, 20, 6); // starts at frame 20, 6f apart
+  const prog = spring({ frame: frame - startFrame, fps, config: SPRING_CONFIGS.entrance });
+  return (
+    <div key={i} style={{ opacity: prog, transform: \`translateY(\${(1 - prog) * 12}px)\` }}>
+      {feat.label}
+    </div>
+  );
+})}
+
+// WRONG — all enter simultaneously:
+{features.map((feat, i) => {
+  const prog = spring({ frame: frame - 20, fps, config: SPRING_CONFIGS.entrance });
+  return <div key={i} style={{ opacity: prog }}>{feat.label}</div>;
+})}
+\`\`\`
+
+**VIOLATION:** Any array/list/grid of 3+ elements that all animate from the same startFrame is a single-speed violation.
+
+## ABSTRACT SKELETON UI (for background/unfocused UI elements)
+
+When UI is NOT the primary focus of a scene (e.g. background behind a headline or floating nodes), use \`AbstractSkeletonUI\` instead of a full \`ReconstructedAppShell\` or literal screenshots. This lowers cognitive load and directs the eye correctly — the WhatAStory "skeleton masking" technique.
+
+\`\`\`tsx
+// Background UI — skeleton only, no readable text:
+<DepthBlur focusDistance={0.3}>
+  <AbstractSkeletonUI brand={BRAND} uiSchema={UI_SCHEMA} opacity={0.75} />
+</DepthBlur>
+
+// Foreground — the actual feature being shown:
+<div style={{ position: "absolute", zIndex: 20 }}>
+  <AnimatedMetricCards cards={[...]} brand={BRAND} startFrame={30} />
+</div>
+\`\`\`
+
+**Rule:** Use \`AbstractSkeletonUI\` when the UI context needs to exist (gives depth/realism) but the feature being shown is a foreground element, cursor action, or headline overlay.
+
+## CONNECTED NODE PATHS (for problem/network/integration scenes)
+
+Use \`AnimatedConnectionLine\` to draw SVG connectors between floating elements. The line animates from start to end over \`duration\` frames using \`strokeDashoffset\`:
+
+\`\`\`tsx
+// Simple animated connector between two avatar nodes:
+<AnimatedConnectionLine
+  x1={0.25} y1={0.40}   // normalized (0–1) position of first node
+  x2={0.62} y2={0.35}   // normalized position of second node
+  startFrame={30}
+  duration={25}
+  color={\`\${BRAND.primary}55\`}
+  dashed         // dotted WhatAStory node-graph style
+/>
+
+// Curved arc connector:
+<AnimatedConnectionLine x1={0.2} y1={0.6} x2={0.75} y2={0.4} curved dashed startFrame={20} />
+\`\`\`
+
+Use \`AnimatedConnectionLine\` in: team/network intro scenes, integration wall scenes, problem scenes showing disconnected nodes.
+
+## 2.5D DEPTH LAYERING (MANDATORY — every scene must have 3 depth planes)
+
+WhatAStory's cinematic look comes from layered depth, NOT flat layouts. Every scene must have:
+
+**Layer 1 — Background (deepest, z:0):**
+- The texture, bg color, or ambient environment
+- Moves SLOWEST or is static
+- Always add subtle visual interest: LightArcBg / MeshGradientBg / ContextualBgPulse / faint radial gradient
+- Wrap in DepthBlur when cursor is active (focusDistance 0→0.5→0 over interaction arc)
+\`\`\`tsx
+<div style={{ position:"absolute", inset:0, zIndex:0 }}>
+  <LightArcBg brand={BRAND} /> {/* or MeshGradientBg for dark */}
+</div>
+\`\`\`
+
+**Layer 2 — Midground (content plane, z:10–50):**
+- UI cards, device mockups, data charts, avatar nodes — the MAIN content
+- Enters with spring animations (damping:200)
+- Slightly smaller than the full frame width: maxWidth 75–88% of screen, centered or offset
+- May use subtle shadow: GLOBAL_STYLE.shadowMedium or GLOBAL_STYLE.shadowHigh
+
+**Layer 3 — Foreground (closest, z:100+):**
+- Headlines, cursor, badges, notification toasts, callout bubbles, section labels
+- NEVER blurred (always sharp — opposite of background)
+- Enters LAST or simultaneously with midground (never first)
+- Text at this layer must be large enough to read over the midground content
+
+**Parallax motion rule:** When camera zooms or the scene has depth-of-field:
+\`\`\`tsx
+// Bg moves less (depth=0.2), midground moves more (depth=0.5), cursor stays fixed (no parallax)
+<ParallaxLayer depth={0.2} cameraProgress={camZoom}><BackgroundElements /></ParallaxLayer>
+<ParallaxLayer depth={0.5} cameraProgress={camZoom}><UICard /></ParallaxLayer>
+// Cursor: position: absolute, NO ParallaxLayer wrapper
+\`\`\`
+
+**VIOLATION:** A flat scene with all elements at the same z-depth is an agency quality failure.
+
+## RULE OF THREE DEPTHS (MANDATORY — the WhatAStory "environmental depth" signature)
+
+Every scene must have exactly 3 depth planes. Use this exact z-index structure:
+
+\`\`\`tsx
+{/* ── DEPTH 0: Background (z:0) — always moving, always blurred when cursor active ── */}
+<div style={{ position: "absolute", inset: 0, zIndex: 0 }}>
+  <LightArcBg brand={BRAND} />  {/* or MeshGradientBg — never a static color alone */}
+  {/* Optional: AmbientOrbs or Bokeh particles from premium-ambient-environment */}
+</div>
+
+{/* ── DEPTH 1: Midground / Content (z:10–50) — the main UI, device, or card ── */}
+<div style={{ position: "absolute", inset: 0, zIndex: 10 }}>
+  {/* Use TiltWrapper for 1.5° perspective tilt — makes flat cards feel physical */}
+  <TiltWrapper tiltX={-1.5} tiltY={2}>
+    {/* Your main content: device mockup, glass card, dashboard, feature grid */}
+    {/* MUST use SPRING_CONFIGS.snap on this layer's entrance for tactile "pop" */}
+  </TiltWrapper>
+</div>
+
+{/* ── DEPTH 2: Foreground / Annotations (z:100+) — sharp, never blurred ── */}
+<div style={{ position: "absolute", inset: 0, zIndex: 100, pointerEvents: "none" }}>
+  {/* Cursor, annotation pills, notification toasts, floating badges */}
+  {/* Section label (14px uppercase BRAND.primary) */}
+  {/* CursorAnnotationPill during cursor travel */}
+</div>
+\`\`\`
+
+**TiltWrapper usage rule:** Apply to the main content card in EVERY non-cursor scene:
+- Non-cursor scenes: static tilt \`tiltX={-1.5} tiltY={2}\` (cinematic lean)
+- Cursor scenes: dynamic tilt via \`useMagnetic()\`: \`const { rotateX, rotateY } = useMagnetic(cursorPos.x, cursorPos.y, cardCX, cardCY, 0.6);\`
+
+**Depth motion rule:**
+- Background layer: either static or the slowest-moving element (subtle parallax via \`ParallaxLayer depth={0.15}\`)
+- Midground: enters with \`SPRING_CONFIGS.snap\` — the "pop" is what makes it feel physical
+- Foreground: enters LAST (or simultaneously with midground) — always sharp, never \`filter: blur()\`
+
+## ATMOSPHERIC POLISH (mandatory for URGENCY and EXCITEMENT scenes)
+
+When emotionalIntent is URGENCY or EXCITEMENT, the atmosphere must crackle:
+
+\`\`\`tsx
+{/* FilmGrain — organic noise overlay (zIndex: 9999, above everything) */}
+{/* Already injected by master component at opacity 0.035 */}
+{/* For URGENCY/EXCITEMENT: boost opacity to 0.06 at scene level: */}
+<FilmGrain opacity={0.06} />
+
+{/* CameraMotionBlur — wrap fast-moving elements ONLY during their entrance */}
+{/* NOT on static elements — only on things that spring in at high velocity */}
+const entranceVelocity = interpolate(
+  spring({ frame: frame - ENTRANCE_START, fps, config: SPRING_CONFIGS.snap }),
+  [0, 0.5, 1], [0, 12, 0]  // px/frame — peaks at midpoint of entrance
+);
+<CameraMotionBlur velocityX={entranceVelocity} shutterAngle={180}>
+  <div style={{ /* your fast-entering card or headline */ }} />
+</CameraMotionBlur>
+\`\`\`
+
+**Rule:** URGENCY scenes must have at least ONE element entering with CameraMotionBlur. EXCITEMENT scenes must have at least TWO. RELIEF/TRUST scenes: NO motion blur — smooth and weightless only.
+
 ## VISUAL COMPOSITION (follow these to look agency-quality)
 
 **Layout:**
 - Give every element 80–120px breathing room from screen edges (160px minimum for hero/title scenes — generous negative space = premium)
-- Use a split composition for showcase/feature scenes: text left (40%), visual right (55%), 5% gap
+- Follow the layoutTopology field from the scene plan. Implement it exactly:
+  - split-left: flex row, text left flex:"0 0 40%", visual right flex:"0 0 60%" with perspective:1200 + rotateY(-12deg) rotateX(3deg) — use DepthStack inside the visual column for true Z-layer separation
+  - split-right: flex row, visual left flex:"0 0 60%" with same tilt, text right flex:"0 0 40%"
+  - center-focus: UI centered (max 80% width), bold headline at top or bottom in a glass-backed div
+  - isometric-float: wrap UI in DepthStack cameraRotateY={-18} cameraRotateX={6}, position off-center (right:5%), text in top-left corner
+  - full-bleed-overlay: UI/image fills AbsoluteFill (z:0), text is position:absolute glass card (z:30) anchored bottom-left or center
+  Never present UI flat (no perspective) regardless of topology. Always use DepthStack or explicit rotateY on the visual container.
+- Cinematic zoom: wrap ALL scene content in \`<div style={{ transform: \\\`scale(\\\${interpolate(frame, [0, 150], [1.0, 1.06])})\\\`, transformOrigin: "center center", position: "absolute", inset: 0 }}>\`. CTA scenes zoom OUT (1.05→1.0). Max zoom cap: 1.06 (never exceed).
 - For full-screen text scenes: center everything, max 75% width constraint on text blocks
 - AbsoluteFill background must match BRAND.bg from frame 0 — never fade in background
+
+**TEXT OVERFLOW — VIOLATION (most common LLM mistake):**
+Text MUST NEVER clip or overflow its container. These rules are MANDATORY:
+- All headline text: \`maxWidth: "80%"\`, \`wordBreak: "break-word"\`, \`overflowWrap: "break-word"\`
+- Long labels / subtitles: \`maxWidth: "70%"\`, \`whiteSpace: "normal"\`
+- Cards with text: always set explicit \`width\` + \`overflow: "hidden"\`
+- NEVER use \`whiteSpace: "nowrap"\` on a headline — it WILL overflow on long product names
+- NEVER use \`fontSize > 100px\` without checking the text fits with \`maxWidth: "90%"\`
+- If text is >25 characters, reduce fontSize by 20% from the starting value
 
 **Visual hierarchy:**
 - One dominant element per scene (the largest, brightest, or first to animate)
@@ -352,10 +756,13 @@ boilerplate and guarantees consistency:
   \`\`\`tsx
   <MotionBlurWhip frame={frame} startFrame={0} duration={14} maxBlur={18}><div/></MotionBlurWhip>
   \`\`\`
-- **SPRING_CONFIGS** — { entrance, float, pop, cinematic } — named presets for spring()
+- **SPRING_CONFIGS** — { entrance, snap, float, pop, cinematic } — named presets for spring()
   \`\`\`tsx
-  spring({ frame, fps, config: SPRING_CONFIGS.entrance })
-  spring({ frame, fps, config: SPRING_CONFIGS.pop })
+  spring({ frame, fps, config: SPRING_CONFIGS.entrance })  // damping:200, stiffness:120 — standard UI reveal
+  spring({ frame, fps, config: SPRING_CONFIGS.snap })       // damping:160, stiffness:220 — AHA/hero tactile pop
+  spring({ frame, fps, config: SPRING_CONFIGS.pop })        // damping:8,   stiffness:150 — elastic badge pop
+  spring({ frame, fps, config: SPRING_CONFIGS.float })      // damping:22,  stiffness:70  — floating loop
+  spring({ frame, fps, config: SPRING_CONFIGS.cinematic })  // damping:200, stiffness:80  — camera push-in
   \`\`\`
 - **EASINGS** — { easeOutCubic, easeInOutCubic, easeInQuad } — easing functions
   \`\`\`tsx
@@ -395,37 +802,387 @@ boilerplate and guarantees consistency:
   style={{ transform: \`scale(\${1 + beat * 0.04})\` }}
   \`\`\`
 - **WORD_TIMINGS** — Pre-computed word timing array for the scene's voiceover. Pass to useAudioSync(). Array of \`{ word, startFrame, endFrame }\`.
-- **GLOBAL_STYLE** — Visual consistency constants: \`{ contentPadding: 80, cardRadius: 20, headlineSize: 88, shadowMedium, shadowHigh, shadowLow }\` — use for consistent spacing across scenes
+
+## KINETIC TEXT + WORD-SYNC PATTERN (use when WORD_TIMINGS is non-empty)
+
+When WORD_TIMINGS has entries, sync text reveals to the spoken narration. This is the #1 technique used in premium agency videos:
+
+\`\`\`tsx
+// Word-highlighted caption — each word lights up as it's spoken
+const { currentWord, completedWords } = useAudioSync(WORD_TIMINGS);
+const words = "Automate your entire reporting workflow".split(" ");
+
+<div style={{ display: "flex", gap: 12, flexWrap: "wrap", justifyContent: "center" }}>
+  {words.map((word, i) => {
+    const isDone = completedWords.includes(word);
+    const isCurrent = currentWord === word;
+    return (
+      <span key={i} style={{
+        fontSize: 64,
+        fontFamily: BRAND.font,
+        color: isCurrent ? BRAND.primary : isDone ? BRAND.text : BRAND.textMuted,
+        transform: isCurrent ? "scale(1.08)" : "scale(1)",
+        transition: "all 0.15s ease",
+        willChange: "transform, color",
+      }}>{word}</span>
+    );
+  })}
+</div>
+\`\`\`
+
+Use this pattern for any kinetic headline scene where narration aligns with displayed text.
+If WORD_TIMINGS is empty (no voiceover), fall back to staggered spring reveals (one word every 8–12 frames).
+
+## AUDIO-SPRING SYNC RULE (mandatory when WORD_TIMINGS is present)
+
+When WORD_TIMINGS is available, read word density to set ALL spring stiffness values for this scene:
+\`\`\`tsx
+const avgGap = WORD_TIMINGS.length > 1
+  ? (WORD_TIMINGS[WORD_TIMINGS.length - 1].startFrame - WORD_TIMINGS[0].startFrame) / (WORD_TIMINGS.length - 1)
+  : 20;
+// Fast narration (avgGap < 15f): stiffness 180–220 — animations snap with the punchy rhythm
+// Slow narration (avgGap > 25f): stiffness 60–80 — elements float in contemplatively
+// Medium (15–25f): stiffness 100–140 — standard crisp UI reveals
+const AUDIO_STIFFNESS = avgGap < 15 ? 200 : avgGap > 25 ? 70 : 120;
+\`\`\`
+Use \`AUDIO_STIFFNESS\` as the stiffness for every spring() call in the scene. The animations must DANCE to the voiceover rhythm. Each element entrance should ideally coincide with a word boundary — look up \`WORD_TIMINGS[i].startFrame\` to place entrances on spoken words.
+
+Also available: **SyncedWord** component for individual word spring reveals:
+\`\`\`tsx
+// Each word springs in exactly as it's spoken — stiffness derived from word length
+<div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+  {"Your workflow. Automated.".split(" ").map((w, i) => (
+    <SyncedWord key={i} word={w} wordIndex={i} WORD_TIMINGS={WORD_TIMINGS} brand={BRAND} fontSize={88} />
+  ))}
+</div>
+\`\`\`
+
+- **GLOBAL_STYLE** — Visual consistency constants: \`{ contentPadding: 80, cardRadius: 20, headlineSize: 88, shadowMedium, shadowHigh, shadowLow }\` — use for consistent spacing across scenes. shadowMedium/High/Low are ready-to-use boxShadow strings.
+- **ChromaticAberration** — R/B channel split effect. Wrap fast-moving elements or entrances for premium motion feel.
+  \`\`\`tsx
+  // intensity 0–1 (0.3 = subtle, 0.6 = dramatic). Use on cursor, title entrances, CTA pops.
+  <ChromaticAberration intensity={chromaticIntensity} direction="horizontal">
+    <div>fast-moving element</div>
+  </ChromaticAberration>
+  // For cursor transitions: intensity = interpolate(cursorSpeed, [0, 20], [0, 0.6])
+  \`\`\`
+- **GlowBloom** — Bloom halo behind CTA buttons, metric cards, icon reveals. The WhatAStory / Sandwich Video signature effect.
+  \`\`\`tsx
+  // Wrap ANY element that should "pop" with an energy glow
+  <GlowBloom color={BRAND.primary} blurPx={55} opacity={0.45} spread={1.6} animated>
+    <div style={{ /* your CTA button or metric */ }}>Start Free Trial</div>
+  </GlowBloom>
+  // glowBloomStyle() returns inline styles for a behind-element bloom div (use if you need more control)
+  \`\`\`
+- **DepthBlur** — Depth-of-field blur for background layers. Blurs elements based on focus distance.
+  \`\`\`tsx
+  // focusDistance: 0=sharp, 1=fully blurred. Use on background layers when cursor is active.
+  const bgFocus = interpolate(cursorProgress, [0, 1], [0, 0.7]); // bg blurs as cursor activates
+  <DepthBlur focusDistance={bgFocus} maxBlur={8}>
+    <div style={{ /* background UI or photo */ }} />
+  </DepthBlur>
+  \`\`\`
+- **useInteractionFeedback(clickFrame, direction?)** — Micro-squish + nudge + glow when a UI element is clicked. Returns \`{ scale, nudgeX, nudgeY, glowOpacity }\`. The element squishes to 0.96, elastically overshoots to 1.03, settles at 1.0. Adds 2px physical press nudge. Use on ANY button/card that a cursor clicks — this is the #1 "juice" technique in premium agency videos.
+  \`\`\`tsx
+  // direction: "down" (default) | "right" | "left" | "up"
+  const { scale, nudgeY, glowOpacity } = useInteractionFeedback(CLICK_FRAME, "down");
+  <div style={{
+    transform: \`scale(\${scale}) translateY(\${nudgeY}px)\`,
+    // Optional: glow halo on click (render as sibling div behind)
+  }}>
+    Submit
+  </div>
+  // Render glow behind the button:
+  <div style={{ position:"absolute", inset:0, borderRadius:"inherit",
+    background: BRAND.primary, filter:"blur(20px)", opacity: glowOpacity * 0.5 }} />
+  \`\`\`
+- **useEntropy(strength)** — Physics chaos engine. Returns a per-element float offset calculator. Use in Scene 1 "chaos" scenes to give scattered elements jittery, async movement that snaps to a clean grid as strength → 0.
+  \`\`\`tsx
+  const entropy = useEntropy(0.85); // 0=still, 1=max chaos
+  // element i floats ±8px with a unique random frequency
+  style={{ transform: \`translateY(\${entropy(i, 8)}px)\` }}
+  // To snap to grid: animate strength 0.8→0 over 60f for chaos→order transition
+  \`\`\`
+- **useMagnetic(cursorX, cursorY, elementX, elementY, intensity?, radius?)** — Cards and buttons tilt toward the cursor when within proximity. The "hand-animated weight" seen in WhatAStory videos.
+  \`\`\`tsx
+  const cursorPos = useCursorPos(CURSOR_STEPS, 30);
+  const { rotateX, rotateY } = useMagnetic(cursorPos.x, cursorPos.y, cardCenterX, cardCenterY, 1, 150);
+  style={{ transform: \`perspective(600px) rotateX(\${rotateX}deg) rotateY(\${rotateY}deg)\`, transformStyle: "preserve-3d" }}
+  \`\`\`
+- **SAFE_ZONES** — Agency layout grid anchor points. Prevents text overflow and ensures consistent positioning: \`SAFE_ZONES.heroHeadline\`, \`SAFE_ZONES.heroCenter\`, \`SAFE_ZONES.featureCardLeft/Right\`, \`SAFE_ZONES.sectionLabel\`, \`SAFE_ZONES.statCenter\`, \`SAFE_ZONES.ctaButton\`.
+- **TiltWrapper** — Perspective tilt for the midground content plane. Makes flat UI cards feel physical. Use for the RULE OF THREE DEPTHS midground layer (z:10–50).
+  \`\`\`tsx
+  // Static cinematic lean (non-cursor scenes):
+  <TiltWrapper tiltX={-1.5} tiltY={2} glossy={true}><YourCard /></TiltWrapper>
+  // Cursor-reactive (cursor scenes) — tiltX/Y from useMagnetic():
+  const { rotateX, rotateY } = useMagnetic(cursorPos.x, cursorPos.y, cardCX, cardCY, 0.6);
+  <TiltWrapper tiltX={rotateX} tiltY={rotateY} glossy={true}><YourCard /></TiltWrapper>
+  \`\`\`
+- **ActionCamera** — Reactive macro-focus camera that snap-zooms to click targets. Replaces CinematicCamera for cursor-demo scenes.
+  \`\`\`tsx
+  // trackingInertia={0.4} enables smooth cursor path following (floating viewport)
+  <ActionCamera interactionScript={CURSOR_STEPS} trackingInertia={0.4} zoomAmount={1.18}>
+    <AppShell ... />
+  </ActionCamera>
+  // Keep cursor OUTSIDE the camera layer
+  \`\`\`
+- **SpotlightCutout** — Dark SVG mask overlay punching a glowing hole over a target element. Provides "cognitive masking" — dimming everything except the focus element.
+  \`\`\`tsx
+  <SpotlightCutout
+    target={{ x: 0.10, y: 0.28, w: 0.55, h: 0.11 }} // normalized 0-1
+    startFrame={25} glowColor={BRAND.primary} darkOpacity={0.55}
+  />
+  \`\`\`
+- **GhostHighlight** — Animated glowing border that spring-snaps between UI element positions. Shows product state changes without a physical cursor travel path.
+  \`\`\`tsx
+  <GhostHighlight
+    targets={[{ frame: 20, x: 0.1, y: 0.2, w: 0.4, h: 0.1 }, { frame: 50, x: 0.1, y: 0.4, w: 0.4, h: 0.1 }]}
+    brand={BRAND}
+  />
+  \`\`\`
+- **useCursorState(CURSOR_STEPS, magneticStrength?)** — Derives reactive \`{ x, y, vx, vy, isClicking, speed, approachPhase }\` from CURSOR_STEPS for the current frame. Now includes Expo.Out approach easing on the last 12 frames of travel ("lock-on" feel). \`approachPhase\` (0→1) can drive opacity/scale effects when cursor is near its target. Use to wire velocity-based effects (chromatic aberration, magnetic tilt) without manual calculation.
+  \`\`\`tsx
+  const cursorState = useCursorState(CURSOR_STEPS);
+  // cursorState.speed → chromaticIntensity; cursorState.isClicking → squish
+  \`\`\`
+- **SyncedWord** — Single word that springs in exactly as it's spoken. Use for kinetic headline scenes.
+  \`\`\`tsx
+  {"Your workflow. Automated.".split(" ").map((w, i) => (
+    <SyncedWord key={i} word={w} wordIndex={i} WORD_TIMINGS={WORD_TIMINGS} brand={BRAND} fontSize={88} />
+  ))}
+  \`\`\`
+- **ContextualBgPulse** — Background reacts to scene success events. A radial glow pulses outward from a position when triggered — the bg "celebrates" with the product. Place BEHIND all content (zIndex:0). Use when: a form submits, a deal closes, a metric appears, a notification pops.
+  \`\`\`tsx
+  // Trigger when the product "wins" — form submit, metric reveal, success toast
+  <ContextualBgPulse
+    triggerFrame={SUBMIT_FRAME}
+    color={BRAND.primary}
+    intensity={0.25}   // 0.15=subtle, 0.35=dramatic
+    x={0.5} y={0.6}    // normalized position of the event origin
+  />
+  // Multiple pulses: stagger by 30–60 frames for cascade effect
+  \`\`\`
+- **ParallaxLayer** — Multi-plane depth separation. Wrap background/midground/foreground in separate layers.
+  \`\`\`tsx
+  // depth: 0.1=subtle, 0.5=medium, 0.9=strong parallax. cameraProgress: 0–1 spring
+  <ParallaxLayer depth={0.15} cameraProgress={camProg}>{/* far background */}</ParallaxLayer>
+  <ParallaxLayer depth={0.45} cameraProgress={camProg}>{/* midground elements */}</ParallaxLayer>
+  <ParallaxLayer depth={0.85} cameraProgress={camProg}>{/* foreground UI */}</ParallaxLayer>
+  \`\`\`
+- **SheenOverlay** — Diagonal light sweep across UI cards and buttons on entrance.
+  \`\`\`tsx
+  <div style={{ position: "relative" }}>
+    <SheenOverlay startFrame={cardAppearFrame} width={cardWidth} angle={105} />
+    {/* card content */}
+  </div>
+  \`\`\`
+- **MotionBlurWhip** — Wrap fast-cut transitions and snap movements with cinematic blur.
+  \`\`\`tsx
+  <MotionBlurWhip frame={frame} startFrame={transitionStart} duration={12} maxBlur={16}>
+    {/* content that whip-cuts into frame */}
+  </MotionBlurWhip>
+  \`\`\`
 - **FilmGrain** — Subtle noise overlay for organic feel. Add as topmost layer: \`<FilmGrain opacity={0.03} />\`
 - **ContextualSectionHeader** — Large bold text above UI during cursor demos. \`<ContextualSectionHeader text="Feature Name" subtext="Context" startFrame={30} brand={BRAND} />\`
-- **SfxSequencer** — Places Audio elements for SFX events: \`<SfxSequencer events={interactionEvents} />\`
+- **SfxSequencer** — Places Audio elements for SFX events. MANDATORY on cursor/chameleon scenes with INTERACTION_SCRIPT — sound makes interactions feel real. Available sfx values: "click" | "whoosh" | "pop" | "type" | "success" | "swoosh". Pass the INTERACTION_SCRIPT array directly:
+  \`\`\`tsx
+  // Place OUTSIDE all wrappers, as a direct child of AbsoluteFill
+  <SfxSequencer events={INTERACTION_SCRIPT} />
+  // For manual events without INTERACTION_SCRIPT:
+  <SfxSequencer events={[{ frame: CLICK_FRAME, sfx: "click" }, { frame: SUBMIT_FRAME, sfx: "success" }]} />
+  \`\`\`
 - **AnimatedSidebar** — Staggered sidebar nav: \`<AnimatedSidebar appName="App" items={[{label, icon, isActive}]} brand={BRAND} startFrame={0} />\`
 - **AnimatedMetricCards** — Count-up metric cards: \`<AnimatedMetricCards cards={[{label, value, numericValue, trend, trendValue}]} brand={BRAND} columns={3} />\`
 - **AnimatedTable** — Staggered table reveal: \`<AnimatedTable columns={[{label, width}]} rows={[{cells, isHighlighted}]} brand={BRAND} />\`
 - **AnimatedChart** — SVG animated charts: \`<AnimatedChart type="line|bar|donut" dataPoints={[...]} color={BRAND.primary} brand={BRAND} />\`
 - **AnimatedForm** — Sequential form field reveal: \`<AnimatedForm title="" fields={[{label, type, value}]} submitLabel="" brand={BRAND} />\`
 - **ReconstructedAppShell** — Full app reconstruction from UISchema: \`<ReconstructedAppShell uiSchema={UI_SCHEMA} brand={BRAND} />\`
+- **AbstractSkeletonUI** — Background cognitive-masked UI: renders layout as geometric skeleton blocks (no readable text). Use for scenes where UI context is needed but the headline/cursor/nodes are the focus: \`<AbstractSkeletonUI brand={BRAND} uiSchema={UI_SCHEMA} opacity={0.75} />\`
+- **HeroSplit** — Pre-built 2-column layout (text left, visual right). Eliminates manual AbsoluteFill positioning: \`<HeroSplit left={<headlineBlock />} right={<ContentCard brand={BRAND}>...</ContentCard>} brand={BRAND} leftWeight={1} rightWeight={1.2} />\`
+- **AnimatedConnectionLine** — SVG connector that draws from point A to point B: \`<AnimatedConnectionLine x1={0.25} y1={0.4} x2={0.65} y2={0.35} startFrame={20} dashed curved color={\`\${BRAND.primary}55\`} />\`. x1/y1/x2/y2 are normalized (0–1).
+- **MaskedReveal** — Baseline clip-mask for headline reveals (MANDATORY for all main headlines): \`<MaskedReveal startFrame={20} delay={0}><div style={{fontSize:120,fontWeight:900}}>Headline</div></MaskedReveal>\`. Use \`delay\` to stagger multi-line headlines.
+- **useEntropyWithAttractor(strength, triggerFrame)** — Problem→AHA chaos engine. Returns \`{ getFloat, attractorProgress, chaosStrength }\`. Floating elements drift until \`triggerFrame\` then spring toward target. Use \`attractorProgress\` to lerp base positions: \`interpolate(attractorProgress, [0,1], [startX, targetX])\`.
+- **useStagger(index, baseFrame, delayPerItem)** — Returns per-element startFrame with stagger offset. MANDATORY for rendering 3+ sibling elements.
 - **cubicBezier(from, to, t, controlOffset?)** — Natural arc movement for cursors. Returns \`{x, y}\`. \`from\`/\`to\` are \`{x, y}\` objects, \`t\` is 0–1 spring progress, \`controlOffset\` defaults to 0.15.
   \`\`\`tsx
   const pos = cubicBezier(prevWaypoint, currentWaypoint, springProgress);
   // pos.x, pos.y — use for cursor position
   \`\`\`
-- **LightArcBg** — Animated near-white background with concentric arc lines + corner gradient blobs. Drop-in for light-themed scenes.
+- **AnimatedTopbar** — Tab bar with sliding active underline: \`<AnimatedTopbar tabs={[{label, isActive}]} breadcrumb="Projects / Settings" hasSearch hasAvatar brand={BRAND} startFrame={10} activeTabIndex={1} />\`
+- **SectionTitle** — Chapter title card: \`<SectionTitle title="Feature Name" subtitle="Optional context" icon="🔒" brand={BRAND} startFrame={10} />\`
+- **NotificationToast** — Slide-in notification: \`<NotificationToast icon="✅" title="Action complete" body="Details" brand={BRAND} startFrame={60} duration={90} />\`
+- **LightArcBg** — Light-theme textured background. Variants: "arcs", "grid" (default for B2B), "dots": \`<LightArcBg brand={BRAND} variant={GLOBAL_BG || "grid"} />\`
+- **GLOBAL_BG** — Background variant string ("arcs" | "grid" | "dots"), injected in scope — use with LightArcBg
+- **PersistentSectionLabel** — Top-left corner feature label. Stays pinned throughout a UI demo scene. Shows feature name in brand color + optional integration name. Use in EVERY showcase/cursor scene that belongs to a named feature section:
   \`\`\`tsx
-  // Always place as first child of AbsoluteFill for light-theme scenes:
-  <LightArcBg brand={BRAND} />
+  <PersistentSectionLabel featureName="Live Redaction" integrationIcon="📄" integrationName="Google Docs" brand={BRAND} startFrame={0} />
   \`\`\`
+- **FloatingShapes** — Small sharp geometric primitives (diamonds, circles, squares, arrows) that gently bob for concept/hook/intro scenes. NOT blurry orbs — these are crisp SVGs:
+  \`\`\`tsx
+  <FloatingShapes brand={BRAND} startFrame={0} />
+  \`\`\`
+- **ContentCard** — Clean white rounded rectangle app frame with soft shadow. No browser chrome, no bezel. WhatAStory style — use when showing app content without hardware context:
+  \`\`\`tsx
+  <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
+    <ContentCard brand={BRAND} startFrame={10}>
+      <img src={ATTACHED_IMAGES[0]} style={{ width: "100%", height: "100%", objectFit: "cover", objectPosition: "top" }} />
+    </ContentCard>
+  </div>
+  \`\`\`
+
+## WHATASTORY-STYLE SCENE PATTERNS (agency reference)
+
+These are the exact patterns used in premium B2B SaaS explainer videos. Use them as the default for light-theme brands.
+
+### Pattern A: Hook/Intro scene
+- LightArcBg (variant="grid") as base layer
+- Brand logo PNG centered at ~220px width inside a white ContentCard (400x280px) that springs in
+- FloatingShapes scattered around the card
+- NO headline text on this scene — logo IS the message
+
+### Pattern B: Concept/Callout scene (no UI)
+- LightArcBg (variant="grid") base + FloatingShapes
+- ONE large centered text line (~56px) with a KEY PHRASE in BRAND.primary color
+- Small icon (64x64px white circle with emoji) above the text, springs in at startFrame+10
+- Example: "In just a few clicks, you've deployed a" + colored span "complete security solution"
+
+### Pattern C: Feature UI Demo scene (most common)
+- LightArcBg (variant="grid") base
+- PersistentSectionLabel top-left with featureName and integrationName
+- ContentCard wrapping the screenshot or reconstructed UI, filling 75% of the frame
+- Cursor/interaction overlays at zIndex 100 inside the ContentCard
+
+### Pattern D: Section Title / Chapter Card
+- LightArcBg (variant="grid") base
+- SectionTitle centered — title, optional subtitle, optional icon
+- Clean and minimal, 3 seconds. NO FloatingShapes.
+
+### Pattern E: CTA scene
+- LightArcBg (variant="grid") base
+- Logo centered (~200px wide), springs in
+- Tagline: normal text + colored key phrase in BRAND.primary
+- Wide full-brand-color CTA button (~560px x 72px, borderRadius 12)
+
+## CINEMATIC MANDATORY RULES (3 non-negotiable quality gates)
+
+### Rule 1 — CinematicCamera + ParallaxLayer on showcase scenes (duration ≥ 210f)
+Any scene with duration ≥ 210 frames AND 3+ distinct visual layers MUST:
+1. Wrap ALL content in \`<CinematicCamera targetX={0.5} targetY={0.45} zoomTo={1.06}>\`
+2. Separate background, midground, and foreground into \`<ParallaxLayer>\` divs:
+\`\`\`tsx
+const camProg = spring({ frame: Math.min(frame, 60), fps, config: SPRING_CONFIGS.cinematic });
+<CinematicCamera targetX={0.5} targetY={0.42} zoomTo={1.06}>
+  <ParallaxLayer depth={0.12} cameraProgress={camProg}>{/* background: gradient/texture/photo */}</ParallaxLayer>
+  <ParallaxLayer depth={0.40} cameraProgress={camProg}>{/* midground: secondary UI elements, cards */}</ParallaxLayer>
+  <ParallaxLayer depth={0.80} cameraProgress={camProg}>{/* foreground: primary UI, device frame, key visual */}</ParallaxLayer>
+</CinematicCamera>
+\`\`\`
+This creates true 2.5D depth — background moves slower than foreground during zoom.
+
+### Rule 2 — GlowBloom on every CTA button + every metric/stat reveal
+ANY CTA button or hero metric number MUST be wrapped in GlowBloom:
+\`\`\`tsx
+// CTA button
+<GlowBloom color={BRAND.primary} blurPx={60} opacity={0.5} spread={1.8} animated>
+  <div style={{ /* button styles */ }}>
+    {BRAND.cta || "Start Free Trial"}
+  </div>
+</GlowBloom>
+
+// Hero metric / stat number
+<GlowBloom color={BRAND.primary} blurPx={80} opacity={0.35} spread={2.2}>
+  <div style={{ fontSize: 128, fontWeight: 900 }}>94%</div>
+</GlowBloom>
+\`\`\`
+This is the single most visible quality signal — it makes CTAs look like a $10K video.
+
+### Rule 3 — ChromaticAberration on cursor speed + scene entrances
+Wire chromatic aberration intensity to cursor velocity for interaction scenes:
+\`\`\`tsx
+// Cursor velocity → chromatic aberration
+const cursorDx = Math.abs((cur.x - prev.x) * width);
+const cursorDy = Math.abs((cur.y - prev.y) * height);
+const cursorSpeed = Math.sqrt(cursorDx * cursorDx + cursorDy * cursorDy) / 30;
+const chromaticIntensity = interpolate(cursorSpeed, [0, 15], [0, 0.55], { extrapolateRight: "clamp" });
+
+<ChromaticAberration intensity={chromaticIntensity} direction="horizontal">
+  {/* the cursor SVG and any fast-moving element */}
+</ChromaticAberration>
+\`\`\`
+For non-cursor scenes: apply ChromaticAberration at intensity 0.4 during scene entrance (first 8 frames), fading to 0:
+\`\`\`tsx
+const entranceChroma = interpolate(frame, [0, 8], [0.4, 0], { extrapolateRight: "clamp" });
+\`\`\`
 
 ## RESERVED NAMES (CRITICAL — never shadow these)
 
 spring, interpolate, useCurrentFrame, useVideoConfig, AbsoluteFill, Sequence,
 ATTACHED_IMAGES, getGlassCard, ParallaxLayer, SheenOverlay, MotionBlurWhip, SPRING_CONFIGS, EASINGS, Audio, BRAND,
 MeshGradientBg, CameraMotionBlur, useAudioSync, useBeat, WORD_TIMINGS, random,
+ChromaticAberration, GlowBloom, glowBloomStyle, DepthBlur,
 useTyping, usePopup, useAccordion, useDragItem,
 ChameleonInput, ChameleonHighlight, DropdownMenu,
-CinematicCamera, TaskDetailPanel, ModalOverlay, InputField, ChatBubble, SidebarNav, AppShell,
-cubicBezier, LightArcBg,
-GLOBAL_STYLE, FilmGrain, ContextualSectionHeader, SfxSequencer, AnimatedSidebar, AnimatedMetricCards, AnimatedTable, AnimatedChart, AnimatedForm, ReconstructedAppShell
+CinematicCamera, TaskDetailPanel, ModalOverlay, InputField, ChatBubble, SidebarNav, AppShell, HeroSplit,
+cubicBezier, LightArcBg, AnimatedConnectionLine,
+ActionCamera, SpotlightCutout, GhostHighlight,
+GLOBAL_STYLE, FilmGrain, ContextualSectionHeader, SfxSequencer, AnimatedSidebar, AnimatedMetricCards, AnimatedTable, AnimatedChart, AnimatedForm, ReconstructedAppShell, AbstractSkeletonUI,
+AnimatedTopbar, SectionTitle, NotificationToast, StatusBadge, TableActionButton,
+PersistentSectionLabel, FloatingShapes, ContentCard, GLOBAL_BG,
+useInteractionFeedback, ContextualBgPulse,
+useEntropy, useEntropyWithAttractor, useStagger, useMagnetic, SAFE_ZONES, CURSOR_STATE_DEFAULT, useCursorState, SyncedWord,
+MaskedReveal,
+HandwrittenLabel, PersonCard, STOCK_AVATARS, GarbledText, OrbitRing, BoldColorBg
+
+## NEW SCOPE COMPONENTS (already in scope — do NOT re-declare)
+
+- **HandwrittenLabel({ text, x, y, targetX?, targetY?, startFrame, brand, rotation? })** — Cursive annotation label with optional dotted leader line. x/y and targetX/targetY normalized 0–1. Uses Caveat cursive font at z:80+.
+  Example: \`<HandwrittenLabel text="Saves 6 hours/week" x={0.72} y={0.28} targetX={0.55} targetY={0.42} startFrame={30} brand={BRAND} />\`
+- **PersonCard({ photoIndex, name, role, accentColor?, startFrame, brand, size? })** — Real headshot photo card with role badge. photoIndex 0–7 maps to 8 Unsplash headshots. Springs in with SPRING_CONFIGS.snap. Perfect for problem/team/social-proof scenes.
+  Example: \`<PersonCard photoIndex={2} name="Alex Chen" role="Operations Lead" brand={BRAND} startFrame={20} size={96} />\`
+- **STOCK_AVATARS** — Array of 8 Unsplash headshot URLs (indices 0–7). Example: \`<Img src={STOCK_AVATARS[3]} style={{ width: 80, height: 80, borderRadius: "50%" }} />\`
+- **GarbledText({ finalText, resolveFrame, scrambleStrength?, startFrame, style })** — Scrambled chars that resolve to text at resolveFrame. For problem/chaos scenes.
+  Example: \`<GarbledText finalText="Q3 Revenue Report" resolveFrame={120} scrambleStrength={0.85} startFrame={20} style={{ fontSize: 36 }} />\`
+- **OrbitRing({ centerX?, centerY?, radius, color?, startFrame, dotSpeed?, brand })** — Dotted circle arc with traveling dot. centerX/Y normalized 0–1. For network/concept scenes.
+  Example: \`<OrbitRing centerX={0.5} centerY={0.5} radius={280} color={BRAND.primary} startFrame={15} dotSpeed={0.025} brand={BRAND} />\`
+- **BoldColorBg({ color, vignetteStrength? })** — Solid saturated background. ONLY for AHA/CONFIDENCE scenes. Example: \`<BoldColorBg color={BRAND.primary} vignetteStrength={0.12} />\`
+
+## VIOLATIONS — automatic failures, NEVER produce these
+
+These patterns produce broken or amateur output. Any violation = regenerate:
+
+1. **Math.random() inside component** — always use \`random('stable-seed')\` from Remotion scope
+2. **PARTICLES / ORBS / CONFETTI arrays declared inside component body** — always declare OUTSIDE the component function so they don't regenerate every frame (causes flickering)
+3. **Setting backgroundColor on the root AbsoluteFill** — NEVER set \`backgroundColor\` or \`background\` on your outermost \`AbsoluteFill\`. The master composition renders ONE persistent background across ALL scenes — overpainting it with a per-scene bg is the #1 cause of the "slideshow" look. Your root must be \`<AbsoluteFill>\` with NO background style (or explicitly \`style={{ background: 'transparent' }}\`). All inner elements (cards, panels, UI components) may have their own backgrounds normally.
+4. **fontSize < 72px for the main scene headline** — headlines must fill the frame; tiny text looks like a bug
+5. **Hardcoded hex color like "#6366f1"** — always reference BRAND.primary / BRAND.secondary / BRAND.text etc.
+6. **backdropFilter without WebkitBackdropFilter** — always pair them: \`{ backdropFilter: "blur(16px)", WebkitBackdropFilter: "blur(16px)" }\`
+7. **spring() with default damping** — never use bare \`spring({ frame, fps })\` without config; always pass \`config: SPRING_CONFIGS.entrance\` or explicit \`{ damping: 200, stiffness: 120 }\`
+8. **Interpolations without easing** — visible motion (card reveals, slides, fades) must use \`easing: EASINGS.easeOutCubic\` or similar; bare linear interpolation looks mechanical
+9. **Missing \`willChange: "transform"\` on elements animated every frame** — add it to every div that moves per-frame (device floats, orbs, cursor)
+10. **Declaring a variable that shadows a RESERVED NAME** — never declare \`const spring = ...\`, \`const Audio = ...\`, \`const BRAND = ...\` etc.
+11. **Text without maxWidth** — any headline, title, or label text MUST have \`maxWidth: "80%"\` (or explicit px width) + \`wordBreak: "break-word"\`. Text that overflows the frame is a hard failure.
+12. **whiteSpace: "nowrap" on headlines** — NEVER use nowrap on any text larger than 24px. Long product names WILL overflow.
+13. **Silent cursor/chameleon scenes** — Any scene with INTERACTION_SCRIPT MUST include \`<SfxSequencer events={INTERACTION_SCRIPT} />\`. A cursor clicking silently is an amateur output. Sound design is 50% of perceived quality.
+14. **Flat z-depth** — All content layers must be separated into bg (z:0), midground (z:10–50), foreground (z:100+). Every scene must have a visible background texture or color — never a plain solid fill as the only layer.
+
+## VISUAL NARRATIVE PRINCIPLES (agency quality)
+
+Every animated element must have PURPOSE. Ask: does this motion guide the viewer's attention, reinforce the emotion, or connect ideas? If not, remove it.
+
+**Progressive information reveal**: Never show everything at once. The most important element enters first. Supporting elements follow. The viewer's eye is guided in a deliberate sequence.
+
+**Purposeful empty space**: Agency-quality frames have breathing room. 80–120px padding from edges. One dominant element per scene — if two things compete for attention, one of them doesn't belong.
+
+**Typography as emotion**:
+- Problem/frustration scenes: tighter tracking, heavier weight, deeper color
+- Relief/solution scenes: looser tracking, lighter weight, more whitespace
+- CTA scenes: largest type in the video, brand color, full confidence
+
+**Animation speed matches emotion**:
+- Frustration scenes: fast, slightly erratic motion (spring stiffness: 180, damping: 14)
+- Relief/solution: smooth unhurried entry (spring stiffness: 60, damping: 200)
+- Feature demos: crisp and precise (spring stiffness: 120, damping: 200)
+- CTA: punchy entrance then stable hold (spring stiffness: 150, damping: 18)
 
 ## OUTPUT FORMAT (CRITICAL)
 
@@ -724,9 +1481,33 @@ export async function POST(req: Request) {
   );
 
   const skillContent = getCombinedSkillContent(newSkills);
-  const enhancedSystemPrompt = skillContent
-    ? `${SYSTEM_PROMPT}\n\n## SKILL-SPECIFIC GUIDANCE\n${skillContent}`
-    : SYSTEM_PROMPT;
+
+  // Phase 2.1: Tiered prompt architecture — inject context based on scene type
+  const promptLower = prompt.toLowerCase();
+  const hasCursor = detectedSkills.some(s => s.includes("cursor") || s.includes("chameleon"));
+  const hasVoiceover = promptLower.includes("voiceover") || promptLower.includes("word_timings") || promptLower.includes("voiceover_audio");
+  const isAhaOrRelief = promptLower.includes("aha moment") || promptLower.includes("relief") || promptLower.includes("confidence") || promptLower.includes("emotional intent: relief") || promptLower.includes("emotional intent: confidence");
+  const isComplex = prompt.length > 600 || hasCursor || detectedSkills.length > 2;
+
+  let tier2 = "";
+  if (hasCursor) {
+    tier2 += `\n## CURSOR SCENE REMINDER\n- Cursor renders OUTSIDE ActionCamera at z:100+\n- Use SfxSequencer for click sounds (MANDATORY)\n- CursorAnnotationPill during travel phases\n- useCursorState() now has variable travel duration (short/medium/long), dwell variance, and overshoot\n`;
+  }
+  if (hasVoiceover) {
+    tier2 += `\n## VOICEOVER REMINDER\n- <Audio src={VOICEOVER_AUDIO_URL} /> — DO NOT add background music\n- Sync key animations to WORD_TIMINGS via useAudioSync()\n`;
+  }
+  if (isAhaOrRelief) {
+    tier2 += `\n## WET HEADLINE REMINDER (MANDATORY for this scene type)\n- GlowBloom behind headline, SheenOverlay sweep, SPRING_CONFIGS.snap scale 0.92→1\n- BoldColorBg is available for CONFIDENCE scenes needing dramatic color fill\n`;
+  }
+
+  const TIER3_REFERENCE = isComplex ? `\n## QUICK REFERENCE\n### Spring Configs\nentrance: d:200 s:120 | snap: d:160 s:220 | float: d:22 s:70 | pop: d:8 s:150 | cinematic: d:200 s:80\n### Typography\nhero:128-160px/900 | scene-title:80-108px/800 | section:40-56px/700 | body:22-32px/400\n### Shadows\nLow: "0 1px 2px rgba(0,0,0,0.04), 0 4px 12px rgba(0,0,0,0.06)"\nMed: "0 2px 4px rgba(0,0,0,0.04), 0 8px 24px rgba(0,0,0,0.08), 0 24px 48px rgba(0,0,0,0.04)"\nHigh: "0 4px 8px rgba(0,0,0,0.04), 0 12px 32px rgba(0,0,0,0.08), 0 32px 64px rgba(0,0,0,0.06)"\n` : "";
+
+  const enhancedSystemPrompt = [
+    SYSTEM_PROMPT,
+    tier2,
+    TIER3_REFERENCE,
+    skillContent ? `\n## SKILL-SPECIFIC GUIDANCE\n${skillContent}` : "",
+  ].filter(Boolean).join("");
 
   // -------------------------------------------------------------------------
   // 3. Follow-up edit mode (non-streaming, structured JSON response)
@@ -887,26 +1668,40 @@ Analyze the request and decide: use targeted edits (type: "edit") for small chan
       hasImages ? `images: ${frameImages.length}` : "",
     );
 
-    const stream = await ai.models.generateContentStream({
-      model: modelName,
-      contents: [{ role: "user", parts: buildParts(initialPromptText, frameImages) }],
-      config: {
-        systemInstruction: enhancedSystemPrompt,
-        ...(thinkingBudget !== undefined && {
-          thinkingConfig: { thinkingBudget },
-        }),
-      },
-    });
+    // Retry up to 2× on transient per-minute 429s with the API's suggested delay.
+    // Does NOT retry daily quota exhaustion (retryDelay > 60s = daily limit hit).
+    let stream;
+    let lastError: unknown;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        stream = await ai.models.generateContentStream({
+          model: modelName,
+          contents: [{ role: "user", parts: buildParts(initialPromptText, frameImages) }],
+          config: {
+            systemInstruction: enhancedSystemPrompt,
+            ...(thinkingBudget !== undefined && { thinkingConfig: { thinkingBudget } }),
+          },
+        });
+        break; // success
+      } catch (err) {
+        lastError = err;
+        const msg = err instanceof Error ? err.message : String(err);
+        const retryMatch = msg.match(/"retryDelay"\s*:\s*"(\d+)s"/);
+        const delaySec = retryMatch ? parseInt(retryMatch[1], 10) : 0;
+        const isDailyQuota = msg.includes("PerDay") || delaySec > 60;
+        if (!msg.includes("429") || isDailyQuota || attempt === 2) throw err;
+        console.log(`429 rate-limit hit, retrying in ${delaySec || 5}s (attempt ${attempt + 1}/3)...`);
+        await new Promise(r => setTimeout(r, (delaySec || 5) * 1000));
+      }
+    }
+    if (!stream) throw lastError;
 
     const encoder = new TextEncoder();
 
     const readable = new ReadableStream({
       async start(controller) {
-        // Prepend skill metadata so the client can show which skills were used
         controller.enqueue(
-          encoder.encode(
-            `data: ${JSON.stringify({ type: "metadata", skills: detectedSkills })}\n\n`,
-          ),
+          encoder.encode(`data: ${JSON.stringify({ type: "metadata", skills: detectedSkills })}\n\n`),
         );
         controller.enqueue(
           encoder.encode(`data: ${JSON.stringify({ type: "text-start" })}\n\n`),
@@ -916,9 +1711,7 @@ Analyze the request and decide: use targeted edits (type: "edit") for small chan
           const text = chunk.text;
           if (text) {
             controller.enqueue(
-              encoder.encode(
-                `data: ${JSON.stringify({ type: "text-delta", delta: text })}\n\n`,
-              ),
+              encoder.encode(`data: ${JSON.stringify({ type: "text-delta", delta: text })}\n\n`),
             );
           }
         }
@@ -943,7 +1736,7 @@ Analyze the request and decide: use targeted edits (type: "edit") for small chan
       JSON.stringify({
         error: isQuota
           ? "Google AI quota exceeded. Add billing at aistudio.google.com or wait for your daily quota to reset."
-          : "Something went wrong while trying to reach Google AI APIs."
+          : "Something went wrong while trying to reach Google AI APIs.",
       }),
       { status: isQuota ? 429 : 500, headers: { "Content-Type": "application/json" } },
     );

@@ -14,13 +14,15 @@ export const RenderControls: React.FC<{
   fps: number;
   images?: string[];
   brand?: Record<string, string>;
-}> = ({ code, durationInFrames, fps, images = [], brand = {} }) => {
+  voiceovers?: Record<string, string>;
+}> = ({ code, durationInFrames, fps, images = [], brand = {}, voiceovers = {} }) => {
   const { renderMedia, state, undo } = useRendering({
     code,
     durationInFrames,
     fps,
     images,
     brand,
+    voiceovers,
   });
   const previousPropsRef = useRef({ code, durationInFrames, fps });
 

@@ -20,6 +20,8 @@ interface ChatInputProps {
   onModelChange: (model: ModelId) => void;
   isLoading: boolean;
   onGenerate: (model: ModelId, images?: string[]) => void;
+  /** When true: video exists — show edit-mode placeholder + @mention hint */
+  hasExistingScenes?: boolean;
 }
 
 export function ChatInput({
@@ -29,6 +31,7 @@ export function ChatInput({
   onModelChange,
   isLoading,
   onGenerate,
+  hasExistingScenes = false,
 }: ChatInputProps) {
   const {
     attachedImages,
@@ -79,7 +82,9 @@ export function ChatInput({
             onChange={(e) => onPromptChange(e.target.value)}
             onKeyDown={handleKeyDown}
             onPaste={handlePaste}
-            placeholder="Describe your product or video idea... (Enter to generate)"
+            placeholder={hasExistingScenes
+              ? "Edit the video… Use @intro, @scene-2 etc. to target a specific scene"
+              : "Describe your product or video idea… (Enter to generate)"}
             className="w-full bg-transparent text-foreground placeholder:text-muted-foreground-dim focus:outline-none resize-none text-sm min-h-[60px] max-h-[160px]"
             style={{ fieldSizing: "content" } as React.CSSProperties}
             disabled={isLoading}
@@ -165,7 +170,7 @@ export function ChatInput({
               className="bg-teal-600 text-white hover:bg-teal-500 h-8 px-4 text-xs font-medium gap-2"
             >
               <Film className="w-3.5 h-3.5" />
-              Generate Video
+              {hasExistingScenes ? "Edit" : "Generate Video"}
             </Button>
           </div>
         </div>

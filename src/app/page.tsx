@@ -15,16 +15,19 @@ const Home: NextPage = () => {
     prompt: string,
     model: ModelId,
     attachedImages?: string[],
+    imageUserDescriptions?: string[],
   ) => {
     setIsNavigating(true);
     // Store images in sessionStorage (too large for URL params)
     if (attachedImages && attachedImages.length > 0) {
-      sessionStorage.setItem(
-        "initialAttachedImages",
-        JSON.stringify(attachedImages),
-      );
+      sessionStorage.setItem("initialAttachedImages", JSON.stringify(attachedImages));
     } else {
       sessionStorage.removeItem("initialAttachedImages");
+    }
+    if (imageUserDescriptions && imageUserDescriptions.some((d) => d?.trim())) {
+      sessionStorage.setItem("initialImageUserDescriptions", JSON.stringify(imageUserDescriptions));
+    } else {
+      sessionStorage.removeItem("initialImageUserDescriptions");
     }
     const params = new URLSearchParams({ prompt, model });
     router.push(`/generate?${params.toString()}`);

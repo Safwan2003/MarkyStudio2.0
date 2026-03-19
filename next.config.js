@@ -1,6 +1,14 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
+  // Remotion renderer/bundler use native binaries — must not be bundled by Next.js
+  serverExternalPackages: [
+    "@remotion/renderer",
+    "@remotion/bundler",
+    "@remotion/compositor-linux-x64-gnu",
+    "@remotion/compositor-linux-x64-musl",
+    "esbuild",
+  ],
   // Turbopack config for Next.js 16+
   turbopack: {
     rules: {

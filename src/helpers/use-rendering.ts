@@ -1,100 +1,36 @@
 import { useCallback, useMemo, useState } from "react";
 import { z } from "zod";
 import { CompositionProps } from "../../types/constants";
-import { getProgress, renderVideo } from "../lambda/api";
+import { getLocalDownloadUrl, renderVideoLocally } from "../local/api";
 
 export type State =
-  | {
-      status: "init";
-    }
-  | {
-      status: "invoking";
-    }
-  | {
-      renderId: string;
-      bucketName: string;
-      progress: number;
-      status: "rendering";
-    }
-  | {
-      renderId: string | null;
-      status: "error";
-      error: Error;
-    }
-  | {
-      url: string;
-      size: number;
-      status: "done";
-    };
-
-const wait = async (milliSeconds: number) => {
-  await new Promise<void>((resolve) => {
-    setTimeout(() => {
-      resolve();
-    }, milliSeconds);
-  });
-};
+  | { status: "init" }
+  | { status: "invoking" }
+  | { status: "rendering"; progress: number }
+  | { status: "error"; error: Error }
+  | { status: "done"; url: string; size: number };
 
 export const useRendering = (inputProps: z.infer<typeof CompositionProps>) => {
-  const [state, setState] = useState<State>({
-    status: "init",
-  });
+  const [state, setState] = useState<State>({ status: "init" });
 
   const renderMedia = useCallback(async () => {
-    setState({
-      status: "invoking",
-    });
+    setState({ status: "invoking" });
     try {
-      const { renderId, bucketName } = await renderVideo({ inputProps });
-      setState({
-        status: "rendering",
-        progress: 0,
-        renderId: renderId,
-        bucketName: bucketName,
+      setState({ status: "rendering", progress: 0 });
+
+      const { jobId, size } = await renderVideoLocally(inputProps, (progress) => {
+        setState({ status: "rendering", progress });
       });
 
-      let pending = true;
-
-      while (pending) {
-        const result = await getProgress({
-          id: renderId,
-          bucketName: bucketName,
-        });
-        switch (result.type) {
-          case "error": {
-            setState({
-              status: "error",
-              renderId: renderId,
-              error: new Error(result.message),
-            });
-            pending = false;
-            break;
-          }
-          case "done": {
-            setState({
-              size: result.size,
-              url: result.url,
-              status: "done",
-            });
-            pending = false;
-            break;
-          }
-          case "progress": {
-            setState({
-              status: "rendering",
-              bucketName: bucketName,
-              progress: result.progress,
-              renderId: renderId,
-            });
-            await wait(1000);
-          }
-        }
-      }
+      setState({
+        status: "done",
+        url: getLocalDownloadUrl(jobId),
+        size,
+      });
     } catch (err) {
       setState({
         status: "error",
-        error: err as Error,
-        renderId: null,
+        error: err instanceof Error ? err : new Error(String(err)),
       });
     }
   }, [inputProps]);
@@ -103,11 +39,5 @@ export const useRendering = (inputProps: z.infer<typeof CompositionProps>) => {
     setState({ status: "init" });
   }, []);
 
-  return useMemo(() => {
-    return {
-      renderMedia,
-      state,
-      undo,
-    };
-  }, [renderMedia, state, undo]);
+  return useMemo(() => ({ renderMedia, state, undo }), [renderMedia, state, undo]);
 };

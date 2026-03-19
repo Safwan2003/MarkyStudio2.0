@@ -58,6 +58,21 @@ import premiumInteractiveUiSkill from "./premium-interactive-ui.md";
 import premiumLightArcBgSkill from "./premium-light-arc-bg.md";
 import premiumFeatureBundleCardsSkill from "./premium-feature-bundle-cards.md";
 import premiumReconstructedUiSkill from "./premium-reconstructed-ui.md";
+import premiumSectionTitleSkill from "./premium-section-title.md";
+import premiumAnimatedTopbarSkill from "./premium-animated-topbar.md";
+import premiumLightTexturedBgSkill from "./premium-light-textured-bg.md";
+import premiumNotificationToastSkill from "./premium-notification-toast.md";
+import premiumAppWalkthroughSkill from "./premium-app-walkthrough.md";
+import premiumBeforeAfterSkill from "./premium-before-after.md";
+import premiumMetricFlyoutSkill from "./premium-metric-flyout.md";
+import premiumTestimonialCardSkill from "./premium-testimonial-card.md";
+import premiumPhoneNotificationSkill from "./premium-phone-notification.md";
+import premiumNarrativeOverlaySkill from "./premium-narrative-overlay.md";
+import premiumTactileFeedbackSkill from "./premium-tactile-feedback.md";
+import premiumLiveActionCompositeSkill from "./premium-live-action-composite.md";
+import premiumBoldColorShowcaseSkill from "./premium-bold-color-showcase.md";
+import premiumPersonCardsSkill from "./premium-person-cards.md";
+import premiumChaosToUiResolveSkill from "./premium-chaos-to-ui-resolve.md";
 
 // Guidance skills (markdown files with patterns/rules)
 const GUIDANCE_SKILLS = [
@@ -118,6 +133,21 @@ const GUIDANCE_SKILLS = [
   "premium-light-arc-bg",
   "premium-feature-bundle-cards",
   "premium-reconstructed-ui",
+  "premium-section-title",
+  "premium-animated-topbar",
+  "premium-light-textured-bg",
+  "premium-notification-toast",
+  "premium-app-walkthrough",
+  "premium-before-after",
+  "premium-metric-flyout",
+  "premium-testimonial-card",
+  "premium-phone-notification",
+  "premium-narrative-overlay",
+  "premium-tactile-feedback",
+  "premium-live-action-composite",
+  "premium-bold-color-showcase",
+  "premium-person-cards",
+  "premium-chaos-to-ui-resolve",
 ] as const;
 
 // Example skills (complete working code references)
@@ -196,6 +226,21 @@ const guidanceSkillContent: Record<(typeof GUIDANCE_SKILLS)[number], string> = {
   "premium-light-arc-bg": premiumLightArcBgSkill,
   "premium-feature-bundle-cards": premiumFeatureBundleCardsSkill,
   "premium-reconstructed-ui": premiumReconstructedUiSkill,
+  "premium-section-title": premiumSectionTitleSkill,
+  "premium-animated-topbar": premiumAnimatedTopbarSkill,
+  "premium-light-textured-bg": premiumLightTexturedBgSkill,
+  "premium-notification-toast": premiumNotificationToastSkill,
+  "premium-app-walkthrough": premiumAppWalkthroughSkill,
+  "premium-before-after": premiumBeforeAfterSkill,
+  "premium-metric-flyout": premiumMetricFlyoutSkill,
+  "premium-testimonial-card": premiumTestimonialCardSkill,
+  "premium-phone-notification": premiumPhoneNotificationSkill,
+  "premium-narrative-overlay": premiumNarrativeOverlaySkill,
+  "premium-tactile-feedback": premiumTactileFeedbackSkill,
+  "premium-live-action-composite": premiumLiveActionCompositeSkill,
+  "premium-bold-color-showcase": premiumBoldColorShowcaseSkill,
+  "premium-person-cards": premiumPersonCardsSkill,
+  "premium-chaos-to-ui-resolve": premiumChaosToUiResolveSkill,
 };
 
 // Map example skill names to example IDs
@@ -303,6 +348,18 @@ Premium SaaS / Agency-quality template skills:
 - premium-light-arc-bg: light theme, arc background, white background, arc texture, near-white background, light B2B background, concentric arcs, subtle arc lines, light themed video
 - premium-feature-bundle-cards: feature bundle, integration cards, 3 cards, product overview with cards, three feature cards, capability cards, bundle overview, platform features, integration overview, plus connector cards
 - premium-reconstructed-ui: reconstructed ui, animated dashboard, vector reconstruction, animate independently, sidebar animation, metric cards animation, animated table, animated chart, animated form, vector dashboard, fully animated UI
+- premium-section-title: chapter title, section break, feature name card, divider scene, breathing room, title card between demos, section header
+- premium-animated-topbar: top navigation, tab bar, breadcrumb, horizontal tabs, tab switching, navigation bar, topbar animation, animated tabs
+- premium-light-textured-bg: light background, textured background, arc background, grid background, dot background, near-white, clean background, SaaS background, light theme bg
+- premium-notification-toast: notification, toast, success message, action result, floating notification, slide-in alert, ticket resolved, save confirmation, feedback popup
+- premium-app-walkthrough: multi-screen, app navigation, screen transition, persistent sidebar, tab switching, walkthrough, product tour, multiple pages, same app different screens, persistent shell
+- premium-before-after: before after, old way new way, split reveal, wipe reveal, painful process vs product, manual vs automated, spreadsheet vs product, contrast reveal, transformation, before after comparison, divider wipe, problem solution bridge, old tool vs new tool
+- premium-metric-flyout: multiple stats, satellite stats, hero metric plus supporting data, roi stats, data constellation, proof of impact, supporting statistics, 3 stats 4 stats, metric with context, stat cluster, data flyout, roi proof scene
+- premium-testimonial-card: testimonial, customer quote, single quote, word by word quote, pullquote, customer voice, editorial quote, review card, quote reveal, attribution, stars and quote, social proof quote
+- premium-phone-notification: push notification, ios notification, mobile notification, phone alert, real-time alert, new lead notification, mobile saas notification, frosted glass notification, app notification, notification overlay, crm alert, hr notification, helpdesk notification
+- premium-narrative-overlay: on-screen text, story text, narrative headline, bold copy overlay, section label, sub-line, kinetic narrative, outcome headline, emotional text, word-by-word reveal, story layer, text-driven narrative, visual storytelling, problem statement text, relief headline
+- premium-bold-color-showcase: bold color background, saturated bg, AHA moment reveal, confidence scene, dramatic background, brand-color fill, white card on color bg, punch scene, transformation reveal
+- premium-person-cards: team personas, avatar cards, person with role, headshot photo cards, named faces, disconnected team, frustrated user, persona showcase, team orbit cards, social proof photos, person with badge
 
 Code examples (complete working references):
 - example-histogram: animated bar chart with spring animations and @remotion/shapes

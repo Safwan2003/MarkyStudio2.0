@@ -1,4 +1,5 @@
 import { fileToBase64 } from "@/helpers/capture-frame";
+import { extractFramesFromVideo } from "@/lib/extractVideoFrames";
 import {
   useCallback,
   useRef,
@@ -9,13 +10,24 @@ import {
 } from "react";
 
 const MAX_ATTACHED_IMAGES = 4;
+const MAX_VIDEO_FRAMES = 20;
 const MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024; // 10MB per image
 const MAX_FILE_SIZE_MB = MAX_FILE_SIZE_BYTES / (1024 * 1024);
+const MAX_VIDEO_SIZE_BYTES = 200 * 1024 * 1024; // 200MB per video
+
+export interface VideoInfo {
+  fileName: string;
+  duration: number;
+  frameCount: number;
+}
 
 interface UseImageAttachmentsReturn {
   attachedImages: string[];
   isDragging: boolean;
   fileInputRef: React.RefObject<HTMLInputElement | null>;
+  videoInfo: VideoInfo | null;
+  isExtracting: boolean;
+  extractProgress: { current: number; total: number } | null;
   addImages: (newImages: string[]) => void;
   removeImage: (index: number) => void;
   clearImages: () => void;
@@ -29,49 +41,15 @@ interface UseImageAttachmentsReturn {
   clearError: () => void;
 }
 
-async function videoFileToFrameBase64(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const url = URL.createObjectURL(file);
-    const video = document.createElement("video");
-    video.preload = "metadata";
-    video.muted = true;
-    video.playsInline = true;
-
-    video.onloadedmetadata = () => {
-      // Seek to 1 second, or to 10% of duration if video is short
-      video.currentTime = Math.min(1, video.duration * 0.1);
-    };
-
-    video.onseeked = () => {
-      const canvas = document.createElement("canvas");
-      canvas.width = video.videoWidth;
-      canvas.height = video.videoHeight;
-      const ctx = canvas.getContext("2d");
-      if (!ctx) {
-        URL.revokeObjectURL(url);
-        reject(new Error("Could not get canvas context"));
-        return;
-      }
-      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-      const dataUrl = canvas.toDataURL("image/png");
-      URL.revokeObjectURL(url);
-      // Return base64 portion only (strip the data:image/png;base64, prefix)
-      resolve(dataUrl);
-    };
-
-    video.onerror = () => {
-      URL.revokeObjectURL(url);
-      reject(new Error("Failed to load video"));
-    };
-
-    video.src = url;
-  });
-}
+// videoFileToFrameBase64 replaced by extractFramesFromVideo (multi-frame)
 
 export function useImageAttachments(): UseImageAttachmentsReturn {
   const [attachedImages, setAttachedImages] = useState<string[]>([]);
   const [isDragging, setIsDragging] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [videoInfo, setVideoInfo] = useState<VideoInfo | null>(null);
+  const [isExtracting, setIsExtracting] = useState(false);
+  const [extractProgress, setExtractProgress] = useState<{ current: number; total: number } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const clearError = useCallback(() => {
@@ -100,38 +78,68 @@ export function useImageAttachments(): UseImageAttachmentsReturn {
     return validFiles;
   }, []);
 
-  const addImages = useCallback((newImages: string[]) => {
+  const addImages = useCallback((newImages: string[], isVideoFrames = false) => {
+    const maxCount = isVideoFrames ? MAX_VIDEO_FRAMES : MAX_ATTACHED_IMAGES;
     setAttachedImages((prev) => {
-      const combined = [...prev, ...newImages];
-      return combined.slice(0, MAX_ATTACHED_IMAGES);
+      // Video frames replace everything; regular images append up to limit
+      const combined = isVideoFrames ? newImages : [...prev, ...newImages];
+      return combined.slice(0, maxCount);
     });
   }, []);
 
   const removeImage = useCallback((index: number) => {
-    setAttachedImages((prev) => prev.filter((_, i) => i !== index));
+    setAttachedImages((prev) => {
+      const next = prev.filter((_, i) => i !== index);
+      return next;
+    });
+    // Clear video info if no images remain (or if removing from video frames)
+    setVideoInfo((prev) => prev);
   }, []);
 
   const clearImages = useCallback(() => {
     setAttachedImages([]);
+    setVideoInfo(null);
+    setExtractProgress(null);
   }, []);
 
   const processFiles = useCallback(
-    async (files: File[]): Promise<string[]> => {
+    async (files: File[]): Promise<{ images: string[]; isVideo: boolean }> => {
+      // Handle video files (take the first video; ignore others)
+      const videoFile = files.find((f) => f.type.startsWith("video/"));
+      if (videoFile) {
+        if (videoFile.size > MAX_VIDEO_SIZE_BYTES) {
+          setError(`Video too large (max 200MB): ${videoFile.name}`);
+          return { images: [], isVideo: true };
+        }
+        setIsExtracting(true);
+        setExtractProgress({ current: 0, total: MAX_VIDEO_FRAMES });
+        try {
+          const { frames, duration } = await extractFramesFromVideo(
+            videoFile,
+            1,
+            MAX_VIDEO_FRAMES,
+            (current, total) => setExtractProgress({ current, total }),
+          );
+          setVideoInfo({ fileName: videoFile.name, duration, frameCount: frames.length });
+          return { images: frames, isVideo: true };
+        } catch (e) {
+          setError(`Could not extract frames from video: ${videoFile.name}`);
+          return { images: [], isVideo: true };
+        } finally {
+          setIsExtracting(false);
+          setExtractProgress(null);
+        }
+      }
+
+      // Regular image files
       const results: string[] = [];
       for (const file of files) {
-        if (file.type.startsWith("video/")) {
-          try {
-            const frame = await videoFileToFrameBase64(file);
-            results.push(frame);
-          } catch {
-            setError(`Could not extract frame from video: ${file.name}`);
-          }
-        } else if (file.type.startsWith("image/")) {
+        if (file.type.startsWith("image/")) {
           const base64 = await fileToBase64(file);
           results.push(base64);
         }
       }
-      return results;
+      return { images: results, isVideo: false };
     },
     [],
   );
@@ -144,8 +152,8 @@ export function useImageAttachments(): UseImageAttachmentsReturn {
       );
       const validFiles = filterValidFiles(mediaFiles);
       if (validFiles.length > 0) {
-        const base64Images = await processFiles(validFiles);
-        addImages(base64Images);
+        const { images, isVideo } = await processFiles(validFiles);
+        if (images.length > 0) addImages(images, isVideo);
       }
       // Reset input so same file can be selected again
       e.target.value = "";
@@ -164,8 +172,8 @@ export function useImageAttachments(): UseImageAttachmentsReturn {
           .filter((f): f is File => f !== null);
         const validFiles = filterValidFiles(files);
         if (validFiles.length > 0) {
-          const base64Images = await processFiles(validFiles);
-          addImages(base64Images);
+          const { images } = await processFiles(validFiles);
+          if (images.length > 0) addImages(images, false);
         }
       }
     },
@@ -193,8 +201,8 @@ export function useImageAttachments(): UseImageAttachmentsReturn {
       );
       const validFiles = filterValidFiles(mediaFiles);
       if (validFiles.length > 0) {
-        const base64Images = await processFiles(validFiles);
-        addImages(base64Images);
+        const { images, isVideo } = await processFiles(validFiles);
+        if (images.length > 0) addImages(images, isVideo);
       }
     },
     [addImages, filterValidFiles, processFiles],
@@ -204,6 +212,9 @@ export function useImageAttachments(): UseImageAttachmentsReturn {
     attachedImages,
     isDragging,
     fileInputRef,
+    videoInfo,
+    isExtracting,
+    extractProgress,
     addImages,
     removeImage,
     clearImages,
@@ -212,7 +223,7 @@ export function useImageAttachments(): UseImageAttachmentsReturn {
     handleDragOver,
     handleDragLeave,
     handleDrop,
-    canAddMore: attachedImages.length < MAX_ATTACHED_IMAGES,
+    canAddMore: !videoInfo && attachedImages.length < MAX_ATTACHED_IMAGES,
     error,
     clearError,
   };

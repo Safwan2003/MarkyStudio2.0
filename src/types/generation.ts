@@ -46,6 +46,12 @@ export interface ScreenTransition {
 export interface ScreenFlow {
   screens: { index: number; description: string }[];
   transitions: ScreenTransition[];
+  /** Visual energy detected by flow-analyze — drives musicStyle + spring stiffness in planner */
+  energyLevel?: "high" | "medium" | "calm";
+  /** UI element density across screens: 0=sparse, 1=very dense */
+  visualComplexity?: number;
+  /** Interaction pacing detected from recording */
+  uiPace?: "fast" | "slow";
 }
 
 /** A single cursor waypoint — normalized coordinates (0–1) within the video frame. */
@@ -93,13 +99,25 @@ export interface InteractionEvent {
   };
   /** Sound effect to trigger at this event frame */
   sfx?: "click" | "whoosh" | "pop" | "type" | "success" | "swoosh";
+  /** Small floating pill label to show next to cursor during this event (ambient annotation) */
+  annotation?: string;
+  /**
+   * Visual effect to apply to the target element during the hover pre-state (before click fires).
+   * The LLM uses this to drive useCursorState's isHovering/hoverProgress values.
+   * "glow"       — brand-color box-shadow grows 0→20px
+   * "focus-ring" — 2px brand-color outline appears
+   * "squish"     — element scale 1→0.97 (like being pressed)
+   * "tooltip"    — small floating label appears above cursor
+   * "brighten"   — filter brightness 1→1.2
+   */
+  preClickEffect?: "glow" | "focus-ring" | "squish" | "tooltip" | "brighten";
 }
 
 export interface ScenePlan {
   id: number;
   title: string;
   prompt: string;
-  skill: string;
+  skills: string[];
   durationInFrames: number;
   /** Which uploaded image (0-based index) is primarily used in this scene. Undefined = use all images. */
   imageIndex?: number;
@@ -109,16 +127,50 @@ export interface ScenePlan {
   screenFlow?: ScreenFlow;
   /** Timed interaction script: maps video actions → Remotion frame numbers. Used by chameleon-ui scenes. */
   interactionScript?: InteractionEvent[];
-  /** AI-written narration script for this scene (15–25 words). Shown in plan editor, editable by user. */
+  /** AI-written narration script for this scene. Word count must match duration × 2.5 words/sec. */
   voiceoverText?: string;
+  /** Emotional intent this scene must create in the viewer: FRUSTRATION | RELIEF | CONFIDENCE | TRUST | URGENCY */
+  emotionalIntent?: string;
+  /** True for the single scene that delivers the core product transformation ("aha moment"). Gets special animation treatment. */
+  isAhaMoment?: boolean;
   /** Pre-generated ElevenLabs audio as a base64 data URI. Injected as VOICEOVER_AUDIO_URL in compiler scope. */
   voiceoverAudioUrl?: string;
   /** Word-level timestamps synced from TTS. Injected as WORD_TIMINGS in compiler scope for useAudioSync(). */
   wordTimings?: { word: string; startFrame: number; endFrame: number }[];
   /** Cinematic transition into this scene from the previous one. */
-  transition?: "fade" | "slide" | "scale" | "flash" | "none";
+  transition?: "fade" | "slide" | "scale" | "flash" | "none" | "cameraPan" | "zoomThrough";
+  /** Normalized 0–1 coordinate the camera zooms INTO as this scene exits.
+   * Set this on Scene N when you want the camera to travel through a UI element into Scene N+1.
+   * Scene N+1 should have transition: "zoomThrough" to receive the camera arrival.
+   * x/y = center of the target element (e.g. a CTA button or feature card). */
+  exitAnchor?: { x: number; y: number };
   /** Vision-extracted structural UI schema for reconstructed UI scenes */
   uiSchema?: UISchema;
+  /** Stage direction embedded in the prompt for cinematic guidance (camera moves, emotional arc) */
+  stageDirection?: string;
+  /** Visual anchor carried across scenes — same icon/element transitions from broken→resolved state */
+  visualAnchor?: {
+    /** Emoji or SVG id representing the anchor element */
+    icon: string;
+    /** Color in the broken/problem state (e.g. "#ef4444" red) */
+    colorFrom: string;
+    /** Color in the resolved/success state (e.g. "#22c55e" green) */
+    colorTo: string;
+    /** Semantic label for the prompt system to reference (e.g. "missed_deadline") */
+    label: string;
+  };
+  /** Persistent label shown above browser chrome / section divider for this scene */
+  sectionLabel?: string;
+  /** Volume multiplier for background music: 0.5 (quiet/pain) to 1.5 (loud/CTA) */
+  musicVolume?: number;
+  /** True if this scene is part of a persistent-shell app walkthrough sequence */
+  isWalkthroughScene?: boolean;
+  /** MorphPortal: normalized 0–1 rect of the element that visually exits this scene.
+   *  The element is exported so the next scene can morph from it via morphImport. */
+  morphExport?: { id: string; rect: { x: number; y: number; w: number; h: number } };
+  /** MorphPortal: normalized 0–1 rect where the exported element arrives in THIS scene.
+   *  useMorphEntrance(MORPH_FROM, morphImport.rect) springs it into position. */
+  morphImport?: { id: string; rect: { x: number; y: number; w: number; h: number } };
 }
 
 /**
@@ -153,6 +205,12 @@ export interface BrandTokens {
   url?: string;
   /** CTA button label — used as BRAND.cta. E.g. "Start Free Trial" */
   cta?: string;
+  /** Music mood — drives track selection in premium-audio skill and master music player */
+  musicStyle?: string;
+  /** Display font for dramatic headlines (e.g. "Playfair Display") */
+  displayFont?: string;
+  /** Handwriting/annotation font (defaults to 'Caveat') */
+  annotationFont?: string;
 }
 
 export interface FullVideoPlan {
@@ -161,6 +219,10 @@ export interface FullVideoPlan {
   screenFlow?: ScreenFlow;
   /** Global background skill applied across all scenes for visual continuity */
   bgSkill?: string;
+  /** Global background variant: "arcs" | "grid" | "dots" */
+  globalBg?: string;
+  /** One-sentence description of the persistent visual motif that threads all scenes */
+  globalVisualThread?: string;
 }
 
 // ─── UI Reconstruction Schema ────────────────────────────────────────────────

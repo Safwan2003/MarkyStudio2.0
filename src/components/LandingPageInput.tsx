@@ -19,6 +19,7 @@ interface LandingPageInputProps {
     prompt: string,
     model: ModelId,
     attachedImages?: string[],
+    imageUserDescriptions?: string[],
   ) => void;
   isNavigating?: boolean;
   showCodeExamplesLink?: boolean;
@@ -28,26 +29,31 @@ export function LandingPageInput({
   onNavigate,
   isNavigating = false,
 }: LandingPageInputProps) {
-  const [productName, setProductName] = useState("Far East Trading");
+  const [productName, setProductName] = useState("MarkyTech");
   const [description, setDescription] = useState(
-    "Japan's largest online used car export marketplace. Browse over 10,000 verified Japanese vehicles — sedans, SUVs, hybrids, and sports cars — from trusted dealers with transparent FOB pricing and worldwide shipping direct from Japan.",
+    "A Karachi-based digital agency delivering cutting-edge AI-powered solutions, custom web & mobile development, and performance-driven digital marketing — helping businesses worldwide transform, scale, and grow.",
   );
-  const [audience, setAudience] = useState("International car buyers & importers worldwide");
+  const [audience, setAudience] = useState("Enterprises & growth-stage startups seeking digital transformation");
   const [features, setFeatures] = useState([
-    "10,000+ verified Japanese vehicles",
-    "Transparent FOB pricing from $500",
-    "Worldwide export & door-to-door shipping",
+    "Agentic AI & intelligent process automation",
+    "Custom web, mobile & AWS cloud solutions",
+    "Digital marketing: SEO, PPC & social media",
   ]);
-  const [cta, setCta] = useState("Find Your Car");
+  const [cta, setCta] = useState("Start Your Project");
   const [model, setModel] = useState<ModelId>("gemini-2.5-flash:none");
-  const [brandColors, setBrandColors] = useState<string[]>(["#e8192c", "#1a1a2e"]);
-  const [targetUrl, setTargetUrl] = useState("https://fareasttrading.jp");
+  const [brandColors, setBrandColors] = useState<string[]>(["#2563EB", "#7C3AED"]);
+  const [targetUrl, setTargetUrl] = useState("https://markytech.com");
+
+  const [imageUserDescriptions, setImageUserDescriptions] = useState<string[]>([]);
 
   const {
     attachedImages,
     isDragging,
     fileInputRef,
-    removeImage,
+    videoInfo,
+    isExtracting,
+    extractProgress,
+    removeImage: removeImageBase,
     handleFileSelect,
     handleDragOver,
     handleDragLeave,
@@ -56,6 +62,12 @@ export function LandingPageInput({
     error,
     clearError,
   } = useImageAttachments();
+
+  // Wrap removeImage to also remove the corresponding description
+  const removeImage = (index: number) => {
+    removeImageBase(index);
+    setImageUserDescriptions((prev) => prev.filter((_, i) => i !== index));
+  };
 
   // Auto-clear error after 5 seconds
   useEffect(() => {
@@ -108,10 +120,12 @@ export function LandingPageInput({
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!isValid || isNavigating) return;
+    const activeDescriptions = imageUserDescriptions.filter((_, i) => i < attachedImages.length);
     onNavigate(
       buildProductPrompt(),
       model,
       attachedImages.length > 0 ? attachedImages : undefined,
+      activeDescriptions.some((d) => d.trim()) ? activeDescriptions : undefined,
     );
   };
 
@@ -123,11 +137,19 @@ export function LandingPageInput({
 
   return (
     <div className="flex flex-col items-center justify-center flex-1 px-4">
-      <h1 className="text-5xl font-bold text-white mb-3 text-center">
-        Create your product demo video
+      <div className="flex items-center gap-2 mb-4 justify-center">
+        <span className="text-xs font-semibold tracking-widest uppercase text-muted-foreground border border-border rounded-full px-3 py-1">
+          Powered by MarkyTech
+        </span>
+      </div>
+      <h1 className="text-5xl font-bold text-white mb-3 text-center leading-tight">
+        Generate agency-quality<br />
+        <span className="bg-gradient-to-r from-blue-400 to-violet-400 bg-clip-text text-transparent">
+          product demo videos
+        </span>
       </h1>
-      <p className="text-lg text-muted-foreground mb-10 text-center">
-        Fill in the details. We&apos;ll handle the rest.
+      <p className="text-lg text-muted-foreground mb-10 text-center max-w-xl">
+        Describe your product. Upload screenshots. Get a WhatAStory-quality explainer video in minutes.
       </p>
 
       <form onSubmit={handleSubmit} className="w-full max-w-3xl">
@@ -152,7 +174,7 @@ export function LandingPageInput({
                 type="text"
                 value={productName}
                 onChange={(e) => setProductName(e.target.value)}
-                placeholder="e.g. Acme Analytics"
+                placeholder="e.g. MarkyTech, Stripe, Notion"
                 className="bg-background border border-border rounded-lg px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground-dim focus:outline-none focus:border-foreground/40 transition-colors"
                 disabled={isNavigating}
                 autoFocus
@@ -166,7 +188,7 @@ export function LandingPageInput({
                 type="text"
                 value={audience}
                 onChange={(e) => setAudience(e.target.value)}
-                placeholder="e.g. SaaS founders"
+                placeholder="e.g. Enterprise CTOs & startup founders"
                 className="bg-background border border-border rounded-lg px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground-dim focus:outline-none focus:border-foreground/40 transition-colors"
                 disabled={isNavigating}
               />
@@ -181,7 +203,7 @@ export function LandingPageInput({
             <textarea
               value={description}
               onChange={(e) => setDescription(e.target.value)}
-              placeholder="e.g. Acme Analytics helps growth teams track user behaviour across the entire funnel in real time."
+              placeholder="e.g. MarkyTech builds AI-powered web & mobile solutions that help businesses automate workflows, scale faster, and outperform competition."
               rows={2}
               className="bg-background border border-border rounded-lg px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground-dim focus:outline-none focus:border-foreground/40 resize-none transition-colors"
               disabled={isNavigating}
@@ -218,7 +240,7 @@ export function LandingPageInput({
                 type="text"
                 value={cta}
                 onChange={(e) => setCta(e.target.value)}
-                placeholder="e.g. Start free trial"
+                placeholder="e.g. Start Your Project"
                 className="w-1/2 bg-background border border-border rounded-lg px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground-dim focus:outline-none focus:border-foreground/40 transition-colors"
                 disabled={isNavigating}
               />
@@ -239,24 +261,99 @@ export function LandingPageInput({
               Screenshots / Screen recording <span className="text-muted-foreground-dim">(optional)</span>
             </label>
 
-            {/* Uploaded previews */}
-            {attachedImages.length > 0 && (
-              <div className="flex gap-2 flex-wrap mb-1">
+            {/* Video extraction progress */}
+            {isExtracting && extractProgress && (
+              <div className="rounded-lg border border-border p-3 bg-background/50">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-xs text-muted-foreground">Extracting frames…</span>
+                  <span className="text-xs text-foreground font-medium tabular-nums">
+                    {extractProgress.current}/{extractProgress.total}
+                  </span>
+                </div>
+                <div className="w-full h-1.5 bg-muted rounded-full overflow-hidden">
+                  <div
+                    className="h-full bg-teal-500 rounded-full transition-all duration-150"
+                    style={{ width: `${(extractProgress.current / extractProgress.total) * 100}%` }}
+                  />
+                </div>
+              </div>
+            )}
+
+            {/* Video mode: frame strip */}
+            {videoInfo && attachedImages.length > 0 && !isExtracting && (
+              <div className="rounded-lg border border-border p-2.5 bg-background/50">
+                <div className="flex items-center justify-between mb-2">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className="text-xs text-foreground font-medium truncate max-w-[200px]">
+                      {videoInfo.fileName}
+                    </span>
+                    <span className="text-[10px] text-muted-foreground bg-muted rounded-full px-2 py-0.5 flex-shrink-0">
+                      {Math.round(videoInfo.duration)}s · {videoInfo.frameCount} frames
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => { removeImage(0); }}
+                    className="text-muted-foreground hover:text-destructive transition-colors flex-shrink-0"
+                    title="Remove video"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+                {/* Show 5 evenly-spaced frame thumbnails */}
+                <div className="flex gap-1.5">
+                  {[0, 0.25, 0.5, 0.75, 1].map((t) => {
+                    const idx = Math.min(Math.round(t * (attachedImages.length - 1)), attachedImages.length - 1);
+                    return (
+                      /* eslint-disable-next-line @next/next/no-img-element */
+                      <img
+                        key={idx}
+                        src={attachedImages[idx]}
+                        alt={`Frame ${idx + 1}`}
+                        className="flex-1 h-12 rounded object-cover border border-border/50"
+                      />
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* Regular image previews */}
+            {!videoInfo && attachedImages.length > 0 && (
+              <div className="flex gap-3 flex-wrap mb-1">
                 {attachedImages.map((img, index) => (
-                  <div key={index} className="relative flex-shrink-0">
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img
-                      src={img}
-                      alt={`Attached ${index + 1}`}
-                      className="h-16 w-auto rounded border border-border object-cover"
+                  <div key={index} className="flex flex-col gap-1 flex-shrink-0 w-24">
+                    <div className="relative">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={img}
+                        alt={`Attached ${index + 1}`}
+                        className="h-16 w-full rounded border border-border object-cover"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => removeImage(index)}
+                        className="absolute -top-1.5 -right-1.5 bg-background border border-border rounded-full p-0.5 hover:bg-destructive hover:text-destructive-foreground transition-colors"
+                      >
+                        <X className="w-3 h-3" />
+                      </button>
+                    </div>
+                    <input
+                      type="text"
+                      value={imageUserDescriptions[index] ?? ""}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        setImageUserDescriptions((prev) => {
+                          const next = [...prev];
+                          while (next.length <= index) next.push("");
+                          next[index] = v;
+                          return next;
+                        });
+                      }}
+                      placeholder="What's shown?"
+                      disabled={isNavigating}
+                      className="w-full bg-background border border-border rounded px-1.5 py-0.5 text-[10px] text-foreground placeholder:text-muted-foreground-dim focus:outline-none focus:border-foreground/40 transition-colors"
                     />
-                    <button
-                      type="button"
-                      onClick={() => removeImage(index)}
-                      className="absolute -top-1.5 -right-1.5 bg-background border border-border rounded-full p-0.5 hover:bg-destructive hover:text-destructive-foreground transition-colors"
-                    >
-                      <X className="w-3 h-3" />
-                    </button>
                   </div>
                 ))}
               </div>
@@ -278,7 +375,7 @@ export function LandingPageInput({
                 }`}
               >
                 <Upload className="w-4 h-4" />
-                <span>Drop screenshots or screen recording, or click to browse</span>
+                <span>Drop product screenshots or a screen recording here — or click to browse</span>
               </button>
             )}
 
@@ -375,9 +472,9 @@ export function LandingPageInput({
               type="submit"
               disabled={!isValid || isNavigating}
               loading={isNavigating}
-              className="bg-foreground text-background hover:bg-gray-200 px-5"
+              className="bg-gradient-to-r from-blue-500 to-violet-500 hover:from-blue-400 hover:to-violet-400 text-white font-semibold px-6 border-0"
             >
-              Generate →
+              {isNavigating ? "Generating…" : "Generate Video →"}
             </Button>
           </div>
         </div>

@@ -1,1744 +1,678 @@
 # MarkyStudio — Complete System Context
 
-> Last updated: 2026-03-14 — includes 10 targeted pipeline improvements
-
-> Generated for Gemini/Kimi diagnostic session. Every component, rule, and API documented exhaustively.
-
----
-
-## RECENT IMPROVEMENTS (2026-03-14)
-
-10 targeted changes since last session:
-
-1. **`cubicBezier` + `LightArcBg` added to compiler scope** — both are now pre-built scope constants; LLM must never re-declare them. `LightArcBg` replaces any custom arc/bg implementation for light themes.
-2. **`withFade` → `withTransition`** — full transition system upgrade: slide (translateX 80→0), scale (1.06→1), flash (white burst 0.85→0 over 6 frames), and error boundary (dark placeholder on render throw). `TRANSITION_FRAMES = 20` (was `FADE_FRAMES = 8`).
-3. **`createMasterComponent` now accepts `musicUrl` + `brand`** — background music injected via CDN URLs; track selected by `brand.musicStyle ?? brand.accentName ?? "cinematic"`.
-4. **CDN audio** — music tracks and SFX both now point to Pixabay CDN URLs (no local `/audio/` dependency). All 6 SFX types and 5 music styles available.
-5. **Audio-visual alignment** — `alignSceneDurations()` in `src/lib/alignScenes.ts` auto-adjusts `durationInFrames` per scene to match ElevenLabs word timing + 35-frame tail. Called after voiceover prefetch, before generation.
-6. **Multi-image story flow** — `generateFullVideo` now detects story flow via `/api/flow-analyze` when ≥2 images; shows `pendingFlow` for user review; `approveFlow()` routes forward with confirmed `ScreenFlow` + `waypointsByImage`. `runPlan` extracted as shared helper.
-7. **SFX auto-assignment in plan route** — `buildInteractionScriptFromTransition` now attaches `sfx` fields: `type`+`success` for search/type events, `click` for click/navigate, `whoosh` for hover/scroll. Also adds submit-button event after type sequences.
-8. **Light theme enforcement** — plan prompt now instructs "in EVERY scene prompt, use `<LightArcBg brand={BRAND} />` as first child" for light B2B brands. Generate prompt adds LIGHT THEME SCENE RULES block. `bgSkill: "premium-light-arc-bg"` auto-output when brand.style === "light".
-9. **Inline UI decompose in plan route** — `/api/plan` now runs UI schema decomposition directly (not just via `/api/ui-decompose` endpoint) using `uiDecomposePromise` in parallel with brand/description extraction. First image only; non-fatal.
-10. **`cacheKey` now includes `durationInFrames`** — prevents cache collisions when duration changes after audio alignment.
+> Last updated: 2026-03-18 — **Gap analysis fully closed**: (1) layoutTopology variety system replaces 40/60 mandate; (2) DepthStack true 2.5D Z-separation; (3) useVitality hook + cursor hover pre-state (isHovering/hoverProgress); (4) premium-chaos-to-ui-resolve skill; (5) AnimatedHighlighter SVG scribble; (6) beat-driven choreography (useBeatClock, snapToDownbeat, MUSIC_BPM); (7) zoomThrough spatial anchor transitions (exitAnchor field, match-cut renderer).
 
 ---
 
 ## 1. SYSTEM OVERVIEW
 
-**MarkyStudio** is an AI code-to-video pipeline. The user provides a text prompt (and optionally product screenshots or video frames). The system plans a multi-scene narrative video, generates one React/Remotion component per scene via an LLM, compiles them in-browser with Babel, and plays back the composite video using Remotion's `<Player>`.
+**MarkyStudio** is an AI code-to-video pipeline. User provides a text prompt + optional product screenshots or video frames → system plans a multi-scene narrative video → generates one React/Remotion component per scene via LLM → compiles in-browser with Babel → live preview via Remotion `<Player>`.
 
 ### Stack
 - **Framework**: Next.js 14 (App Router), TypeScript
-- **Video runtime**: Remotion (React-based frame-accurate video)
-- **LLM**: Google Gemini via `@google/genai` SDK
-- **In-browser compilation**: `@babel/standalone` (transpiles LLM-generated TSX → JS at runtime)
-- **Audio**: ElevenLabs TTS via `/api/tts`; SFX via Pixabay CDN (6 types); background music via Pixabay CDN (5 styles)
+- **Video runtime**: Remotion (React-based, 1920×1080 / 30fps)
+- **LLM**: Google Gemini via `@google/genai` SDK (model: `gemini-2.5-flash`)
+- **In-browser compilation**: `@babel/standalone`
+- **Audio**: ElevenLabs TTS via `/api/tts`; SFX + music via Pixabay CDN
 
 ### Primary User Flow
-1. User enters a product description in `LandingPageInput`
+1. User enters product description in `LandingPageInput`
 2. Optionally attaches screenshots or video frames (base64 data URLs)
-3. **NEW (2026-03-14)**: If ≥2 images → `/api/flow-analyze` auto-detects story flow + cursor waypoints → `ScreenFlowEditor` shown for user review/edit → `approveFlow()` called
-4. `/api/plan` — runs in parallel: (a) brand extraction via Vision, (b) image descriptions, (c) UI schema decompose, (d) narrative planning → returns `FullVideoPlan` with scenes, brand, bgSkill, globalBg
+3. If ≥5 images → `/api/flow-analyze` detects story flow + cursor waypoints + energy → `ScreenFlowEditor` shown for review → `approveFlow()` called
+   *(If ≤4 images: flow-analyze is skipped — planner infers flow directly from images)*
+4. `/api/plan` — parallel: (a) brand+descriptions combined call, (b) tiered narrative summary for 3+ images. Returns `FullVideoPlan` with scenes, brand, bgSkill, globalBg, `uiSchemas` embedded
 5. `ScenePlanEditor` shown — user edits/confirms scene order, skills, waypoints
 6. `startGeneration()` — prefetches ElevenLabs TTS, runs `alignSceneDurations()`, then sequentially generates each scene
-7. `/api/generate` — streaming SSE; skill content injected; LLM outputs TSX code per scene
-8. `compileCode()` — in-browser Babel transpiles TSX, injects scope constants, returns React component
-9. `createMasterComponent()` — wraps all scenes in `<Sequence>` with withTransition(); injects music
-10. Remotion `<Player>` renders live video preview at 1920×1080 / 30fps
+7. `/api/generate` — streaming SSE; tiered system prompt + skill content injected; LLM outputs TSX per scene
+8. `compileCode()` — Babel transpiles TSX, `postProcessCode()` auto-adds `WebkitBackdropFilter`, injects scope constants
+9. `createMasterComponent()` — wraps scenes in `<Sequence>` with `withTransition()`; injects music (per-scene volume), SFX, section labels, FilmGrain, Vignette
+10. Remotion `<Player>` renders live video preview
 
 ---
 
-## 2. PIPELINE ARCHITECTURE
+## 2. API COST OPTIMIZATIONS (implemented 2026-03-17)
 
-### 2.1 API Endpoints
+For a typical 3-screenshot, 6-scene video: **~12 Gemini calls → ~5-6 calls** (50%+ reduction).
+
+| Optimization | Savings |
+|---|---|
+| Brand extraction + image descriptions merged into 1 call | -1 call |
+| UI schema extraction merged into narrative planner response | -1 to -3 calls |
+| `cachedBrand` passed client→server on regeneration | -1 call |
+| Flow-analyze skipped for ≤4 images | -1 call |
+| Smart frame deduplication (20 → 12 max frames) | -40% tokens on video recordings |
+| Vision call skipped when cursor waypoints already have box data | -0 to -2 calls |
+| Audit only runs on `isAhaMoment === true` scenes (not all imageIndex=0) | -1 to -2 calls |
+
+---
+
+## 3. PIPELINE ARCHITECTURE
+
+### 3.1 API Endpoints
 
 | Route | Purpose |
 |---|---|
-| `POST /api/plan` | Narrative planning: vision brand extraction, UI schema decomposition, scene plan generation |
+| `POST /api/plan` | Narrative planning: combined brand+desc extraction, inline UI schema, scene planning |
 | `POST /api/generate` | Scene code generation (streaming SSE) + follow-up edits (JSON) |
-| `POST /api/vision` | UI element detection from screenshot: returns `{elements: [{label, x, y, w?, h?, elementType?}]}` |
-| `POST /api/critique` | (Legacy/unused by default) quality critique |
-| `POST /api/audit` | Visual quality audit of generated code; returns `{passed, score, issues, fixes}` |
-| `POST /api/tts` | ElevenLabs TTS: returns `{audioUrl, wordTimings}` |
-| `POST /api/align` | Audio/scene alignment (unused in main flow) |
-| `POST /api/flow-analyze` | Vision analysis of uploaded screenshots/video frames → `ScreenFlow` (transitions + bounding boxes). Called by `generateFullVideo` when ≥2 images uploaded. 2-pass pipeline for ≥8 frames (video recordings). |
-| `POST /api/ui-decompose` | Standalone UI decomposition (also called inline in `/api/plan`) |
+| `POST /api/vision` | UI element detection from screenshot → `{elements: [{label, x, y, w, h, elementType}]}` |
+| `POST /api/audit` | Visual quality audit → `{passed, score, issues, fixes}`. Only called for AHA scenes. |
+| `POST /api/tts` | ElevenLabs TTS → `{audioUrl, wordTimings}` |
+| `POST /api/flow-analyze` | Vision analysis of screenshots/video → `ScreenFlow` (transitions + energy). Called for 5+ images or video recordings. |
+| `POST /api/ui-decompose` | Standalone UI decomposition endpoint (also done inline in planner) |
+| `POST /api/align` | Audio/scene alignment utility |
+| `POST /api/critique` | Legacy quality critique |
 
-### 2.2 Flow Analysis Pipeline (`/api/flow-analyze`) — NEW 2026-03-14
+### 3.2 Flow Analysis (`/api/flow-analyze`)
 
-Called by `generateFullVideo` when ≥2 images uploaded. Returns `ScreenFlow = { screens, transitions }`.
+**Called when**: `images.length >= 5` OR `isLikelyRecording()` returns true.
+**Skipped when**: ≤4 images — planner infers flow directly from visual content.
 
-**Routing logic (by frame count):**
-- `parsedImages.length < 8` → **Screenshot mode** (single-pass analysis)
-- `parsedImages.length >= 8` → **Video recording mode** (2-pass pipeline)
+**Recording detection** (`isLikelyRecording()`): Compares adjacent frame similarity (300-char base64 prefix hash). If >60% of adjacent pairs are >85% similar → it's a recording.
 
-**Screenshot mode (< 8 frames):**
-- Single Gemini call with all images + user descriptions
-- Extracts: `screens[].{index, description}` and `transitions[].{from, to, action, type, targetLabel, elementType, box, style}`
-- Box coordinates on 0–1000 scale, normalized to 0–1 by `normalizeBox()`
+**Screenshot mode** (2–9 distinct frames):
+- Single Gemini call; extracts `screens[]`, `transitions[]`, `energyLevel`, `visualComplexity`, `uiPace`
+- Box coords on 0–1000 scale, normalized to 0–1 by `normalizeBox()`
 
-**Video recording mode (≥ 8 frames):**
-- **Pass 1**: Sub-samples up to 20 frames (every Nth); asks Gemini to identify 4–7 key moment frames + `narrativeSummary` + `productFeature`; maps key positions back to original frame indices; ensures 3–7 key frames
-- **Pass 2**: Deep transition analysis on key frames only with bounding boxes
-- Extra output fields: `keyFrameIndices[]`, `narrativeSummary`, `productFeature`, `isVideoRecording: true`, `totalFrames`
+**Video recording mode** (≥10 similar frames):
+- `detectSignificantFrames()` picks 6–8 most visually distinct key frames (via base64 hash diff scoring)
+- Single combined Gemini pass: transition analysis + `energyLevel` + `visualComplexity` + `uiPace`
 
-**Box normalization**: values >2 treated as 0–1000 scale → divided by 1000. Values ≤2 treated as already 0–1 fractions.
-
-**Failure handling**: Any error returns `{ screens: [], transitions: [] }`. Called from `generateFullVideo` with try/catch — non-fatal, shows empty flow editor for manual input.
-
-**ScreenFlow output shape:**
+**ScreenFlow output:**
 ```typescript
 interface ScreenFlow {
   screens: { index: number; description: string }[];
   transitions: {
-    from: number;        // source screen index
-    to: number;          // target screen index
-    action: string;      // human description of user action
+    from: number; to: number; action: string;
     type: "click"|"hover"|"navigate"|"type"|"scroll";
-    targetLabel: string; // element label/name
-    elementType: "input"|"button"|"dropdown"|"card"|"nav";
-    box: { x: number; y: number; w: number; h: number };  // 0–1 normalized
+    targetLabel: string; elementType: "input"|"button"|"dropdown"|"card"|"nav";
+    box: { x: number; y: number; w: number; h: number };  // 0–1
     style: { bgColor: string; borderRadius: number };
   }[];
-  // Only in video mode:
+  energyLevel?: "high" | "medium" | "calm";
+  visualComplexity?: number;   // 0–1
+  uiPace?: "fast" | "slow";
+  // Video mode only:
   keyFrameIndices?: number[];
   narrativeSummary?: string;
-  productFeature?: string;
   isVideoRecording?: boolean;
-  totalFrames?: number;
 }
 ```
 
-### 2.3 Planning Pipeline (`/api/plan`)
+### 3.3 Planning Pipeline (`/api/plan`)
 
-Runs in parallel on POST:
-1. **Brand extraction** (Gemini 2.5 Flash): analyzes first uploaded image for `primary`, `secondary`, `bg`, `surface`, `text`, `textMuted`, `border`, `style` colors
-2. **Image descriptions** (Gemini 2.5 Flash, only when 2+ images): 1-sentence description per screenshot
-3. **UI schema decomposition** (Gemini 2.5 Flash, up to first 5 images in parallel): extracts `UISchema` JSON for each image
-4. **Tiered summarization** (when 3+ images):
-   - 10+ images (video frames): chunked event extraction → segment summaries → cohesive narrative
-   - 3–9 images (screenshot sequence): single flow-analysis pass with `screenSummaries` + `narrative`
-5. **Narrative planning** (Gemini 2.5 Flash): takes product prompt + image descriptions + brand context; returns full `FullVideoPlanRaw` with scenes, brand tokens, `globalBg`
-6. **Post-processing**:
-   - Vision brand values override text-inferred values (vision > text)
-   - Auto light-theme detection from bg luminance (threshold: luminance > 0.5)
-   - `injectSectionTitles()` inserts 90-frame chapter cards between showcase-skill groups when showcaseCount ≥ 4
-   - `buildInteractionScriptFromTransition()` generates `InteractionEvent[]` for chameleon-ui scenes
-   - `uiSchema` attached to every scene with an `imageIndex`
+Accepts `{ prompt, images, imageUserDescriptions, screenFlow, cachedBrand }`.
 
-Output JSON:
+**Step 1 — Parallel execution:**
+- **Combined brand + descriptions** (1 Gemini call): analyzes all images → brand tokens + 1-sentence description per image. Skipped if `cachedBrand` provided by client (only fetch descriptions then).
+- **Tiered summarization** (if 3+ images, after brand call):
+  - 10+ frames: chunked event extraction → segment summaries → cohesive narrative
+  - 3–9 frames: single flow-analysis pass → `screenSummaries` + `narrative`
+
+**Step 2 — Narrative planning** (1 Gemini call):
+- Inputs: product prompt + image descriptions + energy hints + all images (capped at 4 inline)
+- Returns: `scenes[]`, `brand`, `globalBg`, `globalVisualThread`, **`uiSchemas[]`** (inline per imageIndex)
+- `uiSchemas` are extracted inline — no separate ui-decompose calls
+
+**Step 3 — Post-processing:**
+- Vision brand values override text-inferred values
+- Auto light-theme detection from bg luminance (threshold: luminance > 0.5)
+- `energyLevel === "high"` → overrides `brand.musicStyle = "energetic"`, injects +40 stiffness hint
+- `injectSectionTitles()` inserts 90-frame chapter cards between showcase-skill groups when 4+ showcase scenes
+- `buildInteractionScriptFromTransition()` generates `InteractionEvent[]` for chameleon-ui scenes with auto `sfx` fields
+- `uiSchemas[i]` attached to scenes by `imageIndex`
+
+**Response JSON:**
 ```json
 {
   "scenes": [...],
-  "brand": { "primary": "#6366f1", ... },
+  "brand": { "primary": "#6366f1", "musicStyle": "energetic", ... },
   "bgSkill": "premium-light-arc-bg" | undefined,
   "globalBg": "arcs" | "grid" | "dots",
+  "globalVisualThread": "One sentence: geometric/color/motion motif across all scenes.",
   "imageDescriptions": [...]
 }
 ```
 
-### 2.4 Generation Pipeline (`/api/generate`)
+### 3.4 Generation Pipeline (`/api/generate`)
 
-1. **Validation** (Gemini 2.5 Flash, skip if forcedSkills): validates prompt is motion-graphics related
-2. **Skill detection** (Gemini 2.5 Flash, skip if forcedSkills): classifies prompt into skill categories
-3. **Skill content injection**: `getCombinedSkillContent(detectedSkills)` appends skill .md files to `SYSTEM_PROMPT`
-4. **Mode branching**:
-   - `isFollowUp=true`: non-streaming JSON response with `{type:"edit"|"full", edits?, code?}`
-   - `isFollowUp=false`: streaming SSE with `text-delta` events
-5. **Streaming**: uses `generateContentStream`, emits `data: {type:"metadata"}`, `data: {type:"text-start"}`, `data: {type:"text-delta", delta}`, `data: [DONE]`
-6. **Retry logic**: 3 attempts on 429 per-minute rate limits, aborts on daily quota (retryDelay > 60s)
+**Tiered system prompt:**
+- **TIER1** (~400 tokens): always injected — core rules (brand tokens, spring configs, MaskedReveal mandatory, useStagger mandatory, z-index architecture, layoutTopology rules, shadow depth scale, glass card formula, cinematic zoom cap 1.06)
+- **TIER2** (~200–600 tokens): scene-type specific — cursor rules, voiceover rules, wet headline for AHA, light-theme rules
+- **TIER3** (~300 tokens): reference appendix — only for complex scenes (spring config table, typography scale, shadow scale, conceptual depth patterns)
+- **Skill content**: skill `.md` files appended last
 
-**Edit operation format** (follow-up mode):
-```typescript
-type EditOperation = {
-  description: string;
-  old_string: string; // must match EXACTLY (character-for-character)
-  new_string: string;
-  lineNumber?: number;
-}
-```
+**Generation flow:**
+1. Skill detection (Gemini Flash, skip if `forcedSkills`)
+2. Skill content injection: `getCombinedSkillContent(detectedSkills)`
+3. `isFollowUp=true` → non-streaming JSON `{type:"edit"|"full", edits?, code?}`
+4. `isFollowUp=false` → streaming SSE with `text-delta` events
 
-`applyEdits()` fails if `old_string` not found or matches multiple locations.
+**`postProcessCode()` — compiler pre-processing:**
+- Auto-pairs `WebkitBackdropFilter` wherever `backdropFilter: "blur(Xpx)"` appears
+- Auto-adds `backgroundColor: BRAND.bg` to root `<AbsoluteFill>` if missing
 
-### 2.5 Generation Hook (`useFullVideoGeneration.ts`)
+### 3.5 Generation Hook (`useFullVideoGeneration.ts`)
 
 **Key constants:**
 ```typescript
 const TRANSITION_FRAMES = 20;  // overlap between scenes for cross-dissolve
 const HOLD_FRAMES = 24;        // ~0.8s padding after animations complete
-const CONCURRENCY = 1;         // scenes generated sequentially (quota-safe)
+const CONCURRENCY = 1;         // sequential (quota-safe)
 ```
 
-**Total duration formula:**
-```
-totalFrames = sum(scene.durationInFrames) - (numScenes - 1) * TRANSITION_FRAMES
-```
-Note: `alignSceneDurations()` may adjust individual scene durations after voiceover prefetch.
+**Total duration:** `sum(durationInFrames) - (numScenes - 1) * TRANSITION_FRAMES`
 
-**Scene cache:**
+**Module-level brand cache:**
 ```typescript
-const sceneCache = new Map<string, CompiledScene>(); // module-level, browser session
+let cachedBrandStore: { imageHash: string; brand: BrandTokens } | null = null;
 ```
-Cache key hash includes: `skill`, `brand.primary`, `imageIndex`, `durationInFrames`, `prompt[0:80]`.
+First 100 chars of first image used as hash. On match, `cachedBrand` sent to `/api/plan` which skips brand extraction.
 
-**Multi-image story flow (2026-03-14):**
+**`generateFullVideo()` routing:**
 ```
-generateFullVideo(prompt, model, images, descriptions)
-  ↓ (if images.length >= 2)
-  → POST /api/flow-analyze → detectedFlow (ScreenFlow)
-  → setPendingFlow({ images, detectedFlow })  ← shows ScreenFlowEditor to user
-  ↓ (user approves in ScenePlanEditor)
-  approveFlow(screenFlow, waypointsByImage, descriptions)
-  → runPlan(prompt, model, images, descriptions, screenFlow, waypointsByImage)
-  → POST /api/plan → planScenes + brand + bgSkill
-  → enrich scene prompts with STORY FLOW CONTEXT blocks
-  → apply waypointsByImage to matching scenes
-  → setPendingPlan(...)
-  ↓ (user confirms in ScenePlanEditor)
-  startGeneration(editedScenes, effectiveFlow)
-  → prefetchVoiceovers()
-  → alignSceneDurations()   ← NEW: auto-adjusts durationInFrames to match audio
-  → processScene() × N (sequential)
-  → createMasterComponent(validScenes, brand.bg, musicUrl, brand)
+images.length <= 4 → skip flow-analyze, create minimal synthetic ScreenFlow
+images.length >= 5 → POST /api/flow-analyze → setPendingFlow → ScreenFlowEditor
 ```
 
-**processScene() flow (per scene):**
-1. Check cache; if hit, return immediately
-2. Guard: empty prompt → placeholder
-3. `reorderImagesForScene()` — puts scene's primary imageIndex first in array
-4. Detect navigation continuation (`_isNavigationContinuation`) via sidebar appName matching
-5. `resolveModel(skill, userModel, isAhaMoment)` — upgrades isAhaMoment scenes from flash:none → flash:medium (adds thinking budget, still free tier). All other scenes return user model unchanged.
-6. `consumeSceneGeneration()` — calls /api/generate, gets back code string
-7. `compileCode()` — transpile in-browser
-8. If compile fails → retry with error context (1 retry)
-9. Quality audit gate: only for `isAhaMoment || imageIndex === 0`; calls `/api/audit`; if score < 70, regenerates with fix instructions
-10. Cache result
-11. If all fails → placeholder component
+**`processScene()` flow:**
+1. Check `sceneCache`; hit → return immediately
+2. `reorderImagesForScene()` — puts `scene.imageIndex` first
+3. `resolveModel()` — upgrades AHA scenes: flash:none → flash:medium (thinking budget)
+4. `consumeSceneGeneration(skillMode: "force")` → `/api/generate` → code string
+5. Skip `/api/vision` if cursor waypoints already have `box.w > 0` data
+6. `compileCode()` — `postProcessCode()` first, then Babel
+7. Compile fail → retry with `skillMode: "fallback"` (re-detects skills, avoids failing one)
+8. Audit gate: **only `isAhaMoment === true`** (was: isAhaMoment || imageIndex===0)
+9. Cache result
 
-**consumeSceneGeneration() prompt assembly:**
-1. `buildBrandBlock(brand)` — structured brand reference comment
+**`buildInteractionScript()` details:**
+- Input: `waypoints: CursorWaypoint[]`
+- **TRAVEL constant**: hardcoded at 25 frames per step *(note: cursor-engine skill doc says 22 — mismatch)*
+- Initial anchor: `{ x: 0.5, y: 0.85, time: 0, action: "none" }` *(skill doc says y: 1.10 off-screen)*
+- Per waypoint: time advances by TRAVEL+DWELL+CLICK per step
+- Auto-assigns `sfx` fields: search → type+success; click/navigate → click; hover → whoosh
+
+**`consumeSceneGeneration()` prompt assembly:**
+1. `buildBrandBlock(brand)` — `BRAND.*` constants comment block (includes `musicStyle`)
+2. `continuityCtx` — `"GLOBAL VISUAL THREAD: {thread}\n\n{continuityBase}"` (scene 0: thread only; scene 1+: thread + `buildContinuityContext`)
+3. Scene prompt
+4. `detectedElementsBlock` — user waypoints → `buildInteractionScript()` OR vision auto-detection
+5. `uiSchemaBlock` — if `scene.uiSchema` present
+6. `voiceoverBlock` — includes "DO NOT add background music" (prevents double-music)
+7. `narrativeBlock` — emotionalIntent + AHA animation style
+8. `stageDirectionBlock` — cinematic guidance
+9. `visualAnchorBlock` — problem: render in `colorFrom` + entropy jitter; solution: `colorTo` + GlowBloom
+
+**`consumeSceneGeneration()` prompt assembly** (blocks appended in order):
+1. `buildBrandBlock(brand)`
 2. Scene prompt
-3. `detectedElementsBlock` — one of:
-   - User-confirmed waypoints → `buildInteractionScript(cursorWaypoints)` (CURSOR_STEPS const + chameleon hints)
-   - Vision auto-detection via `/api/vision` (for cursor-engine, chameleon-ui, scroll-demo, saas-showcase)
-   - For chameleon-ui: merges `interactionScript` events with detected elements → INTERACTION_SCRIPT comment block
-   - For cursor-engine: DETECTED_ELEMENTS const declaration
-   - For others: DETECTED_SECTIONS const declaration
-4. `uiSchemaBlock` — if `scene.uiSchema` present and non-empty, describes `UI_SCHEMA` in scope
-5. `voiceoverBlock` — if `scene.voiceoverAudioUrl` present, instructions for `<Audio src={VOICEOVER_AUDIO_URL} />`
-6. `narrativeBlock` — if `emotionalIntent` or `isAhaMoment`, instructions for animation style
+3. `detectedElementsBlock` — vision / user waypoints
+4. `uiSchemaBlock`, `voiceoverBlock`, `narrativeBlock`, `stageDirectionBlock`, `visualAnchorBlock`
+5. `continuityBlock` — global visual thread + per-scene handoff
+6. **`zoomThroughBlock`** — injected when `scene.transition === "zoomThrough"`; tells LLM primary content must be visible at frame 0 (zoom-out handles arrival energy)
 
-**buildInteractionScript(waypoints):**
-- TRAVEL = 25 frames (spring settle time)
-- Adds anchor step at time:0, x:0.5, y:0.85 (cursor starts center-bottom)
-- For each waypoint: `arrive = frame`, `actionFrame = arrive + TRAVEL`, `dwell = wp.dwellFrames ?? 22`
-- Outputs: `const CURSOR_STEPS = [...]` verbatim code + timing comments + chameleon overlay hints
+**`createMasterComponent(scenes, bgColor, musicUrl, brand)` produces `MasterVideo`:**
+- `AnimatedArcBg` — persistent bg (light: rotating arc SVG; dark: drifting radial gradient blobs)
+- `<Audio>` — music with **per-scene volume automation** (`interpolate()` across scene boundaries)
+  - `musicVolume` from scene plan (0.5 = pain, 1.0 = normal, 1.3 = aha, 1.5 = CTA) × base (0.08 with VO, 0.18 without)
+- `<Sequence>` per scene — `withTransition()` wrapped
+- **Transition SFX** — `<Sequence><Audio volume={0.25} /></Sequence>` at each scene start (cameraPan → swoosh, slide → whoosh, flash → pop)
+- `VignetteLayer` — emotionalIntent-adaptive dark radial border (0.15 for FRUSTRATION/PAIN, 0.05 for RELIEF, 0.08 default)
+- **`SectionLabelLayer`** — reads `scene.sectionLabel`; renders top-left pill label (13px, uppercase, brand.primary, glass bg) with fade-in; z:200
+- `FilmGrainLayer` — topmost (z:9999); grain opacity adapts to emotionalIntent (0.06 for FRUSTRATION/PAIN, 0.02 for RELIEF/CONFIDENCE, 0.04 for EXCITEMENT/URGENCY, 0.03 default)
 
-**`buildContinuityContext(prev, prevPlan, brand)`** — scene-to-scene visual continuity:
-- Module-level function (not inside hook)
-- Builds a continuity summary from the previous compiled scene
-- Passed as `## SCENE CONTINUITY` block to the next scene's prompt
-- Content includes: previous scene title, skills, emotional tone, and 5 explicit visual rules:
-  1. Keep BRAND.bg locked — never drift from it
-  2. Font family must remain consistent
-  3. Card border-radius, shadow elevation, spacing must match established language
-  4. If previous scene showed sidebar/app shell, maintain same app chrome identity
-  5. Color temperature matches emotional arc (RELIEF/CONFIDENCE = warm/bright; FRUSTRATION/PAIN = cold/compressed)
-- Applied from scene index 1 onwards (scene 0 has no predecessor)
-- Threading: `processScene(..., continuityContext?)` → `consumeSceneGeneration(..., continuityContext?)` → injected as `continuityBlock` before final prompt assembly
+**`withTransition()` transitions:**
+- `fade`: opacity 0→1→1→0
+- `slide`: translateX 80→0 on entry
+- `scale`: scale 1.06→1 on entry
+- `flash`: white overlay 0.85→0 over 6 frames
+- `none`: hard cut
+- `cameraPan`: slides ±full-width with horizontal motion blur (max 18px); no opacity fade
+- `zoomThrough`: **spatial match-cut** — exit: `scale(1→10)` cubic ease-in toward `transformOrigin = exitAnchor.x% exitAnchor.y%`; enter: `scale(10→1)` ease-out from center. Pure zoom, opacity:1 throughout. Triggered automatically when `scene.exitAnchor` is set (drives exitType) or `scene.transition === "zoomThrough"` (drives enterType).
 
-**prefetchVoiceovers():** Runs before generation; calls `/api/tts` for all scenes with `voiceoverText`; attaches `voiceoverAudioUrl` + `wordTimings` to scenes.
+**`regenerateSceneWithEdit(index, editInstruction)`:**
+- Builds ScenePlan from existing compiled scene (preserves all fields)
+- Appends `## USER EDIT REQUEST\n[instruction]` to prompt
+- `bypassCache: true` — only rebuilds targeted scene + master
 
-**alignSceneDurations() — NEW (2026-03-14):**
-Runs after `prefetchVoiceovers()`, before generation starts. From `src/lib/alignScenes.ts`:
-- For each scene with `wordTimings`: `targetDuration = max(90, lastWord.endFrame + 35)`
-- 35 = `TAIL_FRAMES` (breathing room after last spoken word; ~1.16s)
-- Minimum 90 frames (3s) — never shrinks below this
-- Logs adjustments: `"SceneName" 180→210f`
-- Purpose: prevents audio truncation + dead air from mismatched durations
-
-**createMasterComponent(scenes, bgColor, musicUrl, brand):**
-- Builds `MasterVideo` React component
-- Each scene wrapped in `withTransition()` — applies opacity fade + transform (slide/scale/flash) at entry/exit
-- Overlapping sequences: each starts `TRANSITION_FRAMES` (20) before previous ends
-- Background music: `<Audio src={musicUrl} volume={hasVoiceover ? 0.08 : 0.18} loop />`
-- Music URL from `MUSIC_TRACKS[brand.musicStyle ?? brand.accentName ?? "cinematic"]` (Pixabay CDN)
-- Error boundary: scenes that throw on render get a dark placeholder div instead of crashing
-
-**withTransition() transitions:**
-- `fade`: opacity 0→1→1→0, no transform (fadeIn = 8f for first scene, 20f for others)
-- `slide`: translateX 80→0 on entry (easeOutCubic)
-- `scale`: scale 1.06→1 on entry (easeOutCubic)
-- `flash`: white overlay div, opacity 0.85→0 over first 6 frames
-- `none`: hard cut (opacity jump, no animation)
+**Chat `@mention` targeting** (`generate/page.tsx`):
+- When video exists and prompt contains `@intro`, `@scene-2`, etc. → `regenerateSceneWithEdit()`
+- Without `@mention` → full `generateFullVideo()` re-run
 
 ---
 
-## 3. BRAND TOKEN SYSTEM
+## 4. BRAND TOKEN SYSTEM
 
-### 3.1 BrandTokens Interface
+### 4.1 BrandTokens Interface
 ```typescript
 interface BrandTokens {
-  primary: string;      // Main CTA/accent color — buttons, links, glows. e.g. "#6366f1"
-  secondary: string;    // Supporting accent — secondary buttons, hover states. e.g. "#a78bfa"
-  bg: string;           // Scene background. e.g. "#0f0f1a" dark | "#f8fafc" light
-  surface: string;      // Card/panel surface. e.g. "rgba(255,255,255,0.06)" dark | "white" light
-  text: string;         // Primary text. "#ffffff" dark | "#0f172a" light
-  textMuted: string;    // Subtitle/muted text. "rgba(255,255,255,0.5)" dark | "rgba(15,23,42,0.5)" light
-  border: string;       // Card borders. "rgba(255,255,255,0.12)" dark | "rgba(0,0,0,0.08)" light
-  font: string;         // Font family. "Inter"
-  accentName: string;   // Single word. "indigo" | "teal" | "rose" | "emerald"
-  style: "dark" | "light" | "neon";  // Overall mood
-  name?: string;        // Product/brand name. "Acme"
-  url?: string;         // Public URL. "acme.com"
-  cta?: string;         // CTA button label. "Start Free Trial"
-  musicStyle?: string;  // "corporate" | "energetic" | "cinematic" | "calm" | "playful"
+  primary: string;       // e.g. "#6366f1"
+  secondary: string;     // e.g. "#a78bfa"
+  bg: string;            // e.g. "#0f0f1a" dark | "#f8fafc" light
+  surface: string;       // e.g. "rgba(255,255,255,0.06)" dark | "white" light
+  text: string;          // "#ffffff" dark | "#0f172a" light
+  textMuted: string;     // "rgba(255,255,255,0.5)" dark
+  border: string;        // "rgba(255,255,255,0.12)" dark | "rgba(0,0,0,0.08)" light
+  font: string;          // "Inter"
+  accentName: string;    // "indigo" | "teal" | "rose" | "emerald"
+  style: "dark" | "light" | "neon";
+  name?: string;         // Product name
+  url?: string;          // "acme.com"
+  cta?: string;          // "Start Free Trial"
+  musicStyle?: string;   // "corporate"|"energetic"|"cinematic"|"calm"|"playful"
+  displayFont?: string;  // For dramatic headlines
+  annotationFont?: string; // Handwriting font (default: 'Caveat')
 }
 ```
 
-### 3.2 Brand Token Extraction Flow
-
-Vision extraction (Gemini 2.5 Flash on first uploaded image) → LLM text-inference (from prompt text) → Merge (vision values win).
-
-Auto-detection override: if `visionBrand.bg` is a valid 6-digit hex and luminance > 0.5 → `style = "light"`.
-
-Default fallback (no images, no inference):
-```typescript
-const DEFAULT_BRAND: BrandTokens = {
-  primary: "#6366f1",
-  secondary: "#a78bfa",
-  bg: "#0f0f1a",
-  surface: "rgba(255,255,255,0.06)",
-  text: "#ffffff",
-  textMuted: "rgba(255,255,255,0.5)",
-  border: "rgba(255,255,255,0.12)",
-  font: "Inter",
-  accentName: "indigo",
-  style: "dark",
-};
-```
-
-### 3.3 BRAND Injection into Compiler Scope
-
-`buildBrandBlock(brand)` generates this comment block (injected as the first part of every scene prompt):
-```
-## BRAND DESIGN SYSTEM (MANDATORY — use these exact values, no exceptions)
-BRAND is already injected into scope — DO NOT declare it. Use BRAND.bg, BRAND.primary, etc. directly.
-// BRAND.bg        = "#0f0f1a"
-// BRAND.primary   = "#6366f1"
-// ... etc.
-```
-
-The actual `BRAND` object is injected into the compiler scope as a JavaScript constant. LLM-generated code should NEVER re-declare it.
+### 4.2 Brand Extraction
+Vision (Gemini on first image) → LLM text inference (musicStyle, name, url, cta) → Merge (vision wins for visual tokens).
+Auto light-theme override: if `visionBrand.bg` luminance > 0.5 → `style = "light"`.
+Energy override: `energyLevel === "high"` → `musicStyle = "energetic"`; `"calm"` → `musicStyle = "calm"`.
 
 ---
 
-## 4. COMPILER SCOPE
+## 5. COMPILER SCOPE (`src/remotion/compiler.ts`)
 
-`compileCode()` in `src/remotion/compiler.ts` wraps LLM-generated TSX in a closure that provides all pre-built components and variables as scope constants.
-
-### 4.1 Function Signature
+### 5.1 `compileCode()` Signature
 ```typescript
-function compileCode(
+export function compileCode(
   code: string,
-  attachedImages: string[] = [],        // base64 data URLs
-  brand: Record<string, string> = {},   // BrandTokens as string map
+  attachedImages: string[] = [],
+  brand: Record<string, string> = {},
   voiceoverAudioUrl: string | null = null,
   wordTimings: Array<{ word: string; startFrame: number; endFrame: number }> = [],
   uiSchema: Record<string, unknown> | null = null,
-  globalBg: string = "arcs",            // "arcs" | "grid" | "dots"
+  globalBg: string = "arcs",
+  globalFrameOffset: number = 0,
 ): CompilationResult
 ```
 
-Returns `CompilationResult = { Component: React.ComponentType | null; error: string | null }`.
+`postProcessCode()` runs on code before Babel: auto-pairs `WebkitBackdropFilter`, adds `backgroundColor: BRAND.bg` to root `AbsoluteFill`.
 
-### 4.2 Injected Scope Variables
+### 5.2 Scope Variables
+| Variable | Description |
+|---|---|
+| `ATTACHED_IMAGES` | Array of base64 image data URLs |
+| `BRAND` | Full brand token object |
+| `VOICEOVER_AUDIO_URL` | ElevenLabs audio data URL or null |
+| `WORD_TIMINGS` | Word-level timing array |
+| `UI_SCHEMA` | Pre-extracted UISchema or null |
+| `GLOBAL_BG` | "arcs" \| "grid" \| "dots" |
+| `GLOBAL_FRAME_OFFSET` | Cumulative frame offset for seamless background continuity across scenes |
 
-| Variable | Type | Description |
-|---|---|---|
-| `ATTACHED_IMAGES` | `string[]` | Array of base64 image data URLs uploaded by user |
-| `BRAND` | `BrandLike` | Full brand token object |
-| `DETECTED_ELEMENTS` | (injected by generate hook via prompt) | Declared by LLM code |
-| `DETECTED_SECTIONS` | (injected by generate hook via prompt) | Declared by LLM code |
-| `VOICEOVER_AUDIO_URL` | `string \| null` | Pre-generated ElevenLabs audio data URL |
-| `WORD_TIMINGS` | `{word, startFrame, endFrame}[]` | Word-level timing array for `useAudioSync()` |
-| `UI_SCHEMA` | `Record<string, unknown> \| null` | Pre-extracted UISchema from vision |
-| `GLOBAL_BG` | `string` | Background variant: "arcs" \| "grid" \| "dots" |
+All Remotion primitives, RemotionShapes, TransitionSeries, THREE, Lottie also in scope.
 
-All Remotion primitives injected: `spring`, `interpolate`, `useCurrentFrame`, `useVideoConfig`, `AbsoluteFill`, `Sequence`, `Audio`, `Img`, `random`.
-
-RemotionShapes: `Rect`, `Circle`, `Triangle`, `Star`, `Polygon`, `Ellipse`, `Heart`, `Pie`, and all `make*` variants.
-
-Transitions: `TransitionSeries`, `linearTiming`, `springTiming`, `fade`, `slide`, `wipe`, `flip`, `clockWipe`.
-
-Three.js: `THREE`, `ThreeCanvas`.
-
-Lottie: `Lottie`.
-
-### 4.3 Pre-Built Components (full catalog)
-
-**Style utilities:**
-```typescript
-// Glass card style helper
-getGlassCard(brand?: BrandLike): React.CSSProperties
-// Returns different styles for light vs dark brands.
-// Light: "linear-gradient(135deg, rgba(255,255,255,0.8)...)", shadow "0 8px 32px rgba(0,0,0,0.06)"
-// Dark: "linear-gradient(135deg, rgba(255,255,255,0.08)...)", shadow "0 12px 40px rgba(0,0,0,0.45)"
-
-// Glow bloom style (rendered behind element)
-glowBloomStyle(color: string, blurPx = 55, opacity = 0.45, spread = 1.5): React.CSSProperties
-```
-
-**Spring configs:**
+### 5.3 Style Constants
 ```typescript
 const SPRING_CONFIGS = {
-  entrance: { damping: 200, stiffness: 120 },   // crisp UI reveal
-  float:    { damping: 22,  stiffness: 70  },   // gentle oscillating float
-  pop:      { damping: 8,   stiffness: 150 },   // elastic pop
-  cinematic:{ damping: 200, stiffness: 80  },   // smooth camera push-in
+  entrance:  { damping: 200, stiffness: 120 },  // crisp UI reveal
+  snap:      { damping: 160, stiffness: 220 },  // snappy tactile hero elements
+  float:     { damping: 22,  stiffness: 70  },  // gentle oscillating float
+  pop:       { damping: 8,   stiffness: 150 },  // elastic pop
+  cinematic: { damping: 200, stiffness: 80  },  // smooth camera push-in
 }
-```
 
-**Easings:**
-```typescript
-const EASINGS = {
-  easeOutCubic:    (t) => 1 - Math.pow(1 - t, 3),
-  easeInOutCubic:  (t) => t < 0.5 ? 4*t*t*t : 1 - Math.pow(-2*t+2, 3)/2,
-  easeInQuad:      (t) => t * t,
-}
-```
-
-**Global style constants:**
-```typescript
 const GLOBAL_STYLE = {
-  contentPadding: 80,
+  contentPadding: 120,
   cardRadius: 20,
-  headlineSize: 88,
-  shadowScale: "medium",
-  shadowMedium: "0 2px 4px rgba(0,0,0,0.04), 0 8px 24px rgba(0,0,0,0.08), 0 24px 48px rgba(0,0,0,0.04)",
-  shadowHigh:   "0 4px 8px rgba(0,0,0,0.04), 0 12px 32px rgba(0,0,0,0.08), 0 32px 64px rgba(0,0,0,0.06)",
-  shadowLow:    "0 1px 2px rgba(0,0,0,0.04), 0 4px 12px rgba(0,0,0,0.06)",
+  shadowLow:    "0 1px 3px rgba(0,0,0,0.04), 0 4px 14px rgba(0,0,0,0.06)",
+  shadowMedium: "0 2px 8px rgba(0,0,0,0.06), 0 8px 28px rgba(0,0,0,0.10), 0 24px 48px rgba(0,0,0,0.05)",
+  shadowHigh:   "0 4px 12px rgba(0,0,0,0.08), 0 16px 40px rgba(0,0,0,0.14), 0 40px 80px rgba(0,0,0,0.10)",
+}
+
+const EASINGS = {
+  easeOutCubic:   (t) => 1 - Math.pow(1 - t, 3),
+  easeInOutCubic: (t) => t < 0.5 ? 4*t*t*t : 1 - Math.pow(-2*t+2, 3)/2,
+  easeInQuad:     (t) => t * t,
 }
 ```
 
----
+### 5.4 Visual Effect Components
+- **`getGlassCard(brand?)`** — WhatAStory High-Depth formula: `blur(24px) saturate(150%)`, directional borders (top/left bright), two-layer shadow
+- **`glowBloomStyle(color, blurPx, opacity, spread)`** — bloom div styles for GlowBloom
+- **`SheenOverlay({ startFrame, width, height?, angle? })`** — diagonal shine sweep (60 frames)
+- **`MotionBlurWhip({ frame, startFrame, duration?, maxBlur?, children })`** — bell-curve blur peak
+- **`CameraMotionBlur({ children, velocityX?, velocityY?, shutterAngle?, intensity? })`** — SVG feGaussianBlur directional
+- **`ChromaticAberration({ children, intensity?, direction? })`** — R/B channel split (max 4px)
+- **`GlowBloom({ children, color, blurPx?, opacity?, spread?, animated? })`** — halo bloom behind element
+- **`DepthBlur({ children, focusDistance?, maxBlur? })`** — depth-of-field blur
+- **`MeshGradientBg({ colors?, animate?, speed?, children? })`** — 4 animated radial gradient blobs (auto-wrapped with `globalFrameOffset`)
+- **`FilmGrain({ opacity? })`** — SVG feTurbulence noise at z:9999
 
-**Visual effect components:**
+### 5.5 Audio Sync Hooks
+- **`useAudioSync(wordTimings?)`** → `{ currentWord, wordProgress, completedWords, wordTimings }`
+- **`useBeat(bpm?, offset?)`** → 0–1 beat pulse (sharp attack, slow decay). When called with no args, auto-reads `MUSIC_BPM` from scope.
+- **`useBeatClock(bpm?)`** → `{ beat, bar, beatProgress, barProgress, isDownbeat }` — full musical clock. `isDownbeat` fires on every bar's beat 1.
+- **`snapToDownbeat(approxFrame, bpm, fps)`** → nearest downbeat frame — use for entrance frame alignment
+- **`MUSIC_BPM`** — scope constant injected from `TRACK_BPM[brand.musicStyle]` (corp:90, energetic:128, cinematic:80, calm:68, playful:110)
 
-**`ParallaxLayer`** `({ depth, children, cameraProgress })`
-- `depth`: 0–1 (0.12 = background, 0.40 = midground, 0.80 = foreground)
-- `scale = 1 + (depth * 0.45) * cameraProgress`
-- Used inside `CinematicCamera` for 2.5D depth separation
+### 5.6 Interaction Hooks
+- **`useTyping(text, startFrame, fps, cps?=10)`** → `{ displayText, showCursor }`
+- **`usePopup(openFrame, closeFrame?)`** → `{ scale, opacity, visible }`
+- **`useAccordion(triggerFrame, targetHeight)`** → `{ height, opacity }`
+- **`useDragItem(from, to, startFrame)`** → `{ x, y, elevation }`
 
-**`SheenOverlay`** `({ startFrame, width, height?, angle? })`
-- Diagonal shine sweep from `-vw` to `vw*0.5` over 60 frames
-- Blend mode: overlay, white gradient at specified angle
+### 5.7 Behavioral Hooks
+- **`DepthStack({ layers, cameraRotateY?, cameraRotateX?, children })`** — true `preserve-3d` Z-layer separation. Each child gets `transform: translateZ(Xpx)` based on its depth index. `cameraRotateY` (default -18°) + `cameraRotateX` (default 6°) for isometric float. Use instead of flat `rotateY` on UI cards — layers physically separate when camera tilts.
+- **`useVitality(mode?, interval?, phase?)`** → `{ transform, opacity }` — micro-animation for idle elements. Modes: `bounce` (periodic Y dip+spring), `breathe` (±1.5% scale sine), `float` (±4px Y sine), `pulse` (opacity 0.7→1.0). Per-element phase via `random()`. Apply to avatars, cards, and any element that settles and holds.
+- **`AnimatedHighlighter({ text, wordIndex, startFrame, style?, color? })`** — SVG scribble/marker/underline/circle drawn behind a headline keyword at `startFrame`. Styles: `marker` (rough fill), `underline` (wavy SVG path), `circle` (hand-drawn ellipse). Uses `mixBlendMode: multiply` for non-destructive overlay over text.
+- **`useEntropy(strength?=0.5)`** — per-element sine drift. Use 0.6 for chaos scenes, 0.25 ambient, 0.35 dust
+- **`useEntropyWithAttractor(strength, triggerFrame)`** → `{ getFloat(i,amplitude), attractorProgress, chaosStrength }` — chaos resolves to order at triggerFrame
+- **`useMagnetic(cursorX, cursorY, elemX, elemY, intensity?, radius?)`** → `{ rotateX, rotateY, active }` — max 8° tilt within radius
+- **`TiltWrapper({ tiltX?, tiltY?, scale?, perspective?, glossy? })`** — CSS perspective + rotateX/Y. `glossy={true}` adds reactive specular sheen. Mandatory for midground (z:10–50)
+- **`useStagger(index, baseFrame, delayPerItem)`** → `baseFrame + index * delayPerItem`. **MANDATORY for 3+ siblings**
+- **`SAFE_ZONES`** — agency layout grid: heroHeadline, heroCenter, featureCardLeft/Right, sectionLabel, statCenter, ctaButton
 
-**`MotionBlurWhip`** `({ frame, startFrame, duration?, maxBlur?, children })`
-- `blurPx = sin(progress * π) * maxBlur`; bell-curve blur peak at midpoint
+### 5.8 Cursor System
+- **`CURSOR_STATE_DEFAULT`** — `{ x: 0.5, y: 0.85, vx: 0, vy: 0, isClicking: false, speed: 0, isHovering: false, hoverProgress: 0 }`
+- **`useCursorState(steps, magneticStrength?=1)`** → `{ x, y, vx, vy, isClicking, speed, approachPhase, isHovering, hoverProgress }`:
+  - **Variable travel duration** by distance: short (<0.15) = 18f, medium = 25f, long (>0.4) = 35f
+  - **Dwell scan**: Lissajous micro-drift (±8px) during dwell at each waypoint
+  - **Per-segment dwell variance**: ±4 to +10 frames randomized per segment
+  - **Target overshoot**: ~15px past target, spring-back over 12 frames
+  - **Pre-click pause**: 5 frames between settling and click firing
+  - **Magnetic lock-on**: last 12 frames of travel use Expo.Out easing (`1 - 2^(-10t)`)
+  - `approachPhase` (0→1): use to fade `CursorAnnotationPill` as cursor settles
+  - **`isHovering`** (bool): true for 17 frames pre-click (hover pre-state); drive `preClickEffect` reactions
+  - **`hoverProgress`** (0→1): 17-frame ramp during hover pre-state; use for glow/squish/tooltip buildup
+  - Three-phase model: approach (last 12 travel frames) → hover (17f pre-click) → click (4f)
+- **`cubicBezier(from, to, t, controlOffset?=0.15)`** — quadratic bezier for cursor arcs
+- **`SyncedWord`**, **`useCursorPos`**, **`useMouseProximity`**, **`KineticWord`**, **`FocusOrchestrator`**, **`CursorAnnotationPill`**
 
-**`CameraMotionBlur`** `({ children, velocityX?, velocityY?, shutterAngle?, intensity? })`
-- SVG feGaussianBlur with asymmetric stdDeviation `(blurX, blurY)`
-- `factor = (shutterAngle/360) * intensity`; max 24px per axis
+### 5.9 Chameleon Overlay Components
+- **`ChameleonInput({ x, y, w, h, text, startFrame, brand })`** — typing animation + focus ring (box-shadow + blinking cursor)
+- **`ChameleonHighlight({ x, y, w, h, triggerFrame, brand })`** — click push-in animation
+- **`DropdownMenu({ x, y, w, items, openFrame, closeFrame?, brand })`** — glass dropdown; per-item stagger `i*3f`, `scaleY` from top origin
 
-**`ChromaticAberration`** `({ children, intensity?, direction? })`
-- SVG filter: splits R (shift right) and B (shift left) channels by `intensity * 4` px
-- Directions: "horizontal" | "vertical" | "radial"
-- Skipped if intensity < 0.02
+### 5.10 Camera Components
+- **`ActionCamera({ interactionScript, zoomAmount?, previewFrames?, holdFrames?, easeFrames?, trackingInertia?, children })`** — snap-zooms to each click target; inertial tracking follows cursor path. **Wrap content layer only — keep cursor outside**
+- **`SpotlightCutout({ target, startFrame, darkOpacity?, padX?, padY?, glowColor?, endFrame? })`** — SVG mask overlay with glow ring; target in 0–1 coords; z:90
+- **`GhostHighlight({ targets, brand })`** — animated glowing border spring-snapping between positions; z:95
+- **`CinematicCamera({ targetX?, targetY?, zoomTo?=1.06, children })`** — slow drone zoom with perspective tilt. **Hard cap: 1.06. Never exceed.**
+- **`ParallaxLayer({ depth, children, cameraProgress })`** — depth-scaled layer inside CinematicCamera
 
-**`GlowBloom`** `({ children, color, blurPx?, opacity?, spread?, animated? })`
-- Div positioned behind children with `blur(blurPx)` and `scale(spread)`
-- `animated=true`: breathes scale with `1 + sin(frame * 0.04) * 0.08`
+### 5.11 App Shell Components
+- **`InputField({ value, placeholder?, label?, focused?, brand, width? })`**
+- **`ChatBubble({ message, author, color?, appearFrame, brand })`**
+- **`SidebarNav({ appName?, items, activeItem?, brand })`** — 220px dark glass sidebar (blur:24px saturate:150%)
+- **`AppShell({ sidebar?, topbar?, children?, brand, zoom? })`** — full SaaS layout
+- **`TaskDetailPanel({ openFrame, title, fields, brand })`** — slides in from right (blur:24px saturate:150%)
+- **`ModalOverlay({ openFrame, closeFrame?, title?, brand })`** — centered glass modal (blur:24px saturate:150%)
 
-**`DepthBlur`** `({ children, focusDistance?, maxBlur? })`
-- `blurPx = focusDistance * maxBlur`; simulates depth-of-field
+### 5.12 WhatAStory Pattern Components
+- **`LightArcBg({ brand?, variant?, globalFrameOffset? })`** — **MANDATORY for all light-theme scenes** — near-white bg with 8 rotating arc lines + corner blobs. Variants: "arcs" | "grid" | "dots". Auto-wrapped with `globalFrameOffset` in scope.
+- **`AmbientEnvironment({ brand?, children })`** — **Breathing background wrapper**: slow `1.0→1.06` cinematic camera zoom + two corner atmospheric orbs (65vw/80vw, blur:120/140px, opacity:0.15/0.10) + 18 entropy dust particles (defined outside component as `_AMBIENT_DUST` to prevent flicker). Eliminates flat dead backgrounds. Use on any dark-theme scene not using LightArcBg.
+- **`ContextualSectionHeader({ text, subtext?, icon?, startFrame, exitFrame?, brand })`** — pinned at top:60, left:80; spring entry
+- **`SfxSequencer({ events })`** — **MANDATORY on cursor/chameleon scenes** — maps `events[].sfx` to CDN audio
+- **`AnimatedSidebar({ appName, items, brand, startFrame? })`** — staggered spring sidebar
+- **`AnimatedTopbar({ tabs?, breadcrumb?, hasSearch?, hasAvatar?, brand, startFrame?, activeTabIndex?, height? })`** — sliding tab underline
+- **`AnimatedMetricCards({ cards, brand, startFrame?, columns? })`** — white cards, count-up, trend arrows
+- **`AnimatedTable({ columns, rows, brand, startFrame? })`** — staggered row reveal; `renderCell()` handles badge/status/button/checkbox cell types
+- **`AnimatedChart({ type, title?, dataPoints, color, brand, startFrame? })`** — SVG line/bar/donut/area
+- **`AnimatedForm({ title, fields, submitLabel, brand, startFrame? })`** — sequential field reveal
+- **`SectionTitle({ title, subtitle?, icon?, brand, startFrame? })`** — chapter title card
+- **`PersistentSectionLabel({ featureName, integrationIcon?, integrationName?, brand, startFrame? })`** — top:28, left:36, z:200
+- **`StatusBadge({ text, color })`**, **`TableActionButton({ text, color })`**
+- **`FloatingShapes({ brand, startFrame? })`** — 12 bob+drift geometric shapes (outlines + fills)
+- **`ContentCard({ brand, startFrame, children })`** — white rounded rectangle spring entry
+- **`NotificationToast`** — slide-in alert (bottom-right)
+- **`AbstractSkeletonUI({ uiSchema?, brand, opacity?, startFrame? })`** — geometric skeleton blocks; use when UI is atmospheric background (cognitive masking)
+- **`ReconstructedAppShell`** — full UI from UISchema (AnimatedSidebar + AnimatedTopbar + content sections)
+- **`useInteractionFeedback(clickFrame, direction?)`** → `{ scale, nudgeX, nudgeY, glowOpacity }`
+- **`ContextualBgPulse({ triggerFrame, color, intensity?, x?, y? })`** — radial glow pulse on trigger
 
-**`MeshGradientBg`** `({ colors?, animate?, speed?, children? })`
-- 4 animated `radial-gradient` ellipses at sinusoidal positions
-- Positions update every frame based on `t = frame * 0.004 * speed`
+### 5.13 Layout Components
+- **`MaskedReveal({ startFrame, delay?, config?, direction? })`** — `overflow:hidden` clip; inner div translates Y `110%→0%` via spring. **MANDATORY for all main headlines. VIOLATION if opacity-only fade.**
+- **`HeroSplit({ left, right, brand, leftWeight?, rightWeight?, gap? })`** — 2-column text-left/visual-right
+- **`VideoPlateMockup({ src, kenBurns?, kenBurnsScale?, darkOverlay?, vignetteStrength?, children? })`** — live-action composite (Ken Burns + dark overlay + vignette)
+- **`AnimatedConnectionLine({ x1, y1, x2, y2, startFrame, duration?, color?, dashed?, curved? })`** — SVG strokeDashoffset draw animation
 
-**`FilmGrain`** `({ opacity? })`
-- SVG feTurbulence noise texture at z:9999
-- Pattern shifts `(frame * 37) % 100` pixels per frame for animated grain
-
----
-
-**Audio sync hooks:**
-
-**`useAudioSync(wordTimings?)`**
-- Returns: `{ currentWord, wordProgress, completedWords, wordTimings }`
-- Finds active word where `frame >= startFrame && frame < endFrame`
-
-**`useBeat(bpm?, offset?)`**
-- Returns 0–1 beat pulse; sharp attack (15% of beat), slow decay (sidechain style)
-
----
-
-**Interaction hooks:**
-
-**`useTyping(text, startFrame, fps, cps?=10)`**
-- Returns `{ displayText, showCursor }`
-- `charCount = floor((frame - startFrame) * cps / fps)`
-
-**`usePopup(openFrame, closeFrame?)`**
-- Returns `{ scale, opacity, visible }`
-- `openProg`: spring damping:12 stiffness:200 over 20 frames
-- `closeProg`: spring damping:20 stiffness:300 over 15 frames
-
-**`useAccordion(triggerFrame, targetHeight)`**
-- Returns `{ height, opacity }`
-- Spring damping:14 stiffness:100 over 25 frames
-
-**`useDragItem(from, to, startFrame)`**
-- Returns `{ x, y, elevation }`
-- Spring damping:18 stiffness:100 over 30 frames; elevation peaks at 12px mid-drag
-
----
-
-**Chameleon overlay components** (for cursor/interaction scenes):
-
-**`ChameleonInput`** `({ x, y, w, h, text, startFrame, brand })`
-- Coordinates in 0–1 video fraction; converts to px internally
-- Renders typing animation + blinking cursor + focus ring (brand.primary glow at startFrame-5)
-
-**`ChameleonHighlight`** `({ x, y, w, h, triggerFrame, brand })`
-- Click push-in animation: scale 1 → 0.95 → 1 via spring
-- Opacity: 0→0.8→0.4→0 from triggerFrame+0 to +35
-
-**`DropdownMenu`** `({ x, y, w, items, openFrame, closeFrame?, brand })`
-- Glass card dropdown at normalized coordinates
-- Items: 36px each; first item highlighted with `brand.primary + "22"`; spring scale-in from top-left
-
----
-
-**Cinematic components:**
-
-**`CinematicCamera`** `({ targetX?, targetY?, zoomTo?, children })`
-- Animates `scale`, `translate`, and `rotateX/Y` for push-in with perspective
-- zoom: `interpolate(frame, [0, 90], [1, zoomTo])` with easeInOut
-- tilt: X up to 2°, Y up to -1.5° over 150 frames
-
-**`TaskDetailPanel`** `({ openFrame, title, fields, brand })`
-- Slides in from right at 38% of video width
-- Spring damping:18 stiffness:100; opacity from `usePopup(openFrame)`
-
-**`ModalOverlay`** `({ openFrame, closeFrame?, title?, brand })`
-- 50% width × 55% height, centered; backdrop dim + glass card
-
----
-
-**App shell components:**
-
-**`InputField`** `({ value, placeholder?, label?, focused?, brand, width? })`
-- Self-contained input with label, placeholder, focus ring, blinking cursor
-
-**`ChatBubble`** `({ message, author, color?, appearFrame, brand })`
-- Author initial avatar circle + message bubble
-- Spring damping:14 stiffness:200 at `appearFrame`
-
-**`SidebarNav`** `({ appName?, items, activeItem?, brand })`
-- Dark glass sidebar (220px wide)
-- Active item: `brand.primary + "22"` bg, 3px left border
-
-**`AppShell`** `({ sidebar?, topbar?, children?, brand, zoom? })`
-- Full SaaS layout: topbar (52px) + sidebar + main content
-- Topbar: semi-transparent, backdrop blur
+### 5.14 Other Scope Components
+- **`HandwrittenLabel({ text, x, y, targetX?, targetY?, startFrame, brand, rotation? })`** — Caveat font annotation with optional dotted leader line; x/y in 0–1 coords
+- **`PersonCard({ photoIndex, name, role, accentColor?, startFrame, brand, size? })`** — real headshot photo from `STOCK_AVATARS[0..7]` with role pill badge
+- **`STOCK_AVATARS`** — array of 8 royalty-free face photos (Unsplash); access as `STOCK_AVATARS[0]` through `STOCK_AVATARS[7]`
+- **`GarbledText({ finalText, resolveFrame, scrambleStrength?, startFrame, style })`** — scrambled characters that resolve to readable text at `resolveFrame`
+- **`OrbitRing({ centerX?, centerY?, radius, color?, startFrame, dotSpeed?, brand })`** — dashed SVG circle orbit with traveling dot
+- **`BoldColorBg({ color, vignetteStrength? })`** — solid saturated background; use only for AHA/CONFIDENCE scenes with `BRAND.primary`
+- **`ArcBg`** — persistent animated arc background (light/dark adaptive)
+- **`EntropyDust`** / **`ENTROPY_DUST_PARTICLES`** — standalone entropy dust (18 particles OUTSIDE component)
+- **`HAND_CURSOR`** — flat cartoon pointing-hand SVG (hotspot at fingertip, -8deg tilt, squeeze on click)
 
 ---
 
-**Math utility:**
+## 6. WHATASTORY GLOBAL QUALITY STANDARDS (2026-03-18)
 
-**`cubicBezier(from, to, t, controlOffset?=0.15)`**
-- Quadratic bezier with perpendicular control point for natural cursor arcs
-- Returns `{ x, y }` in same coordinate space as from/to
+These standards apply to **all generated scenes**. Violations are flagged in audit.
 
----
+### 6.1 Typography Stack (3-Layer Mandatory)
+| Layer | Size | Weight | Tracking | Timing |
+|---|---|---|---|---|
+| Section label | 13px | 700 | 0.22em uppercase | f:5 |
+| Hero headline | 96–128px | 900 | -0.04em | f:12 (MaskedReveal, per-line) |
+| Sub-line | 22–28px | 400 | normal | f:22 |
 
-**Cursor movement utility — NEW (2026-03-14):**
+- Section label: `<MaskedReveal startFrame={5}>` (overflow:hidden + translateY too, not just opacity)
+- Each headline line: own `overflow:hidden` wrapper, 4f stagger between lines
+- `paddingBottom: 4px` on line containers to prevent descender clipping
+- ONE accent word in `BRAND.primary` — never two
 
-**`cubicBezier(from, to, t, controlOffset?)`**
-- Pre-built scope constant — **do NOT re-declare**
-- Natural quadratic-bezier arc between two points for smooth cursor movement
-- `from`, `to`: `{ x: number, y: number }` in pixel (or normalized) space
-- `t`: 0→1 spring progress
-- `controlOffset`: perpendicular offset (default: 0.15 = gentle arc; 0.25 = dramatic; up to 0.35)
-- Returns `{ x: number, y: number }` in same coordinate space as `from`/`to`
-- Usage:
-```tsx
-const pos = cubicBezier(
-  { x: prevStep.x * width, y: prevStep.y * height },
-  { x: step.x * width, y: step.y * height },
-  springProgress, // 0→1
-  0.15,
-);
-// pos.x, pos.y — use directly for cursor position
-// Add micro-jitter during dwell:
-const jitterX = springProgress >= 0.98 ? Math.sin(frame * 0.3) * 1.5 : 0;
-const jitterY = springProgress >= 0.98 ? Math.cos(frame * 0.4) * 1.0 : 0;
+### 6.2 Cursor Standards
+| Property | Value |
+|---|---|
+| Cursor type | Hand SVG (realistic finger anatomy, knuckle crease, -8deg tilt) |
+| Travel | 22 frames, spring: `stiffness:160, damping:12` (magnetic snap with overshoot) |
+| Dwell | 10f with `Math.sin(frame*1.8)*1.2` + `Math.cos(frame*2.1)*0.8` micro-jitter BEFORE click |
+| Click fires at | `DWELL_START + 10` (not at travel end) |
+| Click-zoom | Screenshot scales `1.0→1.06`, origin at click point; eases back out |
+| Double ripple | Ring 1 brand color, ring 2 white, 3-frame delay |
+| Intent pill | Shows for travel >200px, fades at 65% of travel (approach phase) |
+| Min step duration | TRAVEL(22) + DWELL(10) + CLICK(14) = 46f min per step |
+
+> **Note**: `buildInteractionScript()` in useFullVideoGeneration.ts uses TRAVEL=25 (vs skill doc 22). This is a known mismatch to be fixed.
+
+### 6.3 Glass Card Standards (WhatAStory High-Depth)
+```css
+backdropFilter: blur(24px) saturate(150%)   /* saturate prevents muddy gray */
+borderTop:    1px solid rgba(255,255,255,1.0)  /* full-brightness catch light */
+borderLeft:   1px solid rgba(255,255,255,0.15)
+borderRight:  1px solid rgba(255,255,255,0.06)
+borderBottom: 1px solid rgba(255,255,255,0.04)
+borderRadius: 20px
+boxShadow: 0 12px 40px rgba(0,0,0,0.45), 0 1px 1px rgba(255,255,255,0.18) inset
 ```
+Light glass: `background: rgba(255,255,255,0.85)`, `blur(20px) saturate(150%)`
+
+### 6.4 Cinematic Camera
+- Wrap ALL scene content: `scale(interpolate(frame, [0,150], [1.0, 1.06]))` — **hard cap 1.06**
+- CTA scenes zoom OUT: `1.05→1.0` (settleScale for finality)
+- `CinematicCamera zoomTo` default: 1.06. AHA/URGENCY scenes only: 1.06 (never 1.10+)
+
+### 6.5 Layout Rules (layoutTopology system — replaces 40/60 mandate)
+Each scene is assigned a `layoutTopology` by the planner. No two consecutive scenes may share the same topology.
+
+| Topology | Implementation |
+|---|---|
+| `split-left` | flex row, text left `flex:"0 0 40%"`, visual right `flex:"0 0 60%"` with `perspective:1200 rotateY(-12deg) rotateX(3deg)` + DepthStack inside visual column |
+| `split-right` | flex row, visual left `flex:"0 0 60%"` same tilt, text right `flex:"0 0 40%"` |
+| `center-focus` | UI centered (max 80% width), bold headline top or bottom in glass-backed div |
+| `isometric-float` | DepthStack `cameraRotateY={-18} cameraRotateX={6}`, position off-center (right:5%), text in top-left corner |
+| `full-bleed-overlay` | UI/image fills AbsoluteFill (z:0), text is `position:absolute` glass card (z:30) anchored bottom-left or center |
+
+- **Never present UI flat** (no perspective) regardless of topology — always DepthStack or explicit rotateY
+- UI width: 120% in split layouts (bleeds off edge, implies expansive system)
+- Shadow direction matches rotation: `-30px 40px 80px` (left-lean for left-tilt)
+- **Padding**: 80–120px from edges; 160px minimum for hero/title scenes
+
+### 6.6 Showcase Scene Panels (Chameleon / Cursor)
+- Background push when panel opens: `bgScale:0.98 + bgBlur:8px + bgDarken:40%`
+- Modal backdrop: `backdropFilter: blur(12px)`, z:50 (NOT just dark overlay)
+- Spring-driven blur: `bgBlur = interpolate(panelProgress, [0,1], [0,3])`
+
+### 6.7 CTA Scene Standards
+- Settle zoom: `interpolate(frame, [0,90], [1.05, 1.0])` — zoom OUT for finality
+- Headline spring: `{ damping:22, stiffness:100 }` (heavy, authoritative — not bouncy)
+- Button spring: `{ damping:14, stiffness:160 }` (snappy entrance)
+- Button pulse: `interpolate(Math.sin((frame-60)*0.05), [-1,1], [1,1.03])` — starts post-settle
+
+### 6.8 Network/Team Intro Timing
+| Element | Frame | Spring |
+|---|---|---|
+| Hub | f:5 | stiffness:180, damping:14 |
+| Nodes | f:15 + i*3 | — |
+| Lines | f:25 + i*4 | strokeDashoffset Q-bezier |
+| Hub pulse | Math.sin((f-30)*0.1) | mapped to [0.95,1.05] |
+
+Network lines: **strokeDashoffset Quadratic Bezier paths only** — no opacity fade, no straight lines.
+
+### 6.9 Z-Index Architecture
+| Layer | Z-index | Examples |
+|---|---|---|
+| Background | 0 | LightArcBg, AmbientEnvironment orbs, entropy dust (z:1) |
+| Product UI | 10–50 | AppShell, TiltWrapper card |
+| Cognitive masking | 50–95 | Modal backdrop (z:50), SpotlightCutout (z:90), GhostHighlight (z:95) |
+| Narrative / Annotations | 100–160 | Cursor (z:100), CursorAnnotationPill (z:160) |
+| Master overlays | 200 | SectionLabelLayer |
+| FilmGrain | 9999 | Master FilmGrainLayer |
+
+### 6.10 Entropy Dust Rules
+- 18 particles array defined **OUTSIDE component** (stable seeds, no flicker per frame)
+- `zIndex: 1` (behind all content, above bg)
+- Modulo loop: `(frame * speed * 30) % 1080`
+- Size: 4px (foreground, blur:2px) or 2px (background, no blur)
+- Opacity: 0.10–0.28 range
 
 ---
 
-**Background components:**
+## 7. SCENE PLAN SCHEMA
 
-**`LightArcBg`** `({ brand? })` — **NEW (2026-03-14) — pre-built scope constant**
-- Animated near-white background with 8 concentric rotating arc lines + corner gradient blobs
-- Origin at 30%/60% of frame; arcs rotate `frame * 0.05` degrees with staggered offsets
-- Corner blobs: `brand.primary`12 at bottom-left, `brand.secondary`0e at top-right, `brand.primary`0b at bottom-right
-- **Mandatory for ALL light-theme scenes** — always place as first child of AbsoluteFill:
-```tsx
-<AbsoluteFill style={{ backgroundColor: BRAND.bg }}>
-  <LightArcBg brand={BRAND} />
-  {/* ... rest of scene */}
-</AbsoluteFill>
-```
-- Do NOT build custom arc bg from scratch — use this component
-- Do NOT add `premium-light-arc-bg` skill on top — LightArcBg is already in scope for all scenes
-
----
-
-**WhatAStory pattern components:**
-
-**`ContextualSectionHeader`** `({ text, subtext?, icon?, startFrame, exitFrame?, brand })`
-- Pinned at top:60, left:80
-- Spring entry from translateY(-20px); spring exit to translateY(-12px)
-- fontSize:56, fontWeight:800
-
-**`SfxSequencer`** `({ events })`
-- **MANDATORY** on cursor/chameleon scenes with INTERACTION_SCRIPT — silent cursor clicks are amateur output
-- Maps `events[].sfx` to audio files via `SFX_MAP`:
-  - click → `/audio/sfx/click-soft.mp3`
-  - whoosh → `/audio/sfx/whoosh-in.mp3`
-  - pop → `/audio/sfx/notification.mp3`
-  - type → `/audio/sfx/keyboard-type.mp3`
-  - success → `/audio/sfx/success-chime.mp3`
-  - swoosh → `/audio/sfx/swipe.mp3`
-- All 6 SFX files confirmed present in `public/audio/sfx/`
-- Pass INTERACTION_SCRIPT array directly: `<SfxSequencer events={INTERACTION_SCRIPT} />`
-- Place OUTSIDE all wrappers, as direct child of AbsoluteFill
-- Wraps each in `<Sequence from={e.frame} durationInFrames={30}><Audio volume={0.35} /></Sequence>`
-
-**`AnimatedSidebar`** `({ appName, items, brand, startFrame? })`
-- Sidebar width: 240px
-- App name: spring fade + translateX(-16px) from startFrame
-- Nav items: stagger `startFrame + 4 + i*6`; active item has spring-animated left border (0→3px)
-
-**`AnimatedTopbar`** `({ tabs?, breadcrumb?, hasSearch?, hasAvatar?, brand, startFrame?, activeTabIndex?, height? })`
-- Tab width: 110px, gap: 8px
-- Sliding underline: 2px brand.primary, animates X to `activeTabIndex * (110 + 8)` via spring
-- Search: rounded pill with magnifier emoji
-- Avatar: 32×32 circle with brand.primary color and "J" initial
-
-**`AnimatedMetricCards`** `({ cards, brand, startFrame?, columns? })`
-- Grid layout with `columns` columns (default: 3)
-- Each card: white, borderRadius:16, stagger `startFrame + i*8`
-- Count-up animation: `numericValue * countProgress` over 30 frames
-- Trend arrow: ↑ green #10b981 | ↓ red #ef4444 | → textMuted
-
-**`StatusBadge`** `({ text, color })`
-- Pill badge: `${color}18` background, `color` text, borderRadius:99, uppercase
-
-**`TableActionButton`** `({ text, color })`
-- Filled button: `color` background, white text, borderRadius:8
-
-**`AnimatedTable`** `({ columns, rows, brand, startFrame? })`
-- columns: `{label, width: "narrow"|"medium"|"wide"}[]`; flex 1/2/3
-- Header: brand.primary + "08" bg, uppercase labels
-- Row stagger: `startFrame + 8 + i*4`; highlighted row: brand.primary + "06" + left border
-- `renderCell(c)`: handles string/number, `{type:"badge"/"status"}` → StatusBadge, `{type:"button"/"action"}` → TableActionButton, `{type:"checkbox"}` → styled div
-
-**`AnimatedChart`** `({ type, title?, dataPoints, color, brand, startFrame? })`
-- Canvas: 320×160px SVG
-- type "line"/"area": polyline with strokeDashoffset draw-on animation; area fill at 18% opacity
-- type "bar": rectangles filling up from bottom with `height * progress`
-- type "donut": circle with strokeDashoffset from 0 to `circumference * progress`; 20px stroke
-
-**`AnimatedForm`** `({ title, fields, submitLabel, brand, startFrame? })`
-- White card, padding 28×32
-- Field stagger: `startFrame + 12 + i*12`
-- Focus ring on each field during its active window
-- Submit button: full width, brand.primary, shadow
-
-**`SectionTitle`** `({ title, subtitle?, icon?, brand, startFrame? })`
-- Centered AbsoluteFill layout
-- Icon: scale 0.5→1 + translateY(20→0) via spring
-- Title: brand.primary color, 48px, weight 700
-- Subtitle: textMuted, 18px
-
-**`PersistentSectionLabel`** `({ featureName, integrationIcon?, integrationName?, brand, startFrame? })`
-- Position: absolute, top:28, left:36, zIndex:200
-- Fades + slides in from translateY(-8px) over 18 frames
-- `featureName` in brand.primary (18px, weight 600)
-- Optional `integrationIcon/Name` in textMuted opacity 0.45
-
-**`FloatingShapes`** `({ brand, startFrame? })`
-- 12 shapes defined in `SHAPE_DEFS` (outside component body — stable reference)
-- Shape types: diamond, circle, arrow, square
-- Colors: primary (filled or outlined), secondary, muted
-- Bob: `sin(elapsed * 0.018 + i * 1.2) * 6`px
-- Drift: `cos(elapsed * 0.011 + i * 0.8) * 3`px
-
-**`ContentCard`** `({ brand, startFrame, children })`
-- White rounded rectangle, soft shadow (GLOBAL_STYLE.shadowMedium)
-- Spring entry from `startFrame`
-
-**`NotificationToast`** — slide-in alert component (position: absolute, bottom-right area)
-
-**`useInteractionFeedback(clickFrame, direction?)`**
-- Returns `{ scale, nudgeX, nudgeY, glowOpacity }`
-- `direction`: "down" (default) | "right" | "left" | "up"
-- Scale: squishes to 0.96 at click, elastic bounce to 1.03, settles at 1.0 (spring damping:8 stiffness:450)
-- nudgeY: 2px physical press nudge in the specified direction
-- glowOpacity: 0→0.7→0.3→0 from frames 0,4,20,45 — use as glow halo opacity behind element
-- Usage:
-```tsx
-const { scale, nudgeY, glowOpacity } = useInteractionFeedback(CLICK_FRAME, "down");
-// Apply to button:
-<div style={{ transform: `scale(${scale}) translateY(${nudgeY}px)` }}>Submit</div>
-// Render glow behind:
-<div style={{ position:"absolute", inset:0, background: BRAND.primary, filter:"blur(20px)", opacity: glowOpacity * 0.5 }} />
-```
-
-**`ContextualBgPulse`** `({ triggerFrame, color, intensity?, x?, y? })`
-- Props: `triggerFrame: number`, `color: string`, `intensity?: number` (0.15–0.45, default 0.25), `x?: number` (0–1, default 0.5), `y?: number` (0–1, default 0.5)
-- Radial glow pulses outward from (x,y) when triggered — bg "celebrates" with product wins
-- pulseOpacity: 0→intensity→intensity*0.5→0 at frames 0,8,50,100
-- pulseSize: 180px → screen diagonal over 80 frames (ease-out quad)
-- Place as LAST child of AbsoluteFill at zIndex:0 (behind all content)
-- Use when: form submits, deal closes, metric appears, success toast pops
-- Multiple pulses cascade: stagger by 30–60 frames
-
-**`ReconstructedAppShell`** — orchestrates full UI from UISchema; uses AnimatedSidebar + AnimatedTopbar + AnimatedMetricCards + AnimatedTable + AnimatedChart + AnimatedForm based on schema sections
-
----
-
-## 5. SCENE PLAN SCHEMA
-
-### 5.1 ScenePlan Interface
+### 7.1 ScenePlan Interface
 ```typescript
 interface ScenePlan {
   id: number;
   title: string;
-  prompt: string;           // Full creative brief — injected into /api/generate prompt
-  skills: string[];         // Ordered skill stack: [primary, background?, polish?]
+  prompt: string;
+  skills: string[];
   durationInFrames: number;
-  imageIndex?: number;      // 0-based index of primary image for this scene
-  cursorWaypoints?: CursorWaypoint[];  // User-confirmed click targets (overrides vision)
-  screenFlow?: ScreenFlow;  // On scene 0: full user journey context
-  interactionScript?: InteractionEvent[];  // Timed events from flow analysis
-  voiceoverText?: string;   // Narration script (max (durationInFrames/30)*2.5 words)
-  emotionalIntent?: string; // "FRUSTRATION"|"RELIEF"|"CONFIDENCE"|"TRUST"|"URGENCY"|"EXCITEMENT"|"PAIN"|"RECOGNITION"
-  isAhaMoment?: boolean;    // Single core transformation scene
-  voiceoverAudioUrl?: string;  // Pre-generated ElevenLabs audio base64 data URI
+  imageIndex?: number;
+  cursorWaypoints?: CursorWaypoint[];
+  screenFlow?: ScreenFlow;
+  interactionScript?: InteractionEvent[];
+  voiceoverText?: string;
+  emotionalIntent?: string;   // "FRUSTRATION"|"RELIEF"|"CONFIDENCE"|"TRUST"|"URGENCY"|"EXCITEMENT"|"PAIN"|"RECOGNITION"
+  isAhaMoment?: boolean;
+  voiceoverAudioUrl?: string;
   wordTimings?: { word: string; startFrame: number; endFrame: number }[];
-  transition?: "fade"|"slide"|"scale"|"flash"|"none";
-  uiSchema?: UISchema;      // Vision-extracted structural UI schema
+  transition?: "fade" | "slide" | "scale" | "flash" | "none" | "cameraPan" | "zoomThrough";
+  exitAnchor?: { x: number; y: number };  // Normalized 0-1 coord the camera zooms INTO at exit (set on sending scene; receiving scene gets transition:"zoomThrough")
+  layoutTopology?: "split-left" | "split-right" | "center-focus" | "isometric-float" | "full-bleed-overlay";
+  uiSchema?: UISchema;
+  stageDirection?: string;
+  visualAnchor?: { icon: string; colorFrom: string; colorTo: string; label: string };
+  sectionLabel?: string;       // Short label → SectionLabelLayer overlay in master component
+  musicVolume?: number;        // 0.5 (pain) | 1.0 (normal) | 1.3 (aha) | 1.5 (CTA)
+  isWalkthroughScene?: boolean; // Part of persistent-shell walkthrough sequence
 }
 ```
 
-### 5.2 CursorWaypoint Interface
-```typescript
-interface CursorWaypoint {
-  label: string;
-  x: number;            // Normalized 0–1 video fraction
-  y: number;
-  action?: WaypointAction;  // "click"|"hover"|"double-click"|"scroll"|"none"
-  dwellFrames?: number; // Default: 22 (frames cursor lingers before moving)
-  box?: { x: number; y: number; w: number; h: number };  // 0–1 bounding box
-  elementType?: "input"|"button"|"dropdown"|"card"|"nav";
-}
-```
-
-### 5.3 InteractionEvent Interface
-```typescript
-interface InteractionEvent {
-  frame: number;         // Remotion frame when event fires
-  action: "type"|"click"|"hover"|"popup-open"|"popup-close"|"accordion"|"drag"|"panel-slide";
-  target: string;        // Human-readable element label
-  value?: string;        // Text to type, or drag destination label
-  durationFrames?: number;
-  elementType?: "input"|"button"|"dropdown"|"card"|"nav";
-  box?: { x: number; y: number; w: number; h: number };  // 0–1 bounding box
-  style?: { bgColor: string; borderRadius: number };
-  sectionHeader?: { text: string; subtext?: string; icon?: string };
-  sfx?: "click"|"whoosh"|"pop"|"type"|"success"|"swoosh";
-}
-```
-
-### 5.4 UISchema Interface
-```typescript
-interface UISchema {
-  layout: {
-    type: "sidebar-main"|"topnav-main"|"full-width"|"split";
-    sidebar?: {
-      position: "left"|"right";
-      width: "narrow"|"standard"|"wide";
-      items: { label: string; icon: string; isActive: boolean; badge?: number }[];
-      appName: string;
-    };
-    topbar?: {
-      items: { label: string; type: "text"|"button"|"tab"; isActive?: boolean }[];
-      hasSearch: boolean;
-      hasAvatar: boolean;
-    };
-  };
-  mainContent: {
-    sections: ContentSection[];
-  };
-  theme: {
-    bgColor: string;
-    cardBgColor: string;
-    textColor: string;
-    accentColor: string;
-    borderRadius: number;
-    isDark: boolean;
-  };
-}
-
-type ContentSection =
-  | { type: "metric-cards"; data: MetricCardData[]; gridColumns?: number }
-  | { type: "table"; data: TableData; gridColumns?: number }
-  | { type: "chart"; data: ChartData; gridColumns?: number }
-  | { type: "form"; data: FormData; gridColumns?: number }
-  | { type: "card-grid"; data: CardItem[]; gridColumns?: number }
-  | { type: "list"; data: ListItem[]; gridColumns?: number }
-  | { type: "detail-panel"; data: Record<string, string>; gridColumns?: number }
-  | { type: "hero-header"; data: { title: string; subtitle?: string }; gridColumns?: number };
-```
-
-### 5.5 FullVideoPlan Interface
+### 7.2 FullVideoPlan Interface
 ```typescript
 interface FullVideoPlan {
   scenes: ScenePlan[];
   brand?: BrandTokens;
   screenFlow?: ScreenFlow;
-  bgSkill?: string;       // e.g. "premium-light-arc-bg"
-  globalBg?: string;      // "arcs"|"grid"|"dots"
+  bgSkill?: string;
+  globalBg?: string;           // "arcs" | "grid" | "dots"
+  globalVisualThread?: string; // Geometric/color/motion motif evolving across all scenes
+}
+```
+
+### 7.3 InteractionEvent Interface
+```typescript
+interface InteractionEvent {
+  frame: number;
+  action: string;
+  target: string;
+  value?: string;
+  durationFrames?: number;
+  elementType?: string;
+  box?: { x: number; y: number; w: number; h: number };  // 0–1 normalized
+  style?: { bgColor?: string; borderRadius?: number };
+  sectionHeader?: { text: string; subtext?: string; icon?: string };
+  sfx?: "click" | "whoosh" | "pop" | "type" | "success" | "swoosh";
+  annotation?: string;
+  preClickEffect?: "glow" | "focus-ring" | "squish" | "tooltip" | "brighten";  // UI reaction during hover pre-state (isHovering=true, 17f before click)
 }
 ```
 
 ---
 
-## 6. NARRATIVE PLANNING SYSTEM
+## 8. NARRATIVE PLANNING SYSTEM
 
-### 6.1 WhatAStory Agency Formula
+### 8.1 Agency Formula (WhatAStory / Sandwich Video)
+Broken Reality → Empathy → Relief → Proof → Action (PAS)
 
-**Agency formula**: Broken Reality → Empathy → Relief → Proof → Action (PAS variant)
+- **Hook**: Show life WITHOUT the product. Specific + visceral. Never "Teams struggle" — "Every Monday, Sarah copies numbers from 4 spreadsheets."
+- **AHA Moment**: One scene `isAhaMoment: true`. A transformation, not a feature.
+- **Voiceover**: Outcome-driven. "Your report is ready before you finish your coffee" not "Our platform has automated reporting."
+- **Every scene**: One emotional intent. One visual metaphor.
 
-**Step 1 — Broken Reality (Hook):** Show the viewer's life WITHOUT the product. Specific and visceral. NOT "Teams struggle" but "Every Monday, Sarah manually copies numbers from 4 spreadsheets."
+### 8.2 Emotional Visual Grammar
 
-**Step 2 — AHA Moment:** The one thing making prospects say "I need this." A transformation, not a feature. One scene marked `isAhaMoment: true`.
-
-**Step 3 — Outcome-driven voiceover:** Never feature-driven. "Your report is ready before you finish your coffee" not "Our platform has automated reporting."
-
-**Step 4 — Emotional Intent:** Every scene assigned one emotion. See Emotional Visual Grammar table below.
-
-### 6.2 Emotional Visual Grammar
-
-| emotionalIntent | Spring style | Animation character | Color temp | Pacing |
+| emotionalIntent | Spring | Character | Color temp | Pacing |
 |---|---|---|---|---|
-| FRUSTRATION | damping:150, stiffness:200 | Jittery, staggered, uneven | Desaturated, cold | Fast, overlapping, chaotic |
-| PAIN | damping:300, stiffness:60 | Slow, heavy settle | Dark, low saturation, muted | Slow, weighted, oppressive |
-| RECOGNITION | damping:200, stiffness:120 | Clean reveal, one element | Normal brand colors | Medium, deliberate |
-| RELIEF | damping:400, stiffness:80 | Smooth, floating settle | Warm, bright, high contrast | Slow, spacious, breathing room |
-| CONFIDENCE | damping:200, stiffness:140 | Synchronized, crisp | Vivid, full brand saturation | Medium-fast, precise |
-| TRUST | damping:300, stiffness:100 | Gentle, warm, no rush | Soft, warm tones | Slow, unhurried |
-| URGENCY | damping:120, stiffness:180 | Fast entrance, pulsing, overshoots | High contrast, bright accent | Fast, pressing |
-| EXCITEMENT | damping:8, stiffness:200 | Elastic pop, bounce, overshoots | Vivid, energetic | Fast, playful |
+| FRUSTRATION | damping:150, stiffness:200 | Jittery, staggered | Desaturated, cold | Fast, chaotic |
+| PAIN | damping:300, stiffness:60 | Slow, heavy | Dark, muted | Slow, oppressive |
+| RECOGNITION | damping:200, stiffness:120 | Clean reveal | Normal brand | Medium, deliberate |
+| RELIEF | damping:400, stiffness:80 | Smooth, floating | Warm, bright | Slow, spacious |
+| CONFIDENCE | damping:200, stiffness:140 | Synchronized, crisp | Vivid, saturated | Medium-fast |
+| TRUST | damping:300, stiffness:100 | Gentle, warm | Soft, warm | Slow, unhurried |
+| URGENCY | damping:120, stiffness:180 | Fast, pulsing, overshoots | High contrast | Fast |
+| EXCITEMENT | damping:8, stiffness:200 | Elastic pop, bounces | Vivid, energetic | Fast, playful |
 
-### 6.3 Plan Prompt — Scene Prompt Requirements
+**Energy override**: `energyLevel === "high"` → +40 to all stiffness values.
 
-Every scene prompt output from `/api/plan` MUST include ALL of the following (10 mandatory items):
+### 8.3 Scene Count Rules
+- No screenshots: 4–5 scenes
+- 1–2 screenshots: 5–6 scenes
+- 3–5 screenshots: 6–7 scenes
+- 6+ screenshots / video: 7–8 scenes
+- **Never exceed 8 scenes.** Combine related features.
 
-1. **EMOTIONAL INTENT** — one word + visual grammar: "RELIEF scene — smooth floating settle (damping:400), warm palette, elements drift in gently, generous spacing."
-2. **Scene act timing** — explicit frame allocations: "Act 1 (0–50f): headline enters. Act 2 (50–155f): [content]. Act 3 (155–210f): hold final state."
-3. **On-screen narrative text** — the EXACT headline text that appears visually (not voiceover). E.g.: "Headline: 'Done in 30 seconds.' — 80–120px, weight 800, brand.text color, enters at f:20 from translateY(30px). Subline: '[text]' — 22px, weight 400, textMuted, appears at f:35."
-4. **Visual composition** — dominant layout: "text left (40%), visual right (55%)" or "centered full-screen"
-5. **Animation choreography** — what enters first, in what order, at what frames
-6. **Background note** — confirm which background skill is active, any ambient/atmospheric elements
-7. If device/showcase scene: "display ATTACHED_IMAGES inside ContentCard (clean white frame, no browser chrome)"
-8. For light-themed brands: "Use LightArcBg variant='grid' as background."
-9. For showcase/cursor scenes: "Add PersistentSectionLabel top-left with featureName='[Feature Name]'."
-10. If AHA MOMENT: "THIS IS THE AHA MOMENT — slow the animation, hold on key transformation (Act 3 = 40 frames minimum), make the viewer feel the relief."
+### 8.4 Walkthrough Detection
+When 3+ screenshots share the same sidebar/navigation (same app):
+1. `isWalkthroughScene: true` on each related scene
+2. First scene: `premium-reconstructed-ui` with full AppShell
+3. Subsequent scenes: "Maintain same sidebar/topbar — only replace main content"
+4. `"cameraPan"` transition between walkthrough scenes
+5. `sectionLabel` set to feature name on each scene (→ SectionLabelLayer overlay)
 
-#### On-Screen Narrative Text Per Scene Type
+### 8.5 Voiceover Formula
+`maxWords = (durationInFrames / 30) * 2.5` (hard limit: × 2.8)
 
-**PROBLEM / HOOK:**
-- Headline (96–120px, weight 900): Short visceral problem statement. Max 6 words. E.g. "Hours lost. Every week." or "Your team is drowning."
-- Sub-line (24px, weight 400, textMuted): Specific cost. E.g. "12 hours of manual reporting — per person, per week"
-- Accent word: One word in `BRAND.primary` within the headline
-
-**SOLUTION / AHA:**
-- Headline (80–108px, weight 800): Transformation, OUTCOME language. E.g. "Done in 30 seconds." or "One click. Every time."
-- Sub-line (22px): How. E.g. "[Product] handles the rest — automatically"
-- Hold headline for 30+ frames. It IS the emotional payoff.
-
-**FEATURE / SHOWCASE:**
-- Section label (13px, uppercase, letterSpacing: 0.18em, brand.primary): Feature category. E.g. "REPORTING"
-- Headline (56–72px, weight 800): What this feature DOES for the viewer. E.g. "See every project. Always."
-- Feature tag (14px pill badge): Specific feature name. E.g. "Live Dashboard"
-
-**SOCIAL PROOF / TRUST:**
-- Stat headline (96px+, weight 900): The number. E.g. "94%"
-- Context line (22px): What the number means. E.g. "of teams report 3× faster delivery"
-- Logo or attribution (small, muted)
-
-**CTA:**
-- Hero headline (120–160px, weight 900, gradient text): 3–5 words max. E.g. "Start in minutes."
-- CTA button text: Direct, outcome-driven. E.g. "Start Your Project →"
-- URL (16px, muted): Typed character by character
-
-**CRITICAL**: Write exact on-screen text strings in the scene prompt — LLM must use them verbatim. Never let the code generator invent text.
-
-#### Cursor Scene Prompt Requirements (plan → generate)
-
-For `premium-cursor-engine` or `premium-chameleon-ui` scenes:
-- 3–5 concrete UI actions using actual product feature names
-- Format: "Cursor navigates to [Feature A] and clicks → types '[value]' → clicks [Button]"
-- For cursor-engine add: "Use click-zoom, double ripple, step annotation badges (Step N of M), keyboard key pill when typing"
-- For chameleon-ui add: "Use progressive camera zoom, form success state (loading spinner → green checkmark), slide-in toast notification"
-
-**Good cursor-engine prompt example**: "Interactive cursor demo: cursor springs to 'New Report' button and clicks (double ripple + punch-in zoom, Step 1 of 3) → moves to Analytics tab (Step 2 of 3) → clicks Export (Step 3 of 3, keyboard pill 'Enter ↵'). Use ATTACHED_IMAGES[0] as backdrop."
-
-**Good chameleon-ui prompt example**: "Interactive form demo: cursor moves to Search input, ChameleonInput types 'Q3 Sales Report', cursor clicks Submit (ChameleonHighlight glow). Progressive camera follows cursor. After submit: loading spinner → green checkmark → toast 'Report generated'. ATTACHED_IMAGES[0] as backdrop."
-
-#### Voiceover Quality Test
-Before finalizing voiceover, verify:
-- Does it describe what the VIEWER gains? (not what the product does)
-- Is it specific? (mentions actual time, money, or pain saved)
-- Does it feel like something a human would say out loud?
-- Would someone recognize their own problem in it?
-If any answer is NO → rewrite.
-
-### 6.4 Scene Act Structure
-
-Every scene has 3 internal acts. Frame allocations:
-
-| Duration | Setup | Tension | Resolve |
-|---|---|---|---|
-| 150f (5s) | 0–30f | 30–105f | 105–150f |
-| 180f (6s) | 0–40f | 40–130f | 130–180f |
-| 210f (7s) | 0–50f | 50–155f | 155–210f |
-| 240f (8s) | 0–60f | 60–180f | 180–240f |
-| 270f (9s) | 0–70f | 70–200f | 200–270f |
-
-- **Setup**: One anchor element enters. Viewer orients.
-- **Tension**: Main content unfolds sequentially.
-- **Resolve**: No new elements. Springs settle. Hold 20–30f minimum.
-
-### 6.5 Voiceover Word Count Formula
-
-`maxWords = (durationInFrames / 30) * 2.5`
-
-| Frames | Words |
+| Frames | Max words |
 |---|---|
 | 90 | ~7 (section title — leave empty) |
 | 150 | ~12 |
 | 180 | ~15 |
 | 210 | ~17 |
 | 240 | ~20 |
-| 270 | ~22 |
 
-Hard limit: `(durationInFrames / 30) * 2.8`
+### 8.6 Scene Act Structure
 
-### 6.6 Scene Arc Patterns
-
-- **Standard B2B SaaS**: Hook → Problem → Solution reveal → Feature demo ×2–3 → Proof → CTA
-- **Data/analytics**: Hook → Broken reality ×2 → Aha moment → Feature walkthrough → Stats → CTA
-- **Collaboration/workflow**: Hook → Before chaos → After clarity → Product demo → Social proof → CTA
-- **Enterprise/security**: Hook → Cost of problem → How it works → Feature showcase → Testimonial → CTA
-
-**Critical**: First scene MUST show broken reality, never start with "Introducing [Product]" or logo reveal.
-
-### 6.7 Duration Defaults by Scene Type
-
-| Scene type | Frames | Seconds |
-|---|---|---|
-| intro | 150 | 5 |
-| section-title | 90 | 3 |
-| showcase/cursor demo | 210 | 7 |
-| features | 180 | 6 |
-| social-proof | 150 | 5 |
-| cta | 150 | 5 |
-
-Total video: 1050–1500 frames (35–50 seconds at 30fps).
-
-### 6.8 THE CHAOS SCENE (Scene 1 — Non-Negotiable Formula)
-
-6 mandatory rules:
-1. ZERO product branding — no logo, no product name, no "Introducing X"
-2. Must show a SPECIFIC human in a SPECIFIC painful situation (not generic abstract)
-3. Must include at least ONE concrete data point: "3.5 hours every week", "73% of leads lost", "$12k in missed invoices"
-4. `emotionalIntent` MUST be "FRUSTRATION" or "RECOGNITION"
-5. The viewer must think "that's exactly my problem" — not "that sounds like a problem"
-6. Duration: 120–180 frames (4–6 seconds)
-
-**Visual formula:**
-- Floating/scattered elements (avatars, tool icons, disconnected nodes) to show fragmentation
-- Desaturated/cold color temperature — brand colors appear AFTER solution
-- Text on screen = THE PAIN POINT, not a feature name
-- Best skills: `premium-team-orbit`, `premium-floating-path-nodes`, `premium-kinetic-text`, `premium-gradient-hero`
-
-**VIOLATION**: Scene 1 showing clean product UI, logo, or saying "Introducing [Product]" is automatic fail.
-
-### 6.9 ANCHOR ELEMENTS — Visual Continuity Across Scenes
-
-1–2 anchor elements per video persist across multiple scenes:
-
-**Common patterns:**
-- **App identity**: sidebar nav items + app name must match across consecutive showcase scenes
-- **Key metric**: stat introduced in Scene 3 echoed in Scene 4 or CTA ("That's 12 hours back, every week")
-- **Brand element**: product logo appears in Scene 1 (problem context), Scene 3 (solution), CTA
-
-**How to use in scene prompts:**
-- "ANCHOR: This scene shares the same app shell as Scene 3 — sidebar items [X, Y, Z] and app name '[AppName]' must match exactly."
-- "ANCHOR: Echo the '12 hours saved' metric from the previous scene — reinforce it visually."
-
----
-
-## 7. GENERATION SYSTEM PROMPT
-
-### 7.1 Typography Scale
-
-| Role | Size (px) | Weight | Notes |
+| Duration | Setup | Tension | Resolve |
 |---|---|---|---|
-| hero | 128–160 | 900 | Main video headline |
-| scene title | 80–108 | 800–900 | Per-scene primary text |
-| section | 40–56 | 700 | Feature names, chapter titles |
-| body | 22–32 | 400–500 | Supporting copy |
-| badge | 14–18 | 500–600 | Pills, labels, tags |
-
-**CRITICAL**: `fontSize < 72px` for main scene headline is a violation. Headlines must fill the frame.
-
-### 7.2 Shadow Depth Scale
-
-```
-Low:    "0 1px 2px rgba(0,0,0,0.04), 0 4px 12px rgba(0,0,0,0.06)"
-Medium: "0 2px 4px rgba(0,0,0,0.04), 0 8px 24px rgba(0,0,0,0.08), 0 24px 48px rgba(0,0,0,0.04)"
-High:   "0 4px 8px rgba(0,0,0,0.04), 0 12px 32px rgba(0,0,0,0.08), 0 32px 64px rgba(0,0,0,0.06)"
-```
-
-### 7.3 Light Theme Scene Rules (NEW 2026-03-14)
-
-When `BRAND.style === "light"`, ALL of the following are mandatory:
-
-1. **ALWAYS start with `<LightArcBg brand={BRAND} />`** as first child of AbsoluteFill
-2. **White cards** (`background: "white"`) — NOT glass cards (no `backdropFilter` on light bg)
-3. **Medium or High shadow elevation** on all floating cards (see Shadow Depth Scale)
-4. **Text**: `BRAND.text` (#0f172a); labels: `BRAND.textMuted` (rgba(15,23,42,0.5))
-5. **Accent color** (`BRAND.primary`) on max 2–3 elements — never as background fill
-6. **Border**: `1px solid rgba(0,0,0,0.08)` on cards and dividers
-
-These rules are now enforced in the generate system prompt AND the plan route. When `/api/plan` outputs `bgSkill: "premium-light-arc-bg"`, every scene prompt is also prepended with "Use LightArcBg as background."
-
-### 7.4 Generate System Prompt — Full Detail
-
-The generate system prompt (`SYSTEM_PROMPT` in `src/app/api/generate/route.ts`) enforces these rules on every LLM scene generation call. Key sections (complete):
-
-#### Spring Config "Pro Standard"
-- Standard UI reveal: `damping: 200, stiffness: 120`
-- Gentle floating loop: `damping: 22, stiffness: 70`
-- Playful pop ONLY: `damping: 8, stiffness: 150`
-- Cinematic camera push-in: `damping: 200, stiffness: 80`
-- **NEVER** use `damping: 14` or `damping: 28` — low-quality defaults
-
-#### Emotional Intent → Animation Style
-Emotion → spring + character + spacing:
-- `FRUSTRATION` → damping:150/stiffness:200, jittery staggered entrances, tight crowded spacing
-- `PAIN` → damping:300/stiffness:60, slow heavy dragging settle, compressed spacing
-- `RECOGNITION` → damping:200/stiffness:120, clean deliberate one-at-a-time, normal spacing
-- `RELIEF` → damping:400/stiffness:80, smooth floating almost weightless, generous (160px+ from edges)
-- `CONFIDENCE` → damping:200/stiffness:140, synchronized crisp all arrive together, clean structured
-- `TRUST` → damping:300/stiffness:100, gentle warm unhurried, open relaxed
-- `URGENCY` → damping:120/stiffness:180, fast pressing strong entrance, compact
-- `EXCITEMENT` → damping:8/stiffness:200, elastic pop bounce overshoot, energetic
-**Application rule**: The emotion applies to ALL spring() calls in the scene, not just one.
-
-#### Scene Act Structure (applied in code per prompt allocations)
-```
-Act 1 (Setup, 0–20%): ONE anchor element enters. Background reveals. Nothing else.
-Act 2 (Tension, 20–75%): Main content unfolds sequentially. Each element 8–15f after previous.
-Act 3 (Resolve, 75–100%): ALL animation stops. Final state holds motionless 20–30f min.
-```
-Hard rule: Act 3 must be fully static — no floating, no pulsing, no continuous animation after Act 3 begins (CTA button may have 0.03 scale pulse only).
-
-#### On-Screen Narrative Text Code Pattern
-```tsx
-const HEADLINE = "Done in 30 seconds."; // use verbatim from scene prompt
-const headlineProgress = spring({ frame: frame - HEADLINE_START, fps, config: { damping: 200, stiffness: 120 } });
-
-// Section label (enters first, tiny, uppercase):
-<div style={{ fontSize: 12, fontWeight: 700, letterSpacing: "0.22em", color: BRAND.primary, textTransform: "uppercase", marginBottom: 16 }}>
-  {SECTION_LABEL}
-</div>
-
-// Main headline (dominant element):
-<div style={{ fontSize: 96, fontWeight: 900, letterSpacing: "-0.04em", lineHeight: 1.05,
-  maxWidth: "80%", wordBreak: "break-word",
-  transform: `translateY(${interpolate(headlineProgress, [0, 1], [30, 0])}px)`,
-  opacity: headlineProgress }}>
-  {HEADLINE}
-</div>
-
-// Sub-line enters 12 frames after headline
-```
-Accent word rule: identify ONE most powerful word → render in `BRAND.primary` span with gradient text pattern.
-
-#### Gradient Text Pattern
-```tsx
-style={{
-  background: `linear-gradient(135deg, ${BRAND.primary} 0%, ${BRAND.secondary} 60%, ${BRAND.primary} 100%)`,
-  WebkitBackgroundClip: "text",
-  WebkitTextFillColor: "transparent",
-  backgroundClip: "text",
-}}
-```
-Use on: hero/opener headlines, CTA primary headline, bold problem statements, brand name reveals.
-
-#### Glass Card Pattern (dark themes)
-```tsx
-{
-  background: "linear-gradient(135deg, rgba(255,255,255,0.08) 0%, rgba(255,255,255,0.02) 100%)",
-  backdropFilter: "blur(16px)",
-  WebkitBackdropFilter: "blur(16px)",
-  border: "1px solid rgba(255,255,255,0.08)",
-  borderTop: "1px solid rgba(255,255,255,0.2)",
-  borderLeft: "1px solid rgba(255,255,255,0.15)",
-  borderRadius: 20,
-  boxShadow: "0 12px 40px rgba(0,0,0,0.4), inset 0 1px 1px rgba(255,255,255,0.15)",
-}
-```
-
-#### SaaS Color Palette Presets (when BRAND not specified)
-| Style | bg | primary | secondary | text |
-|---|---|---|---|---|
-| Dark SaaS (dev/data) | #0a0f1e | #6366f1 | #14b8a6 | #f8fafc |
-| Dark SaaS (enterprise) | #0c1220 | #3b82f6 | #8b5cf6 | #f1f5f9 |
-| Light SaaS (B2B) | #f8fafc | #4f46e5 | #0ea5e9 | #0f172a |
-| Dark Neon | #080c14 | #22d3ee | #a855f7 | #e2e8f0 |
-| Warm Light | #faf9f7 | #f97316 | #eab308 | #1c1917 |
-Default: dark SaaS (dev/data) when product type is unclear.
-
-#### Text Overflow Rules (VIOLATION — most common LLM mistake)
-- All headline text: `maxWidth: "80%"`, `wordBreak: "break-word"`, `overflowWrap: "break-word"`
-- Long labels/subtitles: `maxWidth: "70%"`, `whiteSpace: "normal"`
-- Cards with text: always set explicit `width` + `overflow: "hidden"`
-- **NEVER** `whiteSpace: "nowrap"` on a headline
-- If text is >25 characters: reduce fontSize by 20% from starting value
-
-#### Cursor Scene Additional Rules (13–14 in system prompt)
-13. **Depth-of-field on ALL cursor scenes**: wrap screenshot background in `<DepthBlur>`:
-```tsx
-const dofProgress = interpolate(frame, [ACT_1_END, ACT_1_END+25, ACT_2_END, ACT_2_END+20], [0, 0.7, 0.7, 0], { extrapolateLeft:"clamp", extrapolateRight:"clamp" });
-<DepthBlur focusDistance={dofProgress} maxBlur={7}>{/* screenshot */}</DepthBlur>
-```
-14. **ChromaticAberration from cursor speed** — intensity = cursorVelocity mapped 0→0.55.
-
-#### Performance Rules
-- `willChange: "transform"` on elements animating every frame (device floats, orbs)
-- Do NOT animate `filter: blur()` per frame — use fixed blur on static depth layers
-- Use `transform` for all movement — never animate `top/left/width/height`
-- Counter text: `fontVariantNumeric: "tabular-nums"` to prevent layout shift
-
-#### Reconstruction Crossfade — MANDATORY HARD RULE
-When `UI_SCHEMA` block present AND `ATTACHED_IMAGES` available:
-```tsx
-const screenshotOpacity = interpolate(frame, [0, 25, 50], [1, 1, 0], { extrapolateLeft:"clamp", extrapolateRight:"clamp" });
-const uiOpacity = interpolate(frame, [30, 65], [0, 1], { extrapolateLeft:"clamp", extrapolateRight:"clamp" });
-// Screenshot at z:1 fades out f:0–50; Reconstructed UI at z:2 fades in f:30–65
-```
-**VIOLATION**: Jumping to reconstructed UI from frame 0 (skipping crossfade) is not allowed.
-
-#### Visual Composition Rules
-- Split composition: text left (40%), visual right (55%), 5% gap — for showcase/feature scenes
-- Full-screen text scenes: center everything, max 75% width constraint
-- AbsoluteFill background must match `BRAND.bg` from frame 0 — never fade in background
-- CTA buttons: min 60px tall, min-width 280px, full border-radius (9999px for pill)
-
-#### Chameleon Overlay Rules (INTERACTION_SCRIPT present)
-1. Paste `CURSOR_STEPS` const verbatim — do NOT change x/y/box/time values
-2. `ChameleonInput x, y, w, h` come directly from `CURSOR_STEPS[n].box` values
-3. `triggerFrame/startFrame` = `step.time + 25` (TRAVEL frames after spring starts)
-4. Render cursor div OUTSIDE `CinematicCamera` so it stays at z:100
-5. Use progressive camera zoom (camera target lerps toward cur.x/cur.y with lag)
-6. After button submit: loading spinner → green checkmark → slide-in toast
-7. For input steps: keyboard key pill ("Enter ↵") near end of dwell frames
-
-### 7.5 Cinematic Mandatory Rules
-
-**Rule 1 — CinematicCamera + ParallaxLayer** (showcase scenes ≥ 210f AND 3+ visual layers):
-```tsx
-<CinematicCamera targetX={0.5} targetY={0.42} zoomTo={1.06}>
-  <ParallaxLayer depth={0.12} cameraProgress={camProg}>{/* background */}</ParallaxLayer>
-  <ParallaxLayer depth={0.40} cameraProgress={camProg}>{/* midground */}</ParallaxLayer>
-  <ParallaxLayer depth={0.80} cameraProgress={camProg}>{/* foreground: primary UI */}</ParallaxLayer>
-</CinematicCamera>
-```
-
-**Rule 2 — GlowBloom** on EVERY CTA button AND every hero metric/stat number:
-```tsx
-<GlowBloom color={BRAND.primary} blurPx={60} opacity={0.5} spread={1.8} animated>
-  <div style={{ /* button styles */ }}>{BRAND.cta}</div>
-</GlowBloom>
-```
-
-**Rule 3 — ChromaticAberration** on cursor speed + scene entrances:
-```tsx
-// Cursor velocity → chromatic aberration
-const cursorSpeed = Math.sqrt(cursorDx*cursorDx + cursorDy*cursorDy) / 30;
-const chromaticIntensity = interpolate(cursorSpeed, [0, 15], [0, 0.55], { extrapolateRight: "clamp" });
-// Non-cursor: entrance chroma
-const entranceChroma = interpolate(frame, [0, 8], [0.4, 0], { extrapolateRight: "clamp" });
-```
-
-### 7.6 WhatAStory Scene Patterns
-
-**Pattern A — Hook/Intro (light brand):**
-- LightArcBg variant="grid" as base
-- Brand logo PNG centered at ~220px inside ContentCard (400×280px) that springs in
-- FloatingShapes scattered around card
-- NO headline text — logo IS the message
-
-**Pattern B — Concept/Callout (no UI):**
-- LightArcBg variant="grid" + FloatingShapes
-- ONE large centered text line (~56px) with key phrase in BRAND.primary
-- Small icon (64×64px white circle with emoji) springs in at startFrame+10
-
-**Pattern C — Feature UI Demo (most common):**
-- LightArcBg variant="grid" base
-- PersistentSectionLabel top-left with featureName
-- ContentCard wrapping screenshot or reconstructed UI (75% of frame)
-- Cursor/interaction overlays at zIndex 100 inside ContentCard
-
-**Pattern D — Section Title:**
-- LightArcBg variant="grid" base
-- SectionTitle centered — title, optional subtitle, optional icon
-- Clean minimal, 3 seconds, no FloatingShapes
-
-**Pattern E — CTA:**
-- LightArcBg variant="grid" base
-- Logo centered (~200px), springs in
-- Tagline: normal text + colored key phrase in BRAND.primary
-- Wide brand-color button (~560×72px, borderRadius:12)
-
-### 7.7 Violations (Automatic Failures)
-
-1. `Math.random()` inside component → use `random('stable-seed')`
-2. `PARTICLES/ORBS/CONFETTI arrays inside component` → declare OUTSIDE component
-3. `AbsoluteFill` without `backgroundColor` → always set `style={{ backgroundColor: BRAND.bg }}`
-4. `fontSize < 72px` for main scene headline
-5. Hardcoded hex like `"#6366f1"` → always use `BRAND.primary`
-6. `backdropFilter` without `WebkitBackdropFilter` → always pair them
-7. `spring()` without explicit config → always pass `config: SPRING_CONFIGS.entrance`
-8. Interpolations without easing → visible motion must use `EASINGS.easeOutCubic`
-9. Missing `willChange: "transform"` on per-frame animated elements
-10. Shadowing a RESERVED NAME → never declare `const spring = ...`, `const BRAND = ...`, etc.
-11. Text without `maxWidth` → any headline MUST have `maxWidth: "80%"` + `wordBreak: "break-word"`
-12. `whiteSpace: "nowrap"` on headlines > 24px → NEVER
-13. **Silent cursor/chameleon scenes** — Any scene with INTERACTION_SCRIPT MUST include `<SfxSequencer events={INTERACTION_SCRIPT} />`. Silent cursor clicks are amateur output. Sound design is 50% of perceived quality.
-14. **Flat z-depth** — All layers must be separated into bg (z:0), midground (z:10–50), foreground (z:100+). Never a plain solid fill as the only layer.
-
-### 7.8 Reserved Names
-
-```
-spring, interpolate, useCurrentFrame, useVideoConfig, AbsoluteFill, Sequence,
-ATTACHED_IMAGES, getGlassCard, ParallaxLayer, SheenOverlay, MotionBlurWhip, SPRING_CONFIGS, EASINGS, Audio, BRAND,
-MeshGradientBg, CameraMotionBlur, useAudioSync, useBeat, WORD_TIMINGS, random,
-ChromaticAberration, GlowBloom, glowBloomStyle, DepthBlur,
-useTyping, usePopup, useAccordion, useDragItem,
-ChameleonInput, ChameleonHighlight, DropdownMenu,
-CinematicCamera, TaskDetailPanel, ModalOverlay, InputField, ChatBubble, SidebarNav, AppShell,
-cubicBezier, LightArcBg,
-GLOBAL_STYLE, FilmGrain, ContextualSectionHeader, SfxSequencer, AnimatedSidebar, AnimatedMetricCards, AnimatedTable, AnimatedChart, AnimatedForm, ReconstructedAppShell,
-AnimatedTopbar, SectionTitle, NotificationToast, StatusBadge, TableActionButton,
-PersistentSectionLabel, FloatingShapes, ContentCard, GLOBAL_BG,
-useInteractionFeedback, ContextualBgPulse
-```
-
-### 7.9 Visual Narrative Principles
-
-- **Progressive reveal**: Most important element enters first. Supporting elements follow.
-- **Breathing room**: 80–120px padding from edges (160px for hero). One dominant element per scene.
-- **Typography as emotion**: Problem/frustration → tighter tracking, heavier weight; Relief/solution → looser, lighter; CTA → largest type, brand color.
-- **Animation speed = emotion**: Frustration → stiffness:180, damping:14; Relief → stiffness:60, damping:200; Feature demos → stiffness:120, damping:200; CTA → stiffness:150, damping:18.
-
-### 7.10 UI Reconstruction vs Screenshot Overlay
-
-**Use ReconstructedAppShell/AnimatedSidebar/etc. (premium-reconstructed-ui) PREFERRED when:**
-- Standard SaaS layout (sidebar + dashboard, settings, forms, tables)
-- UI elements need independent animation
-- Form/modal interaction (typing, dropdown selection)
-- Camera zoom planned (vectors stay crisp)
-
-**Use screenshot overlay (premium-chameleon-ui) ONLY when:**
-- Highly custom UI (maps, 3D views, photo-heavy, complex visualizations)
-- Brand fidelity is critical above animation quality
-- Screenshot contains irreplaceable real data
-
-**Reconstruction crossfade pattern** (mandatory when both are present):
-- Screenshot at z:0, fades OUT f:0→50
-- Reconstructed UI at z:1, fades IN f:30→65
-- Both visible during f:30–50 for visual continuity
-
-### 7.11 Cursor Entry Convention
-
-Always start cursor at `{ x: 0.5, y: 0.85, action: "none" }` — center-bottom of frame.
-
-### 7.12 Output Format
-
-- Output ONLY code — no explanations, no markdown fences, no questions
-- Must start with `import` and end with `};`
-
-### 7.13 Mandatory 2.5D Depth Layering
-
-Every scene MUST have 3 depth planes:
-
-- **Layer 1 — Background (z:0)**: texture, bg color, ambient. Moves slowest or static. Always has visual interest: LightArcBg / MeshGradientBg / ContextualBgPulse / radial gradient. Wrap in DepthBlur when cursor active.
-- **Layer 2 — Midground (z:10–50)**: UI cards, device mockups, data charts, avatars. Main content. maxWidth 75–88% of frame. Medium elevation shadow.
-- **Layer 3 — Foreground (z:100+)**: Headlines, cursor, badges, notification toasts, callout bubbles. Always sharp (never blurred). Enters last.
-
-**Parallax rule:**
-```tsx
-<ParallaxLayer depth={0.2} cameraProgress={camZoom}>{/* bg — moves less */}</ParallaxLayer>
-<ParallaxLayer depth={0.5} cameraProgress={camZoom}>{/* midground */}</ParallaxLayer>
-{/* cursor has no ParallaxLayer */}
-```
+| 150f | 0–30f | 30–105f | 105–150f |
+| 180f | 0–40f | 40–130f | 130–180f |
+| 210f | 0–50f | 50–155f | 155–210f |
+| 240f | 0–60f | 60–180f | 180–240f |
 
 ---
 
-## 8. SKILL LIBRARY
+## 9. AUDIO SYSTEM
 
-### 8.1 Complete Skill Registry (57 premium + 8 basic + 9 examples = 74 total)
-
-All loaded from `src/skills/index.ts`. Names must match exactly.
-
-**Basic category skills** (8 skills):
-- `charts` — data visualizations, graphs, bar charts, pie charts, progress bars
-- `typography` — kinetic text, typewriter effects, text animations
-- `social-media` — Instagram/TikTok/YouTube vertical content
-- `messaging` — chat interfaces, WhatsApp, iMessage, chat bubbles
-- `3d` — ThreeJS, rotating cubes, spatial animations
-- `transitions` — scene changes, fades, slide transitions
-- `sequencing` — staggered animations, choreographed entrances
-- `spring-physics` — bouncy animations, elastic effects
-
-**Premium skills** (57 skills):
-
-| Skill name | Description | Best use case |
-|---|---|---|
-| `premium-saas-hook` | Brand reveal, floating icons orbiting hero laptop | Intro for dark SaaS brands |
-| `premium-saas-showcase` | Browser chrome, dashboard stat cards, slide-up | General product screenshot showcase |
-| `premium-cursor-engine` | Arrow cursor spring movement, click ripple, double ripple, step badges, click-zoom, keyboard pills, spotlight | UI walkthrough demo for tech/analytics |
-| `premium-team-orbit` | Floating avatars with role badges, SVG dotted paths, logo reveal | Problem scene for team/collaboration chaos |
-| `premium-camera-zoom` | Spring zoom into device screen, true parallax multi-layer, continuous slow pan | Hero push-in reveal, device to fullscreen |
-| `premium-social-proof` | Glass notification cards, integration logos orbiting, avatar-widget-orbit variant | Trust/proof scene |
-| `premium-cta-scene` | Mesh orb bg, kinetic CTA headline, pulsing gradient button, simple light variant | CTA finale |
-| `premium-kinetic-text` | Word-by-word spring stagger, brand pill, flash sweep, light-bg variant, underline accent | Energy/hook text scene |
-| `premium-neon-dark` | Sonar rings, SVG glow filter, shape-masked image reveal, heartbeat pulse | Dark tech/analytics problem scene |
-| `premium-network-intro` | Avatar nodes, polka-dot SVG paths, ripple rings, real photo support, light bg variant | B2B ecosystem/network intro |
-| `premium-feature-list` | Staggered 3–4 feature bullets with icons | Simple feature showcase |
-| `premium-device-mockup` | MacBook CSS shell, browser window, phone mockup with ATTACHED_IMAGES on screen | Product screenshot in device frame |
-| `premium-scroll-demo` | Browser shell scroll animation, section spotlight | Living product walkthrough |
-| `premium-data-reveal` | Counting numbers, bar fill, SVG ring progress, stat card grid | Metric/KPI reveal |
-| `premium-split-screen` | Before/after divider with darkening left side | Literal left-vs-right comparison ONLY |
-| `premium-multi-device` | Laptop+phone+tablet composite, staggered floats | Cross-platform showcase |
-| `premium-glassmorphism` | Glass cards, glowing orbs, parallax depth, gradient-glow border | Rich visual depth, any scene |
-| `premium-match-cut` | Scene A zoom-to-fill, scene B zoom-out, motion blur, whip-cut | Sharp contrast reveal |
-| `premium-char-split` | Character-level headline animation, push-up letter reveal | Single impactful problem statement |
-| `premium-audio` | Background music, SFX, volume fade | Music in intro/CTA scene |
-| `premium-chameleon-ui` | 3-layer z hierarchy (screenshot/overlays/cursor), ChameleonInput/Highlight/DropdownMenu, CinematicCamera zoom | Form/input interaction demo over screenshot |
-| `premium-data-flow-abstract` | Glowing hub nodes, SVG bezier paths, traveling data packets | Integration/API/AI pipeline |
-| `premium-3d-isometric-explode` | Screenshot sliced into 3 floating CSS-3D isometric panels | Architecture/layer reveal |
-| `premium-ambient-environment` | Orbiting glow orbs, floating particle dust | Depth layer for glassmorphism/CTA/kinetic |
-| `premium-shape-morph-transition` | Color flood fill from clicked element, clipPath expand | Scene transition from cursor-engine/CTA |
-| `premium-hand-cursor` | Cartoon pointing-hand SVG, hotspot at fingertip, squeeze click, double ripple | Friendly explainer-video cursor |
-| `premium-callout-bubble` | Floating comment card (avatar + typed message + CTA + blue outline), annotation tooltip, slide-in side panel | Collaboration/feedback features |
-| `premium-responsive-viewport` | Browser + device-switcher toolbar (desktop/tablet/mobile icons), spring-transition content width | Responsive web product demo |
-| `premium-dot-matrix-bg` | CSS repeating-radial-gradient dot grid, floating brand-color accent dots, dark dash marks | Light theme background texture |
-| `premium-ink-logo-reveal` | Blob border-radius morph to brand icon shape, wordmark springs in | Dramatic brand/logo moment |
-| `premium-multi-corner-gradient` | Pastel corner blob bg (blue BL, salmon TR, red BR), radial-gradient falloff | Light brand background for network-intro/CTA |
-| `premium-customer-journey` | Cubic bezier SVG path, traveling dot lerp, milestone dot markers, pop-up info cards with pointer triangle | CRM/CS lifecycle/pipeline scene |
-| `premium-icon-concept-scene` | Oversized white circle icon, soft radial color glow, dark coin badge, dotted SVG curved path + triangle arrowhead | Abstract concept/problem visual |
-| `premium-icon-arc-reveal` | Dark glow bg, neon outline icon, SVG circle arc draws via strokeDashoffset, concentric rings, shape-mask expand | Dark hook/intro scene |
-| `premium-floating-path-nodes` | Dark green bg, aurora nebula (blurred ellipse), outline circles/pills, dotted path, traveling dot | Chaos/disconnected systems problem scene |
-| `premium-confetti-celebration` | 80 PARTICLES array outside component, rect/circle/streak shapes, wobble, burst variant | Deal closed/launch/win scene |
-| `premium-real-photo-device` | ATTACHED_IMAGES[0]=Ken Burns background, portrait tablet (380×520), 3-layer shadow, screen reflection, ATTACHED_IMAGES[1]=product UI | Product-in-context social proof |
-| `premium-icon-bubble-row` | Large colored filled circles with white SVG icons, sequential spring pop-in, arc accent | Feature categories, tech stack, use cases |
-| `premium-integration-wall` | Solid brand-color bg, scattered white rounded-square app logo cards | Integration/data sources showcase |
-| `premium-feedback-storm` | Person photo centered, floating feedback cards at 2 z-depths, urgency pills | Feedback/VoC/NPS social proof |
-| `premium-gradient-hero` | Full-screen bold headline with brand gradient text, zero chrome | Bold statement scene, chapter cards |
-| `premium-logo-wall` | Trusted-by logo grid (3×2 or 4×2) or infinite marquee, glass cards | Enterprise social proof |
-| `premium-stat-counter` | Single dramatic metric (280px+), count-up, radial glow | Single data-proof stat |
-| `premium-feature-grid` | 2×2 or 3×2 animated card grid with icon+title+description | "Here's what you get" overview |
-| `premium-interactive-ui` | Full AppShell + SidebarNav + InputField + TaskDetailPanel reconstruction | Showcase when NO screenshot available |
-| `premium-light-arc-bg` | Near-white bg with animated concentric SVG arc lines + corner gradient blobs | Background layer for all light-themed scenes |
-| `premium-feature-bundle-cards` | 3 white cards + connectors (+ symbols), each with icon/title/accent label | Integration/platform overview |
-| `premium-reconstructed-ui` | Full vector UI reconstruction: AnimatedSidebar + AnimatedTopbar + AnimatedMetricCards + AnimatedTable + AnimatedChart + AnimatedForm | Standard SaaS dashboard showcase |
-| `premium-section-title` | Centered chapter title card; SectionTitle component + LightArcBg | Chapter breathing room (90f, 3s) |
-| `premium-animated-topbar` | Tabs with sliding underline, breadcrumb, search, avatar; AnimatedTopbar | Top navigation scene |
-| `premium-light-textured-bg` | Light background variants (arc/grid/dot); wraps LightArcBg | Background layer for light features/proof scenes |
-| `premium-notification-toast` | Slide-in success/action notification; NotificationToast component | Action result feedback |
-| `premium-app-walkthrough` | Persistent shell (sidebar/topbar persist), only main content area transitions | Multi-screen same-app navigation |
-| `premium-before-after` | Horizontal wipe reveal; left panel dark/desaturated "before", right vibrant "after"; animated glowing divider | Problem-to-solution bridge |
-| `premium-metric-flyout` | Hero metric (280px) + 3–4 satellite stat pills from screen edges + SVG arc ring + radial glow | ROI/data-proof with supporting stats |
-| `premium-testimonial-card` | Full-screen editorial pullquote, word-by-word reveal, avatar, stars | Single strong customer quote |
-| `premium-phone-notification` | iOS-style frosted-glass push notification from top | Real-time alerts, mobile CRM/HR |
-| `premium-narrative-overlay` | On-screen narrative text layer; bold copy overlay, section label, word-by-word reveal | Polish slot for any narrative text scene |
-| `premium-before-after` | Horizontal wipe reveal; left panel dark/desaturated "before", right vibrant "after"; animated glowing divider | Problem-to-solution bridge |
-| `premium-metric-flyout` | Hero metric (280px) + 3–4 satellite stat pills from screen edges + SVG arc ring + radial glow | ROI/data-proof with supporting stats |
-| `premium-testimonial-card` | Full-screen editorial pullquote, word-by-word reveal, avatar, stars | Single strong customer quote |
-| `premium-phone-notification` | iOS-style frosted-glass push notification from top | Real-time alerts, mobile CRM/HR |
-| `premium-logo-wall` | Trusted-by logo grid (3×2 or 4×2) or infinite marquee, glass cards | Enterprise social proof |
-| `premium-stat-counter` | Single dramatic metric (280px+), count-up, radial glow | Single data-proof stat |
-| `premium-feature-grid` | 2×2 or 3×2 animated card grid with icon+title+description | "Here's what you get" overview |
-| `premium-interactive-ui` | Full AppShell + SidebarNav + InputField + TaskDetailPanel reconstruction | Showcase when NO screenshot available |
-| `premium-gradient-hero` | Full-screen bold headline with brand gradient text, zero chrome | Bold statement scene, chapter cards |
-| `premium-integration-wall` | Solid brand-color bg, scattered white rounded-square app logo cards | Integration/data sources showcase |
-| `premium-feedback-storm` | Person photo centered, floating feedback cards at 2 z-depths, urgency pills | Feedback/VoC/NPS social proof |
-
-**Example skills** (9 code reference skills):
-- `example-histogram`, `example-progress-bar`, `example-text-rotation`, `example-falling-spheres`, `example-animated-shapes`, `example-lottie`, `example-gold-price-chart`, `example-typewriter-highlight`, `example-word-carousel`
-
-### 8.2 Skill Stacking Rules
-
-Skills array: `[primarySkill, backgroundSkill?, polishSkill?]`
-
-- `skills[0]` = PRIMARY: main visual pattern (required)
-- `skills[1]` = BACKGROUND: atmosphere/texture (optional but strongly recommended for scenes without built-in bg)
-- `skills[2]` = POLISH: micro-pattern on top (optional, sparse use)
-
-**Recommended stacks:**
-- Dark hook: `["premium-icon-arc-reveal"]`
-- Dark problem: `["premium-floating-path-nodes"]`
-- Dark kinetic: `["premium-kinetic-text", "premium-neon-dark"]`
-- Dark metrics: `["premium-metric-flyout", "premium-ambient-environment"]`
-- Dark CTA: `["premium-cta-scene"]`
-- Light hook: `["premium-saas-hook"]`
-- Light features: `["premium-icon-bubble-row", "premium-light-textured-bg"]`
-- Light cursor: `["premium-chameleon-ui", "premium-dot-matrix-bg"]`
-- Light reconstructed UI: `["premium-reconstructed-ui"]`
-- Light social proof: `["premium-social-proof", "premium-multi-corner-gradient"]`
-- Light stat: `["premium-stat-counter", "premium-light-textured-bg"]`
-- Light kinetic: `["premium-kinetic-text", "premium-dot-matrix-bg"]`
-- Logo wall: `["premium-logo-wall", "premium-light-textured-bg"]`
-- Testimonial: `["premium-testimonial-card", "premium-multi-corner-gradient"]`
-- Customer journey: `["premium-customer-journey", "premium-multi-corner-gradient"]`
-- Network intro: `["premium-network-intro", "premium-multi-corner-gradient"]`
-- Feature grid: `["premium-feature-grid", "premium-light-textured-bg"]`
-- Integration wall: `["premium-integration-wall"]`
-- Before/after: `["premium-before-after"]`
-- Section title: `["premium-section-title"]`
-
-**Constraints:**
-- NEVER combine two background skills
-- NEVER combine two cursor/interaction skills
-- Self-contained skills (icon-arc-reveal, floating-path-nodes, cta-scene, before-after, integration-wall) already have rich backgrounds — do NOT add background skill
-- `premium-ambient-environment` as skills[1]: best for metrics/proof/data needing visual depth
-- `premium-narrative-overlay` as skills[2]: POLISH slot for explicit on-screen narrative text
-
-### 8.3 Skill Selection Rules
-
-- **Intro scene, light B2B brands**: `premium-saas-hook` with FloatingShapes + ContentCard wrapping logo (WhatAStory hook pattern: logo in white card, geometric shapes floating on grid bg)
-- **Intro scene, dark brands**: `premium-icon-arc-reveal` — most polished dark hook
-- **Problem scene, scattered team/communication**: `premium-team-orbit`
-- **Problem scene, technical failures**: `premium-neon-dark`
-- **Problem scene, data silos/chaos**: `premium-floating-path-nodes`
-- **Problem scene, literal old-vs-new**: `premium-split-screen` (use sparingly)
-- **Problem scene, bold statement**: `premium-kinetic-text` or `premium-char-split`
-- **Problem scene, data-backed cost**: `premium-data-reveal`
-- **When user uploads screenshots**: MANDATORY at least ONE scene with `premium-cursor-engine` or `premium-chameleon-ui`; MANDATORY at least ONE scene (different) with `premium-device-mockup`/`premium-scroll-demo`/`premium-saas-showcase`
-- **Cursor choice**: `premium-hand-cursor` for collaboration/design/consumer SaaS (friendly); `premium-cursor-engine` (arrow) for dev tools/analytics/technical
-- **Input fields/dropdowns visible**: use `premium-chameleon-ui` over `premium-cursor-engine` for typing + dropdown overlays
-- **Standard SaaS dashboards**: `premium-reconstructed-ui` over `premium-chameleon-ui` — vectors animate independently
-- **Integration/API/platform products**: strongly prefer `premium-data-flow-abstract` over `premium-network-intro` for "how it works" scene
-- **Light-themed brands**: in EVERY scene prompt, instruct `Use <LightArcBg brand={BRAND} /> as first child of AbsoluteFill`
-- **Light-themed B2B/CRM/customer-success**: `premium-multi-corner-gradient` as bg for intro/network-intro/CTA scenes
-- **Dark-themed products**: STRICTLY use `premium-icon-arc-reveal` for hook, `premium-floating-path-nodes` for problem, `premium-confetti-celebration` for solution/CTA
-- **CTA**: always `premium-cta-scene`; light brands without taglines use "Simple Logo + Wide Button + URL" variant
-- **Never repeat same skill** in two scenes
-- **Showcase scenes ≥ 210f**: ALWAYS add click-zoom punch-in (1.0→1.06) on at least one key element
-
-### 8.4 Transition Assignment Rules
-
-- First scene: always "fade"
-- Problem → Solution: "scale" or "slide"
-- Showcase → Social Proof: "fade"
-- Social Proof → CTA: "slide" or "flash"
-- Cursor/CTA scene finale: "flash" into next scene
-- Do NOT use "fade" for >2 consecutive transitions
-
----
-
-## 9. CURRENT QUALITY BENCHMARKS
-
-### 9.1 Audit System
-
-`/api/audit` evaluates generated code. Returns:
+### 9.1 Music Tracks
 ```typescript
-{
-  passed: boolean;
-  score: number;        // 0–100
-  issues: string[];
-  fixes: string[];
-}
-```
-
-Quality gate: `score < 70` triggers regeneration with fix instructions. Only audits `isAhaMoment` scenes and `imageIndex === 0` scenes (quota-aware).
-
-Post-generation auto-audit: fires-and-forgets after all scenes compile; logs issues to console only.
-
-### 9.2 CompiledScene Interface
-```typescript
-interface CompiledScene {
-  Component: React.ComponentType;
-  durationInFrames: number;
-  code: string;
-  title: string;
-  prompt: string;
-  skill: string;           // Note: singular "skill" not "skills" in CompiledScene
-  imageIndex?: number;
-  cursorWaypoints?: CursorWaypoint[];       // NEW (2026-03-14)
-  transition?: "fade"|"slide"|"scale"|"flash"|"none";  // NEW (2026-03-14)
-  auditScore?: number;
-  hasVoiceover?: boolean;
-  isAhaMoment?: boolean;
-  emotionalIntent?: string;
-  voiceoverAudioUrl?: string | null;
-  wordTimings?: { word: string; startFrame: number; endFrame: number }[];
-}
-// Note: skills[] (plural) is in ScenePlan; CompiledScene uses skill (singular) for the primary skill
-```
-
-### 9.3 AlignmentAdjustment Interface (NEW 2026-03-14)
-```typescript
-interface AlignmentAdjustment {
-  sceneId: number;
-  title: string;
-  oldDuration: number;
-  newDuration: number;
-  audioDurationFrames: number;
-  reason: string;  // e.g. "Audio ends at frame 195 — extended by 35f tail" or "Trimmed to match audio"
-}
-```
-```
-
-### 9.4 Known System Limitations
-
-1. **CONCURRENCY = 1**: Scenes generate sequentially. No parallel generation. Primary throughput bottleneck.
-2. **isAhaMoment auto-upgrade**: `resolveModel()` upgrades flash:none → flash:medium for aha-moment scenes (1 per video). All other scenes return user-selected model to avoid quota exhaustion.
-3. **Audit only on subset**: Only `isAhaMoment || imageIndex === 0` get audited mid-generation (quota-aware).
-4. **Vision coordinate space transformation**: Vision API returns 0–1 fractions of image; cursor-engine code adds `0.06 + y * 0.94` to account for 6% chrome bar at top of video.
-5. **buildInteractionScript TRAVEL = 25**: Hard-coded cursor spring settle time; must match cursor skill documentation.
-6. **Cache bypass**: No way to force cache-bypass per-scene from UI without full regeneration. Cache key (2026-03-14): `skill::brand.primary::imageIndex::durationInFrames::prompt[0:80]`.
-7. **SFX now CDN (2026-03-14)**: All 6 SFX types use Pixabay CDN URLs — no local `/audio/sfx/` files needed. Mapped via `SFX_MAP` in `compiler.ts`.
-8. **Music now CDN (2026-03-14)**: All 5 music styles use Pixabay CDN URLs — no local `/audio/music/` files needed. Mapped via `MUSIC_TRACKS` in `useFullVideoGeneration.ts`.
-9. **Streaming SSE vs JSON**: Initial generation uses streaming SSE; follow-up edits use JSON. Different parsing in `consumeSceneGeneration()`.
-10. **No image in follow-up edit mode**: `frameImages` can be passed but `isFollowUp=true` paths use non-streaming JSON responses.
-11. **globalBg threading**: `globalBg` flows from `/api/plan` → `pendingPlan` state → `runGeneration()` → `processScene()` → `compileCode()` as 7th parameter. If plan route omits it, defaults to "arcs".
-12. **alignSceneDurations minimum**: 90 frames (3s) — scenes will never shrink below this even if audio is shorter.
-13. **UI decompose in plan route**: Only runs on `parsedImages[0]` (first image). Runs in parallel with brand extraction. Non-fatal if it fails. Result stored in `uiSchemaResult` and attached to scenes with matching `imageIndex`.
-14. **Story flow detection**: `/api/flow-analyze` called with all images when ≥2 uploaded. Non-fatal if it fails — shows empty flow editor for user to fill in manually. `setPendingFlow` always called (may have undefined `detectedFlow`).
-
-### 9.5 Quality Gap vs WhatAStory Agency Standard
-
-Areas where the system lags WhatAStory quality:
-
-1. **Narrative depth**: LLM often produces feature-driven rather than outcome-driven voiceover despite instructions. The BROKEN REALITY hook often defaults to generic statements.
-2. **On-screen text**: Scene prompts often miss specifying exact on-screen text strings, leading LLM to invent generic copy.
-3. **Emotional visual grammar**: Spring configs for FRUSTRATION vs RELIEF are documented but LLM frequently ignores them in favor of default entrance springs.
-4. **Scene act structure timing**: Act structure is documented but LLM rarely explicitly places elements at documented frame ranges.
-5. **AHA moment treatment**: isAhaMoment scenes often lack the slow-spring + 20-frame hold + scale pulse treatment.
-6. **PersistentSectionLabel usage**: Rarely used by LLM on showcase scenes despite Pattern C guidance.
-7. **ContentCard wrapping**: LLM often uses raw browser chrome instead of the cleaner ContentCard pattern.
-8. **Typography size**: Generated headlines frequently smaller than the 80–120px requirement.
-9. **GlowBloom on CTAs**: Often omitted despite being mandatory Rule 2.
-10. **ChromaticAberration**: Almost never used despite being mandatory Rule 3.
-
----
-
-## 10. WHATASTORY FORMULA — COMPLETE REFERENCE
-
-### 10.1 Narrative Structure (6-scene standard)
-
-**Scene 1 — Hook (150f, FRUSTRATION/RECOGNITION)**
-- Broken reality. Viewer's pain, before product exists in this story.
-- Visual: LightArcBg grid + FloatingShapes + ContentCard (light); IconArcReveal (dark)
-- Text: 6-word headline, visceral. Sub-line: specific cost.
-- NO product name, NO logo.
-
-**Scene 2 — Problem (180f, PAIN)**
-- Deepen the pain. Quantify the cost (time, money, stress).
-- Visual: floating-path-nodes (dark) or team-orbit (chaos) or data-reveal (cost)
-- Text: "73% of teams miss deadlines" or clock-cost metaphor
-
-**Scene 3 — Solution/AHA (210f, RELIEF) — isAhaMoment: true**
-- Product transforms the broken reality. OUTCOME language.
-- Visual: reconstructed-ui or cursor-engine; slow spring (damping:400)
-- Text: "Done in 30 seconds." — hold 30+ frames. Scale pulse 1.0→1.03→1.0.
-- Act 3 minimum 40 frames — emotional payoff hold.
-
-**Scene 4 — Feature Demo (210f, CONFIDENCE)**
-- Show HOW it works. Specific feature, specific workflow.
-- Visual: cursor-engine + PersistentSectionLabel + ContentCard
-- Text: section label (13px caps) + headline 56–72px + feature tag pill
-
-**Scene 5 — Social Proof (150f, TRUST)**
-- Proof others have solved this. Stats, testimonials, logos.
-- Visual: logo-wall or testimonial-card or stat-counter + ambient-environment
-- Text: big number (96px+) + context line (22px)
-
-**Scene 6 — CTA (150f, URGENCY + EXCITEMENT)**
-- Call to action. Clear outcome. Product name + URL.
-- Visual: cta-scene
-- Text: 3–5 word gradient headline (120–160px, weight 900) + brand-color button + URL typewriter
-
-### 10.2 On-Screen Text Requirements Per Scene Type
-
-**PROBLEM/HOOK:**
-- Headline: 96–120px, weight 900, max 6 words, one word in BRAND.primary
-- Sub-line: 24px, weight 400, textMuted, specific cost/metric
-
-**SOLUTION/AHA:**
-- Headline: 80–108px, weight 800, OUTCOME language ("Done in 30 seconds.")
-- Sub-line: 22px — how the product handles it
-
-**FEATURE/SHOWCASE:**
-- Section label: 13px, uppercase, letterSpacing 0.18em, brand.primary
-- Headline: 56–72px, weight 800, what feature DOES for viewer
-- Feature tag: 14px pill badge
-
-**SOCIAL PROOF:**
-- Stat: 96px+, weight 900
-- Context: 22px — what number means
-- Logo/attribution: small, muted
-
-**CTA:**
-- Hero headline: 120–160px, weight 900, gradient text, 3–5 words
-- Button: outcome-driven, e.g. "Start Your Project →"
-- URL: 16px muted, typewriter animation
-
-### 10.3 Voiceover Quality Checklist
-
-Before finalizing voiceover, verify:
-- Does it describe what the VIEWER gains? (not what the product does)
-- Is it specific? (mentions actual time, money, or pain saved)
-- Does it feel like something a human would say out loud?
-- Would someone recognize their own problem in it?
-
-### 10.4 Cursor Scene Prompt Requirements
-
-For `premium-cursor-engine` OR `premium-chameleon-ui`, always include:
-- 3–5 concrete UI actions with actual feature names
-- Format: "Cursor navigates to [Feature A] and clicks → types '[value]' → clicks [Button]"
-- For cursor-engine: mention "Use click-zoom, double ripple, step annotation badges (Step N of M), keyboard key pill when typing"
-- For chameleon-ui: mention "progressive camera zoom, form success state (loading spinner → green checkmark), slide-in toast notification"
-
-**Section headers**: For cursor scenes with 3+ interaction steps, include sectionHeader on each interaction event naming the feature (64px, weight 800, slides from above).
-
-### 10.5 bgSkill + globalBg Rules
-
-- `brand.style === "light"` → `bgSkill = "premium-light-arc-bg"`, `globalBg = "grid"` (default)
-- Dark themes → `bgSkill = undefined`, `globalBg = "arcs"` (default)
-- globalBg variants: "arcs" = light lavender-white with concentric arcs (modern brands); "grid" = light gray crosshatch (enterprise B2B); "dots" = dot matrix (clean/minimal)
-
-### 10.6 Section Title Auto-Injection
-
-When `showcaseCount >= 4 AND !alreadyHasSectionTitles`, `injectSectionTitles()` runs:
-- Inserts 90-frame chapter card before first showcase scene of each new `imageIndex` group
-- Auto-derived title from scene.title (strips "showcase:", "feature:", etc.)
-- Prompt: `SectionTitle chapter card. Title: "${sectionTitle}". Subtitle: "See how it works". Use LightArcBg variant="grid".`
-
----
-
-## APPENDIX A: Full File Path Reference
-
-| File | Lines | Role |
-|---|---|---|
-| `src/app/api/plan/route.ts` | ~1310 | Narrative planning pipeline, brand extraction, UI schema decomposition, tiered summarization |
-| `src/app/api/generate/route.ts` | ~1321 | Scene code generation, streaming SSE, follow-up edit mode |
-| `src/app/api/vision/route.ts` | — | Screenshot UI element detection |
-| `src/app/api/audit/route.ts` | — | Visual quality audit |
-| `src/app/api/tts/route.ts` | — | ElevenLabs TTS + word timings |
-| `src/remotion/compiler.ts` | ~2200 | In-browser Babel compiler, all pre-built scope components |
-| `src/hooks/useFullVideoGeneration.ts` | ~1531 | Main generation orchestration hook |
-| `src/types/generation.ts` | ~257 | All TypeScript interfaces |
-| `src/skills/index.ts` | ~359 | Skill registry, SKILL_DETECTION_PROMPT, getCombinedSkillContent |
-| `src/skills/premium-*.md` | varies | 57 skill guidance files |
-| `src/components/LandingPageInput.tsx` | — | Main input form |
-| `src/components/ScenePlanEditor/` | — | Scene plan editor, cursor waypoint editor |
-| `src/components/SceneTimeline/` | — | Scene timeline display |
-| `src/lib/alignScenes.ts` | 61 | Audio-visual alignment: adjusts durationInFrames to audio duration + 35f tail; min 90f |
-| `src/lib/cropZone.ts` | — | Image crop zone utility |
-| `src/lib/extractVideoFrames.ts` | — | Video frame extraction utility |
-| `src/remotion/DynamicComp.tsx` | — | Remotion composition wrapper |
-
-## APPENDIX B: Model Configuration
-
-```typescript
-// Available models (from src/types/generation.ts)
-const MODELS = [
-  { id: "gemini-2.5-flash:none",    name: "Gemini 2.5 Flash — Free (Fast)" },
-  { id: "gemini-2.5-pro:none",      name: "Gemini 2.5 Pro — Free" },
-  { id: "gemini-2.5-pro:low",       name: "Gemini 2.5 Pro — Free (Think: Low)" },
-  { id: "gemini-2.5-pro:medium",    name: "Gemini 2.5 Pro — Free (Think: Medium)" },
-  { id: "gemini-2.5-pro:high",      name: "Gemini 2.5 Pro — Free (Think: High)" },
-  { id: "gemini-3-flash-preview:none",   name: "Gemini 3 Flash — Paid (Preview)" },
-  { id: "gemini-3.1-pro-preview:none",   name: "Gemini 3.1 Pro — Paid (Preview)" },
-  { id: "gemini-3.1-pro-preview:low",    name: "Gemini 3.1 Pro — Paid (Think: Low)" },
-  { id: "gemini-3.1-pro-preview:high",   name: "Gemini 3.1 Pro — Paid (Think: High)" },
-]
-
-// Thinking budgets (tokens)
-const THINKING_BUDGETS = { low: 1024, medium: 8192, high: 24576 }
-
-// Fast model for classification/validation
-const FAST_MODEL = "gemini-2.5-flash"
-
-// Default model when none specified
-const DEFAULT_MODEL = "gemini-2.5-flash:none" // pendingModelRef default
-```
-
-## APPENDIX C: Vision Coordinate Space
-
-Vision API (`/api/vision`) returns elements in image-fraction space (0–1):
-- `x`, `y` = element center, normalized to image dimensions
-
-Cursor-engine coordinate transform (applied in `consumeSceneGeneration`):
-```typescript
-// Account for 6% chrome bar at top of video frame
-const videoY = 0.06 + element.y * 0.94;
-const boxY = 0.06 + (element.y - (element.h ?? 0.05) / 2) * 0.94;
-```
-
-CursorWaypoint coordinates are already in video space (0–1 video fraction).
-
-## APPENDIX D: SFX File Map
-
-**Updated 2026-03-14**: Now uses Pixabay CDN URLs — no local audio files needed.
-
-```typescript
-// In src/remotion/compiler.ts — SFX_MAP
-const SFX_MAP = {
-  click:   "https://cdn.pixabay.com/audio/2022/03/15/audio_8e4dcdc8a0.mp3",
-  whoosh:  "https://cdn.pixabay.com/audio/2022/09/01/audio_d1c8f71ac7.mp3",
-  pop:     "https://cdn.pixabay.com/audio/2023/06/14/audio_5a7d7b7b7e.mp3",
-  type:    "https://cdn.pixabay.com/audio/2022/11/17/audio_febc508520.mp3",
-  success: "https://cdn.pixabay.com/audio/2023/03/17/audio_c1ab6d7a3e.mp3",
-  swoosh:  "https://cdn.pixabay.com/audio/2022/10/30/audio_27a9c0d733.mp3",
-}
-```
-
-**SFX auto-assignment (2026-03-14)** — `buildInteractionScriptFromTransition()` in plan route now auto-attaches `sfx` fields:
-- `search`/`type` transition → first event gets `sfx: "type"`, auto-adds submit button event with `sfx: "success"`
-- `click`/`navigate` → event gets `sfx: "click"`
-- `hover`/`scroll` → event gets `sfx: "whoosh"`
-
-## APPENDIX E: Music Tracks
-
-**Updated 2026-03-14**: Now uses Pixabay CDN URLs — no local audio files needed.
-
-```typescript
-// In src/hooks/useFullVideoGeneration.ts — MUSIC_TRACKS
 const MUSIC_TRACKS = {
   corporate:  "https://cdn.pixabay.com/audio/2023/11/13/audio_3c2e86c693.mp3",
   energetic:  "https://cdn.pixabay.com/audio/2024/08/20/audio_6c53572dfa.mp3",
@@ -1746,7 +680,285 @@ const MUSIC_TRACKS = {
   calm:       "https://cdn.pixabay.com/audio/2024/04/09/audio_9c659e933b.mp3",
   playful:    "https://cdn.pixabay.com/audio/2023/09/07/audio_168f2040eb.mp3",
 }
-// Volume: 0.08 when voiceover present, 0.18 without
-// Selection order: brand.musicStyle ?? brand.accentName ?? "cinematic"
-// Fallback: MUSIC_TRACKS["cinematic"] if key not found
+// Selection: MUSIC_TRACKS[brand.musicStyle ?? brand.accentName ?? "cinematic"]
+// Volume: interpolated per-scene (musicVolume × 0.08 with VO, × 0.18 without)
 ```
+
+**Energy → musicStyle chain**: flow-analyze `energyLevel` → planner nudge → `brand.musicStyle` → `MUSIC_TRACKS` key → master `<Audio>` volume interpolation
+
+### 9.2 Voiceover
+- Provider: ElevenLabs via `/api/tts`
+- Pre-fetched in parallel (`prefetchVoiceovers()`) before generation
+- Returns `{ audioUrl, wordTimings }`; attached to scene, injected as `VOICEOVER_AUDIO_URL` + `WORD_TIMINGS`
+- `alignSceneDurations()` adjusts `durationInFrames` to `max(90, lastWord.endFrame + 35)` after prefetch
+
+### 9.3 SFX
+```typescript
+const SFX_MAP = {
+  click, whoosh, pop, type, success, swoosh  // all Pixabay CDN
+}
+```
+Auto-assigned in `buildInteractionScriptFromTransition()`: search → type+success; click/navigate → click; hover → whoosh.
+Transition SFX at master level: cameraPan → swoosh, slide → whoosh, flash → pop.
+`<SfxSequencer events={INTERACTION_SCRIPT} />` mandatory on cursor/chameleon scenes.
+
+---
+
+## 10. SKILLS REGISTRY
+
+Skills are `.md` files in `src/skills/`. Loaded by `getCombinedSkillContent()` and injected after SYSTEM_PROMPT.
+
+### 10.1 Complete Skill List (70+ registered)
+
+**Background / environment:**
+- `premium-ambient-environment` — AmbientEnvironment wrapper: corner orbs + entropy dust + cinematic zoom; use on dark scenes
+- `premium-dot-matrix-bg` — CSS repeating dot-grid, floating accent dots
+- `premium-light-textured-bg` — near-white bg with subtle texture
+- `premium-glassmorphism` — glass card overlays (WhatAStory High-Depth formula)
+- `premium-gradient-hero` — full-screen brand gradient headline
+- `premium-multi-corner-gradient` — pastel radial blobs at corners (light B2B)
+- `premium-bold-color-showcase` — solid saturated bg; only for AHA/CONFIDENCE scenes
+- `premium-light-arc-bg` — near-white bg with animated concentric arc lines + corner blobs (LightArcBg)
+
+**Hooks / intros:**
+- `premium-saas-hook` — brand reveal, floating icons, dark cinematic intro; logo-circle variant; integration cluster corner variant; orbital groups (2 named anchors)
+- `premium-network-intro` — Hero Hub + SATELLITE_SLOTS 3D depth; bezier SVG paths; real photo support
+- `premium-kinetic-text` — word-by-word reveal; section label mandatory; MaskedReveal mandatory; light-bg variant; underline + rotating bold word
+- `premium-icon-arc-reveal` — dark hook: neon outline icon + SVG arc draw + concentric rings
+- `premium-ink-logo-reveal` — blob morphs to brand icon; wordmark springs in
+- `premium-saas-showcase` — 40/60 split; 3D perspective tilt; floating glass badge bridge
+
+**UI / app walkthrough:**
+- `premium-reconstructed-ui` — 40/60 split + 3-layer text stack; cascade order: shell → sidebar → header → rows (3f stagger); `rotateY(-8deg) rotateX(2deg)` on shell
+- `premium-cursor-engine` — hand SVG cursor; TRAVEL=22f; 10f dwell; click-zoom 1.0→1.06; double ripple; intent pill
+- `premium-chameleon-ui` — panel push/blur (bgScale:0.98 + bgBlur:8px + bgDarken:40%); modal backdrop blur(12px); z-index hierarchy blueprint
+- `premium-app-walkthrough` — persistent AppShell across walkthrough sequence
+- `premium-animated-topbar` — animated tab/breadcrumb topbar
+- `premium-interactive-ui` — full interactive UI patterns (Bordio-quality)
+- `premium-responsive-viewport` — browser + device-switcher toolbar; spring transition between breakpoints
+- `premium-live-action-composite` — real photo bg plate + floating UI cards
+- `premium-hand-cursor` — flat cartoon pointing-hand SVG; squeeze click; double ripple
+
+**Feature showcase:**
+- `premium-feature-grid` — strict 3f micro-stagger; cascade from translateY(60px); glassmorphism blur(24px) saturate(150%); highlight dims non-target to 0.4 opacity
+- `premium-feature-bundle-cards` — 3 white cards + connectors (platform products)
+- `premium-section-title` — chapter title card
+- `premium-stat-counter` — 220px counter; spring stiffness:60 damping:24 heavy deceleration; prefix/suffix 55% size in BRAND.primary; subline tied to countSpring > 0.8
+- `premium-before-after` — split comparison scene
+- `premium-data-flow-abstract` — abstract flowing data visualization
+- `premium-3d-isometric-explode` — isometric 3D product explode
+- `premium-metric-flyout` — metric card flyout animation
+
+**People / social proof:**
+- `premium-person-cards` — PersonCard + STOCK_AVATARS for team/problem scenes
+- `premium-team-orbit` — 3D ellipse orbit (RADIUS_X:260, RADIUS_Y:80); dynamic zIndex/depth scale/blur/brightness; hub glass blur(24px); brand reveal variant
+- `premium-social-proof` — photo bg + review cards; avatar-widget-orbit variant (central photo + orbiting mini data cards)
+- `premium-testimonial-card` — single testimonial card reveal; word-by-word animated text
+
+**Transitions / motion:**
+- `premium-camera-zoom` — CinematicCamera zoom patterns
+- `premium-chaos-to-ui-resolve` — `useEntropyWithAttractor` snaps floating elements (STOCK_AVATARS, icons) into UISchema bounding boxes at `triggerFrame`; chaos→order transition skill
+- `premium-shape-morph-transition` — shape-based scene transitions (use as last 45f)
+- `premium-feedback-storm` — notification/message chaos storm (problem scenes)
+- `premium-confetti-celebration` — 80 PARTICLES defined outside component; rect/circle/streak shapes; confetti burst variant
+
+**CTA:**
+- `premium-cta-scene` — settle zoom OUT 1.05→1.0; heavy headline spring damping:22 stiff:100; snappy button damping:14 stiff:160; button pulse; "Simple Logo + Wide Button + URL" light variant
+
+**Narrative / text:**
+- `premium-narrative-overlay` — contextual text overlay patterns
+- `premium-kinetic-text` — already listed above
+
+**Special:**
+- `premium-callout-bubble` — floating comment card (avatar + typed message + CTA button + blue selection outline); annotation tooltip variant; slide-in side panel variant
+- `premium-customer-journey` — curved SVG path + milestone dots + white pop-up info cards; dot-traveler animates along path
+- `premium-icon-concept-scene` — large icon + soft radial glow + dark badge + dotted SVG curved path with triangle arrowhead
+- `premium-floating-path-nodes` — dark bg + aurora/nebula + outline circles/pills + dotted curved SVG path + traveling dot (analytic Q-bezier)
+- `premium-icon-bubble-row` — 3 icon circles with staggered labels
+- `premium-logo-wall` — brand logo grid reveal
+- `premium-integration-wall` — scattered app logo cards on brand-color bg
+- `premium-phone-notification` — iOS-style frosted-glass notification from top
+- `premium-notification-toast` — toast notification component
+- `premium-real-photo-device` — environment bg Ken Burns + vignette; portrait tablet (380×520); 3-layer box-shadow; screen reflection sheen
+- `premium-audio` — musicStyle-based track selection (per-scene override)
+- `premium-tactile-feedback` — micro-interaction feedback patterns
+- `sequencing` — scene transition rules + skill stacking + WhatAStory Composition Standard
+
+**Example skills (dev reference):**
+- example-histogram, example-progress-bar, example-text-rotation, example-falling-spheres, example-animated-shapes, example-lottie, example-gold-price-chart, example-typewriter-highlight, example-word-carousel
+
+### 10.2 Skill Selection Rules
+
+**Hook/Intro:**
+- Dark polished brands: `premium-icon-arc-reveal` (strongest dark intro)
+- Light B2B: `premium-saas-hook` with FloatingShapes + ContentCard
+- Light + logo moment: `premium-ink-logo-reveal` + `premium-dot-matrix-bg`
+
+**Problem scenes (MUST use visual metaphor — text-only = quality VIOLATION):**
+- Team chaos / scattered tools → `premium-team-orbit`
+- Technical failures / system slowness → `premium-neon-dark`
+- Disconnected systems / data silos → `premium-floating-path-nodes`
+- Bold single pain-point statement → `premium-kinetic-text` or `premium-char-split`
+- Data-backed cost-of-problem → `premium-data-reveal`
+- Rich visual pain-point list → `premium-glassmorphism`
+- Dramatic snap-cut → `premium-match-cut`
+- Left-vs-right literal comparison → `premium-split-screen` (use sparingly)
+
+**Product showcase:**
+- **MANDATORY (screenshots uploaded)**: At least ONE scene uses `premium-cursor-engine` or `premium-chameleon-ui` with vision-detected elements
+- **ALSO MANDATORY**: At least ONE different scene uses device mockup (`premium-device-mockup` / `premium-scroll-demo` / `premium-saas-showcase`)
+- Input fields / search bars / dropdowns visible: use `premium-chameleon-ui` over cursor-engine
+- Abstract concept / no screenshot: `premium-data-flow-abstract` or `premium-3d-isometric-explode`
+
+**Cursor style:**
+- `premium-hand-cursor` for: collaboration tools, design tools, project management, consumer SaaS (friendly tone)
+- `premium-cursor-engine` (arrow) for: dev tools, analytics, technical products
+
+**Special rules:**
+- Add `premium-ambient-environment` as base to any scene using glassmorphism / cta-scene / kinetic-text
+- Dark-themed products: STRICTLY `premium-icon-arc-reveal` for hook, `premium-floating-path-nodes` for problem, `premium-confetti-celebration` for solution/CTA
+- CRM/lifecycle products: `premium-customer-journey` for showcase scenes
+- Abstract concept scenes: `premium-icon-concept-scene` for problem/solution
+- Many integrations: `premium-integration-wall` for problem or showcase
+- Collaboration / feedback / annotation features: add `premium-callout-bubble` to cursor scene
+- Responsive web products: add `premium-responsive-viewport`
+- Light B2B/CRM/CS products: use `premium-multi-corner-gradient` for intro, network-intro, CTA
+- Real photo + product screenshot uploaded: `premium-real-photo-device` for social proof (strongest trust-builder)
+- Feedback/VoC/NPS products: `premium-feedback-storm` for social proof
+- CTA: always `premium-cta-scene`; light brand without tagline → "Simple Logo + Wide Button + URL" variant
+- Never repeat the same skill in two scenes
+
+---
+
+## 11. GENERATION SYSTEM PROMPT RULES
+
+### 11.1 Mandatory Rules (violations flagged by audit)
+1. **All headlines**: `<MaskedReveal>` — VIOLATION if headline uses opacity fade
+2. **3+ siblings**: `useStagger(index, baseFrame, delay)` — VIOLATION if all enter at same frame
+3. **All colors**: `BRAND.*` tokens — NEVER hardcode hex
+4. **All springs**: `SPRING_CONFIGS.*`
+5. **Background**: `BRAND.bg` on root AbsoluteFill (`postProcessCode()` auto-enforces)
+6. **SNAP rule**: `SPRING_CONFIGS.snap` for 1–2 hero elements in CONFIDENCE/URGENCY/AHA/RELIEF scenes
+7. **WET HEADLINE (RELIEF/AHA/CONFIDENCE/EXCITEMENT)**: GlowBloom + SheenOverlay + SPRING_CONFIGS.snap scaling 0.92→1
+8. **Cursor scenes**: SfxSequencer + CursorAnnotationPill during travel phases
+9. **Voiceover scenes**: `<Audio src={VOICEOVER_AUDIO_URL} />` — NO additional background music
+10. **Particles/orbs**: declare arrays OUTSIDE component — NEVER inside (causes flicker per-frame)
+11. **`Math.random()`**: NEVER use — always `random("stable-seed")`
+12. **Layout**: implement `layoutTopology` from scene plan exactly (split-left/split-right/center-focus/isometric-float/full-bleed-overlay); never present UI flat; no two consecutive scenes same topology
+
+### 11.2 Z-Index Architecture
+| Layer | Z-index | Examples |
+|---|---|---|
+| Background | 0 | LightArcBg, AmbientEnvironment orbs |
+| Entropy dust | 1 | EntropyDust, _AMBIENT_DUST |
+| Product UI | 10–50 | AppShell, TiltWrapper card |
+| Modal backdrop | 50 | ModalOverlay backdrop filter |
+| Cognitive masking | 90–95 | SpotlightCutout (90), GhostHighlight (95) |
+| Narrative / Annotations | 100–160 | Cursor (100+), CursorAnnotationPill (160) |
+| Master overlays | 200 | SectionLabelLayer |
+| FilmGrain | 9999 | Master FilmGrainLayer |
+
+### 11.3 Typography Scale
+| Role | Size | Weight |
+|---|---|---|
+| hero | 128–160px | 900 |
+| scene title | 80–108px | 800–900 |
+| section | 40–56px | 700 |
+| body | 22–32px | 400–500 |
+| badge | 14–18px | 500–600 |
+
+`fontSize < 72px` for main headline = VIOLATION.
+
+### 11.4 Glass Card Formula (WhatAStory High-Depth)
+```css
+background:     rgba(255,255,255,0.08)
+backdropFilter: blur(24px) saturate(150%)
+WebkitBackdropFilter: blur(24px) saturate(150%)  /* auto-added by postProcessCode */
+borderTop:    1px solid rgba(255,255,255,1.0)
+borderLeft:   1px solid rgba(255,255,255,0.15)
+borderRight:  1px solid rgba(255,255,255,0.06)
+borderBottom: 1px solid rgba(255,255,255,0.04)
+borderRadius: 20px
+boxShadow:    0 12px 40px rgba(0,0,0,0.45), 0 1px 1px rgba(255,255,255,0.18) inset
+```
+
+### 11.5 Light Theme Rules
+When `BRAND.style === "light"`:
+1. Always start with `<LightArcBg brand={BRAND} />` as first child of AbsoluteFill
+2. White cards (`background: "white"`) — NOT glass cards
+3. Dark text on cards always (`#0f172a` — NOT `BRAND.text` which may be white)
+4. No glow orbs — use clean drop shadows only
+
+### 11.6 Scene Prompt Requirements (plan/route.ts mandatory checklist)
+Each scene prompt must include ALL of:
+1. **EMOTIONAL INTENT** — one word + visual grammar
+2. **Scene act timing** — explicit frame allocations: "Act 1 (0–50f): ... Act 2 ... Act 3 (hold)"
+3. **On-screen narrative text** — EXACT headline + subline text verbatim
+4. **Visual composition** — "text left (40%), visual right (60%)" for showcase (MANDATORY: flex 40/60 + `rotateY(-12deg) rotateX(4deg)`) or "centered full-screen"
+5. **Animation choreography** — what enters first, in what order, at what frames
+6. **Background note** — which skill is active
+7. If device scene: "display ATTACHED_IMAGES inside ContentCard"
+8. If light-themed: "Use LightArcBg variant='grid'"
+9. If showcase/cursor: "Add PersistentSectionLabel with featureName"
+10. If AHA MOMENT: "slow animation, hold 40+ frames minimum"
+
+---
+
+## 12. FILE STRUCTURE
+
+```
+src/
+  app/
+    api/
+      plan/route.ts         — Narrative planning (brand+desc combined, UI schemas inline)
+      generate/route.ts     — Scene code generation (tiered prompts, streaming SSE)
+      flow-analyze/route.ts — Flow analysis (smart recording detection, key frame dedup)
+      vision/route.ts       — UI element detection
+      audit/route.ts        — Quality audit (AHA scenes only)
+      tts/route.ts          — ElevenLabs TTS
+      ui-decompose/route.ts — Standalone UI decomposition
+      align/route.ts        — Audio alignment utility
+      critique/route.ts     — Legacy quality critique
+    generate/page.tsx       — Main video generation UI (@mention scene targeting)
+    page.tsx                — Landing page
+    layout.tsx              — Root layout
+  components/
+    AnimationPlayer/        — Remotion Player wrapper
+    ChatSidebar/            — Chat input with edit mode (@mention support)
+    LandingPageInput.tsx    — Initial prompt + image upload form
+    ScenePlanEditor/        — Scene plan review + waypoint editing
+      CursorWaypointEditor.tsx — Drag-and-drop waypoint placement
+      ScreenshotFlowEditor.tsx — Flow analysis review UI
+    SceneTimeline/          — Scene timeline display
+  hooks/
+    useFullVideoGeneration.ts — Main generation orchestrator
+    useImageAttachments.ts    — Image upload state management
+  remotion/
+    compiler.ts             — In-browser Babel compiler + full scope catalog
+    DynamicComp.tsx         — Remotion root component
+  skills/
+    index.ts                — Skill registry + SKILL_DETECTION_PROMPT
+    *.md                    — 70+ skill guidance files
+  lib/
+    alignScenes.ts          — Audio/scene duration alignment
+    cropZone.ts             — Image crop utilities
+    extractVideoFrames.ts   — Video frame extraction
+  types/
+    generation.ts           — All TypeScript interfaces
+templates/                  — Reference templates (desklog, fronter, justcall, pretaa, viable)
+scripts/
+  download-audio.sh         — Downloads SFX + music for local development
+skill_info.md               — All 70+ skills verbatim concatenated (17,882 lines, v3 — for Gemini skill upgrade prompts)
+GEMINI_SKILL_UPGRADE_PROMPT.md — Prompt template for future Gemini-driven skill polish rounds
+```
+
+---
+
+## 13. KNOWN ISSUES / TECHNICAL DEBT
+
+| Issue | Location | Details |
+|---|---|---|
+| ~~TRAVEL mismatch~~ | ~~`buildInteractionScript()`~~ | ~~Hardcoded at 25f vs skill doc 22f~~ — **FIXED** (TRAVEL=22, initial anchor y:1.10) |
+| ~~Image removal → plan not updated~~ | ~~`useImageAttachments.removeImage()`~~ | ~~Removing image at index N doesn't update scenes~~ — **FIXED** (global image strip with X buttons + handleImageRemove) |
+| ~~Vision fires for non-cursor skills~~ | ~~`processScene()`~~ | ~~fires for `premium-saas-showcase`~~ — **FIXED** (removed from VISION_SKILLS set) |
+| Brand cache hash collisions | `cachedBrandStore` | Hash is only first 100 chars of first image — collisions possible |

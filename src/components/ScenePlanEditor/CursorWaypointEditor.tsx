@@ -96,7 +96,7 @@ export function CursorWaypointEditor({
             const mod = e.metaKey || e.ctrlKey;
             if (mod && e.key === "z") { e.preventDefault(); undo(); }
             if (mod && (e.key === "y" || (e.shiftKey && e.key === "z"))) { e.preventDefault(); redo(); }
-            if ((e.key === "Delete" || e.key === "Backspace") && selectedIndex !== null && !editingLabelIdx) {
+            if ((e.key === "Delete" || e.key === "Backspace") && selectedIndex !== null && editingLabelIdx === null) {
                 e.preventDefault();
                 commit(local.filter((_, i) => i !== selectedIndex));
                 setSelectedIndex(null);
@@ -287,7 +287,6 @@ export function CursorWaypointEditor({
                                     const prev = local[i];
                                     const dx = (wp.x - prev.x) * 100;
                                     const dy = (wp.y - prev.y) * 100;
-                                    const len = Math.sqrt(dx * dx + dy * dy) || 1;
                                     const mx = prev.x * 100 + dx * 0.62;
                                     const my = prev.y * 100 + dy * 0.62;
                                     const angle = Math.atan2(dy, dx) * (180 / Math.PI);
@@ -436,6 +435,31 @@ export function CursorWaypointEditor({
                                             </button>
                                         ))}
                                     </div>
+                                </div>
+
+                                {/* Element type */}
+                                <div>
+                                    <label className="text-[10px] text-white/40 block mb-1">Element Type</label>
+                                    <div className="grid grid-cols-3 gap-1">
+                                        {(["input", "button", "dropdown", "card", "nav"] as const).map((t) => (
+                                            <button
+                                                key={t}
+                                                type="button"
+                                                onClick={() => updateField(selectedIndex, "elementType", t)}
+                                                className={`text-[10px] py-1 px-1.5 rounded border transition-colors ${selectedWp.elementType === t
+                                                    ? "border-teal-500/60 bg-teal-500/15 text-teal-300"
+                                                    : "border-white/10 text-white/40 hover:text-white/70 hover:border-white/20"
+                                                    }`}
+                                            >
+                                                {t}
+                                            </button>
+                                        ))}
+                                    </div>
+                                    {selectedWp.box && (
+                                        <div className="mt-1.5 text-[9px] text-white/25 font-mono">
+                                            box {selectedWp.box.w.toFixed(3)}×{selectedWp.box.h.toFixed(3)} @ ({selectedWp.box.x.toFixed(3)},{selectedWp.box.y.toFixed(3)})
+                                        </div>
+                                    )}
                                 </div>
 
                                 {/* Dwell time */}

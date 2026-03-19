@@ -41,6 +41,9 @@
   "exclude": [
     "node_modules",
     "remotion.config.ts",
-    "templates"
+    "templates",
+    "vitest.config.ts",
+    "src/**/*.test.ts",
+    "src/**/*.test.tsx"
   ]
 }

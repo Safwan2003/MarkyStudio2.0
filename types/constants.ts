@@ -10,4 +10,6 @@ export const CompositionProps = z.object({
   images: z.array(z.string()).default([]),
   /** Brand tokens injected into compiler scope as BRAND */
   brand: z.record(z.string(), z.string()).default({}),
+  /** Per-scene voiceover URLs keyed by scene index string — injected as VOICEOVER_URLS scope variable */
+  voiceovers: z.record(z.string(), z.string()).optional().default({}),
 });
