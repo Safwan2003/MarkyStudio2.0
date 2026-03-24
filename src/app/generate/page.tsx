@@ -103,7 +103,7 @@ function GeneratePageContent() {
   });
 
   // User-typed per-screenshot descriptions (from landing page)
-  const [imageUserDescriptions] = useState<string[]>(() => {
+  const [imageUserDescriptions, setImageUserDescriptions] = useState<string[]>(() => {
     if (typeof window === "undefined") return [];
     try {
       const stored = sessionStorage.getItem("initialImageUserDescriptions");
@@ -148,6 +148,7 @@ function GeneratePageContent() {
     scenes: fullVideoScenes,
     masterComponent,
     masterCode,
+    masterVoiceovers,
     totalDuration,
     error: fullVideoError,
     pendingPlan,
@@ -256,14 +257,18 @@ function GeneratePageContent() {
 
     if (failedIndices.length === 0) return;
 
+    // Don't auto-retry if we know the API quota is exhausted — it will just fail again
+    const lastError = fullVideoError ?? "";
+    if (lastError.toLowerCase().includes("quota") || lastError.includes("429")) return;
+
     // Mark all as retried immediately to prevent re-triggering
     failedIndices.forEach((i) => autoRetriedRef.current.add(i));
 
-    // Stagger retries: first one immediately, subsequent ones 2s apart
+    // Stagger retries: first one immediately, subsequent ones 3s apart
     failedIndices.forEach((sceneIndex, offset) => {
       setTimeout(() => {
         regenerateScene(sceneIndex);
-      }, offset * 2000);
+      }, offset * 3000);
     });
   }, [isFullVideoBusy, regeneratingSceneIndex, masterCode, fullVideoScenes, regenerateScene]);
 
@@ -399,6 +404,7 @@ function GeneratePageContent() {
                   masterCode={masterCode ?? undefined}
                   renderImages={attachedImages}
                   renderBrand={pendingBrandRef.current as Record<string, string>}
+                  renderVoiceovers={masterVoiceovers}
                   onFrameChange={setCurrentFrame}
                   seekFrame={seekFrame}
                   isCursorMode={false}
@@ -507,7 +513,10 @@ function GeneratePageContent() {
                   images={attachedImages.length > 0 ? attachedImages : undefined}
                   imageDescriptions={pendingPlan.imageDescriptions}
                   onConfirm={(scenes, flow, descs) => confirmPlan(scenes, flow, descs, voiceId)}
-                  onImageRemove={(idx) => setAttachedImages((prev) => prev.filter((_, i) => i !== idx))}
+                  onImageRemove={(idx) => {
+                    setAttachedImages((prev) => prev.filter((_, i) => i !== idx));
+                    setImageUserDescriptions((prev) => prev.filter((_, i) => i !== idx));
+                  }}
                 />
               ) : undefined
             }

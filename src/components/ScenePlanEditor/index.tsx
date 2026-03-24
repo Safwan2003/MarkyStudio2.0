@@ -3,7 +3,7 @@
 import { Button } from "@/components/ui/button";
 import type { BrandTokens, CursorWaypoint, ScenePlan, ScreenFlow } from "@/types/generation";
 import { Film, Mic2, MousePointerClick, Plus, Trash2, Volume2 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { CursorWaypointEditor } from "./CursorWaypointEditor";
 
 const AVAILABLE_SKILLS = [
@@ -174,6 +174,14 @@ export function ScenePlanEditor({
   // Fetch waypoints for every unique image that (a) is used by a cursor-engine
   // scene, OR (b) is an uploaded screenshot not yet covered.
   // Deduplication key is imageIndex so we never double-fetch the same image.
+  const sceneSkillImageKey = useMemo(
+    () => localScenes.map((s) => `${s.skills?.[0]}:${s.imageIndex}`).join(","),
+    [localScenes],
+  );
+  const waypointImageKeys = useMemo(
+    () => Object.keys(waypointsByImage).sort().join(","),
+    [waypointsByImage],
+  );
   useEffect(() => {
     if (!images || images.length === 0) return;
 
@@ -247,7 +255,7 @@ export function ScenePlanEditor({
         .catch(() => {/* non-fatal */ });
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [images, localScenes.map((s) => `${s.skills?.[0]}:${s.imageIndex}`).join(","), JSON.stringify(Object.keys(waypointsByImage))]);
+  }, [images, sceneSkillImageKey, waypointImageKeys]);
 
   const handleAddScene = () => {
     const newScene: ScenePlan = {

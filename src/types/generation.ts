@@ -121,6 +121,12 @@ export interface ScenePlan {
   durationInFrames: number;
   /** Which uploaded image (0-based index) is primarily used in this scene. Undefined = use all images. */
   imageIndex?: number;
+  /** Multiple uploaded images (0-based indices) for multi-view walkthrough scenes.
+   *  When set, all referenced images are collected into ATTACHED_IMAGES for this scene. */
+  imageIndices?: number[];
+  /** Persistent feature context header displayed above UI during multi-feature walkthroughs.
+   *  Qanapi-style: "KMS for CSE  Google Workspace" bar at top of scene. */
+  featureHeader?: { label: string; badge?: string; icon?: string };
   /** User-confirmed cursor waypoints for premium-cursor-engine scenes. Overrides AI-detected elements. */
   cursorWaypoints?: CursorWaypoint[];
   /** User journey flow context carried on scenes (primarily used on scene 0 for planner reference). */
@@ -158,6 +164,21 @@ export interface ScenePlan {
     colorTo: string;
     /** Semantic label for the prompt system to reference (e.g. "missed_deadline") */
     label: string;
+  };
+  /** Stock video URL for background compositing (Fronter/Viable-style real office footage).
+   * When set, STOCK_VIDEO_URL is injected into compiler scope. */
+  stockFootage?: string;
+  /** Macro zoom configuration for Bordio-style extreme close-ups.
+   * When set, the generate layer wraps UI in MacroCamera + SelectiveFocus. */
+  macroZoom?: {
+    /** Target scale factor (2.0–5.0). Default 3.0 */
+    zoomLevel: number;
+    /** Normalized 0–1 center of zoom target */
+    focusPoint: { x: number; y: number };
+    /** Frame when zoom begins (default 30) */
+    zoomInFrame?: number;
+    /** Frames at max zoom (default 80) */
+    holdFrames?: number;
   };
   /** Persistent label shown above browser chrome / section divider for this scene */
   sectionLabel?: string;
@@ -213,6 +234,27 @@ export interface BrandTokens {
   annotationFont?: string;
 }
 
+/** Directed edge connecting two scenes in the Flow Engine graph. */
+export interface FlowEdge {
+  /** Source scene id */
+  from: number;
+  /** Destination scene id */
+  to: number;
+  /** Cinematic transition type on this edge */
+  transition: "fade" | "slide" | "scale" | "flash" | "none" | "cameraPan" | "zoomThrough";
+  /** Which visual/camera states carry over from source to destination */
+  carryOver?: {
+    /** Cursor position and velocity maintained across the cut */
+    cursor?: boolean;
+    /** Camera zoom and pan maintained — no reset to 1.0 */
+    camera?: boolean;
+    /** UI shell (AppShell, sidebar, topbar) stays mounted unchanged */
+    ui?: boolean;
+  };
+  /** Emotional register shift at this edge — guides color/pacing changes */
+  emotionalShift?: string;
+}
+
 export interface FullVideoPlan {
   scenes: ScenePlan[];
   brand?: BrandTokens;
@@ -223,6 +265,8 @@ export interface FullVideoPlan {
   globalBg?: string;
   /** One-sentence description of the persistent visual motif that threads all scenes */
   globalVisualThread?: string;
+  /** Flow graph edges — describe transitions and state carry-over between scenes */
+  edges?: FlowEdge[];
 }
 
 // ─── UI Reconstruction Schema ────────────────────────────────────────────────

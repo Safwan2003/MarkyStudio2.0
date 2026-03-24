@@ -351,7 +351,8 @@ Product showcase:
 - premium-interactive-ui   — full app shell reconstruction (AppShell + SidebarNav + InputField + TaskDetailPanel) — use when no screenshot available or full layout control needed; Bordio-quality task creation/form filling scenes
 - premium-reconstructed-ui — fully animated vector reconstruction of the product UI (sidebar, metric cards, charts, tables, forms); each element animates independently; crisp at any zoom; use instead of screenshot overlay for standard SaaS dashboards
 - premium-camera-zoom      — cinematic hero zoom into laptop/device screen
-- premium-device-mockup    — MacBook / browser / phone shell with ATTACHED_IMAGES screenshot
+- premium-device-mockup    — MacBook / browser / phone shell with ATTACHED_IMAGES screenshot (CSS 2D — fast render)
+- premium-3d-device-mockup — TRUE 3D MacBook or phone rendered via @remotion/three; cinematic camera orbit; physically accurate depth, specular highlights, real parallax; use for premium launch/hero scenes where device must feel tactile and cinematic
 - premium-scroll-demo      — scroll simulation inside browser shell, "living product" demo
 - premium-multi-device     — laptop + phone + tablet composite, cross-platform showcase
 - premium-callout-bubble   — floating comment/annotation card that pops up near cursor (avatar + typed message + CTA); shows collaboration or feedback features; includes slide-in side comments panel variant
@@ -416,6 +417,7 @@ Punchy statements / social proof:
   - For each showcase/cursor/device scene, set imageIndex (0-based integer) to indicate which uploaded screenshot is most relevant to that scene's content
 - Integration/API/platform products: strongly prefer premium-data-flow-abstract over premium-network-intro for the "how it works" scene
 - When NO screenshot uploaded and product concept > UI: use premium-data-flow-abstract or premium-3d-isometric-explode for showcase scenes
+- High-stakes showcase needing cinematic 3D depth (enterprise SaaS launch, investor demo, fintech, design tool, analytics platform): consider premium-3d-device-mockup for the hero showcase scene — it renders a physically accurate 3D device with orbital camera, superior to CSS mockup
 - Add premium-ambient-environment as base to any scene using premium-glassmorphism, premium-cta-scene, or premium-kinetic-text for extra depth
 - premium-shape-morph-transition: use as the final scene transition in a cursor-engine or CTA scene (last 45 frames)
 - Data products (analytics, metrics): include premium-data-reveal
@@ -455,7 +457,50 @@ Punchy statements / social proof:
 - Light B2B products: use premium-light-arc-bg as the background layer for all scenes (instead of dark gradient); it provides subtle arc texture that matches agency-quality light-theme videos
 - Integration/multi-feature platform overview: use premium-feature-bundle-cards for a 3-card scene showing key product capabilities
 - Standard SaaS dashboards (sidebar + metric cards + charts): use premium-reconstructed-ui for the showcase scene instead of premium-chameleon-ui — reconstructed UI animates every element independently and stays crisp at any zoom
-- Showcase scenes 210+ frames: ALWAYS add click-zoom effect (1.0→1.06 punch-in) on at least one key metric/area — in cursor-engine prompts add "Use click-zoom punch-in effect on each click"; for reconstructed-ui scenes use CinematicCamera or premium-camera-zoom to slowly push in toward the primary metric card Showcase scenes 210+ frames: ALWAYS add click-zoom effect (1.0→1.06 punch-in) on at least one key metric/area — in cursor-engine prompts add \"Use click-zoom punch-in effect on each click\"; for reconstructed-ui scenes use CinematicCamera or premium-camera-zoom to slowly push in toward the primary metric card
+- MACRO ZOOM (Bordio-style extreme close-up): For products with complex dashboards (3+ panels, data tables, sidebar navigation), assign macroZoom to 1-2 showcase scenes. Set zoomLevel 3.0-3.5 for sidebar/table focus, 4.0+ for single-element isolation. focusPoint targets the key interactive element (sidebar item, data row, metric card). Use with premium-macro-closeup skill OR add it to any premium-cursor-engine / premium-chameleon-ui / premium-reconstructed-ui scene. Max 2 macroZoom scenes per video. Always pair with premium-cursor-engine for cursor interaction during the hold phase.
+- Showcase scenes 210+ frames: ALWAYS add click-zoom effect (1.0→1.06 punch-in) on at least one key metric/area — in cursor-engine prompts add "Use click-zoom punch-in effect on each click"; for reconstructed-ui scenes use CinematicCamera or premium-camera-zoom to slowly push in toward the primary metric card
+- Communication/messaging/chat products (Bordio, Slack, Intercom, Crisp, etc.): use premium-floating-icon-chaos for intro scene (WhatsApp/Slack/Gmail icons orbiting a device) + premium-in-app-chat for one showcase scene (slide-in chat panel over UI)
+- CRM/workflow/notification-heavy products: use premium-notification-scatter for at least one scene — floating white cards on dark bg showing real notification types
+- When 3+ screenshots are uploaded AND product has distinct views (table/kanban/calendar/detail): use premium-multi-view-walkthrough with imageIndices array assigning 2-3 images to one scene
+- Enterprise products with multiple distinct features/integrations: set featureHeader on showcase scenes (label: feature name, badge: integration name) — renders persistent Qanapi-style header bar above the UI
+- ConcentricRings: use in abstract concept scenes or icon reveals for expanding ring emanation (Screenjar/Viable style)
+- DrawOnIcon: use ICON_PATHS keys (shield, lock, clock, dollar, chart-up, person, team, message, bell, mail, cloud, code, gear, lightning, check, warning, target, star, heart, database, globe, phone) for consistent line-art SVG icons with strokeDashoffset draw-on animation
+- usePathTraveler + PaperPlane: use for traveling element along dotted path (Screenjar paper plane, Pretaa journey dot); pairs with premium-customer-journey or premium-floating-path-nodes
+- AppShell chromeColor: set chromeColor prop on AppShell for Viable-style branded browser chrome (e.g. chromeColor={BRAND.primary})
+
+## RESTRAINT & TASTE LAYER (the difference between premium and busy)
+
+Premium videos are CONTROLLED. More features ≠ better output. Apply these hard limits when planning:
+
+| Constraint | Limit per Video | Reason |
+|---|---|---|
+| MacroCamera zoom scenes | Max 2 | More = nauseating |
+| Major transitions (zoomThrough, cameraPan) | Max 3 | Each should feel like an event |
+| NarrationReveal | Max 1 | Overuse dilutes the "smart" feel |
+| Morph portals | Max 1 | More = gimmicky |
+| Notification scatter scenes | Max 1 | One is impactful, two is repetitive |
+| Stock footage scenes | Max 2 (intro + 1 bookend) | More = stock-footage-dependency, not brand |
+| Abstract concept scenes (icon + rings) | Max 2 | Balance with real product UI |
+
+**Breathing Scenes**: At least 1 in every 4 scenes should be a "breathing" scene — minimal animation, strong typography, generous whitespace. These RESET the viewer's attention. Examples: section title, logo reveal, simple stat counter. A video that's wall-to-wall motion exhausts the viewer.
+
+**Camera Intentionality**: Every macroZoom MUST have a reason field. Valid reasons:
+- "focus-detail": viewer needs to read a specific metric/element
+- "guide-attention": draw eye to next interaction
+- "reveal-depth": show UI spatial layers
+If you can't articulate the reason → don't add macroZoom to that scene.
+
+**The Restraint Test**: After planning all scenes, review: if removing ANY scene's most complex effect would make the video WORSE, keep it. If the video would feel the same without it → remove it. Fewer well-chosen effects > many stacked effects.
+
+## SCENE ARCHETYPES (maximum visual impact — match each scene to its archetype):
+A. CINEMATIC PHOTO COMPOSITE (intro/problem): Stock footage bg + floating app icons → premium-live-action-composite + premium-floating-icon-chaos. When: B2B SaaS with communication pain.
+B. MACRO UI DEEP-DIVE (showcase): Full UI → MacroCamera 3x zoom + SelectiveFocus blur → premium-macro-closeup + premium-cursor-engine. When: Complex dashboards.
+C. MULTI-VIEW PRODUCT TOUR (showcase): Multiple screenshots = tab-switching views → premium-multi-view-walkthrough with imageIndices. When: 3+ screenshots or distinct views.
+D. FEATURE CONTEXT WALKTHROUGH (showcase): FeatureContextBar at top + cursor UI below → premium-cursor-engine + featureHeader. When: Enterprise multi-feature products.
+E. ABSTRACT CONCEPT (problem/solution): DrawOnIcon centered + ConcentricRings + dotted path → premium-icon-concept-scene. When: Abstract concepts.
+F. NOTIFICATION SCATTER (showcase/trust): Dark bg + 4-6 floating white cards → premium-notification-scatter. When: CRM/workflow products.
+G. NARRATION-SYNCED SUMMARY (conclusion): Word-by-word color reveal synced to voiceover → premium-narration-reveal. When: Key takeaway/CTA.
+H. TEAM CHAT OVERLAY (showcase): UI + slide-in chat panel → premium-in-app-chat. When: Collaboration/messaging products.
 
 ## SKILL STACKING RULES (MANDATORY — every scene outputs skills: [] array)
 
@@ -485,6 +530,8 @@ Recommended stacks by scene type:
 - Integration wall: ["premium-integration-wall"] — self-contained
 - Before/after: ["premium-before-after"] — self-contained
 - Section title: ["premium-section-title"] — self-contained
+- Macro close-up: ["premium-macro-closeup", "premium-cursor-engine"] — extreme zoom into UI + cursor interaction during hold phase; OR add premium-macro-closeup as skills[2] polish on any showcase scene
+- Narration reveal: ["premium-narration-reveal", "premium-light-textured-bg"] — word-by-word voiceover-synced text for conclusion/CTA scene; max 1 per video
 
 Stacking constraints:
 - NEVER combine two background skills (dot-matrix-bg + light-textured-bg is invalid)
@@ -748,10 +795,11 @@ For Hook and Problem scenes of B2B products, consider using premium-live-action-
 ## APP WALKTHROUGH DETECTION
 When user uploads 3+ screenshots sharing the SAME sidebar/navigation (same app):
 1. Mark scenes as isWalkthroughScene: true on each related scene
-2. First scene uses premium-reconstructed-ui with full AppShell
-3. Subsequent walkthrough scenes: add to prompt "Maintain exact same sidebar and topbar from previous scene. Only replace main content area."
-4. Use "cameraPan" transition between walkthrough scenes
+2. First scene MUST use premium-reconstructed-ui with full AppShell (<ReconstructedAppShell>)
+3. Subsequent walkthrough scenes: HARD RULE — REUSE the exact same AppShell layout. ONLY replace the main content area. Never re-mount or re-render the sidebar/topbar from scratch. Add to each prompt: "Maintain IDENTICAL sidebar and topbar from previous scene. Only update inner content panel."
+4. MANDATORY: use "cameraPan" transition between ALL walkthrough scenes — no exceptions.
 5. Add to each walkthrough scene prompt: "Render feature name '[FEATURE]' as FeatureSectionHeader persistent label at top of content area"
+6. FLOW EDGES: For each pair of adjacent walkthrough scenes, output a FlowEdge with transition:"cameraPan" and carryOver:{ui:true,camera:true} — this signals the generator to carry the AppShell and camera state across the cut without resetting.
 
 ## PER-SCENE MUSIC VOLUME
 Include musicVolume on each scene (number, 0.5–1.5):
@@ -785,6 +833,11 @@ interface ScenePlanRaw {
   musicVolume?: number;
   isWalkthroughScene?: boolean;
   sectionLabel?: string;
+  exitAnchor?: { x: number; y: number };
+  macroZoom?: { zoomLevel: number; focusPoint: { x: number; y: number }; zoomInFrame?: number; holdFrames?: number };
+  stockFootage?: string;
+  imageIndices?: number[];
+  featureHeader?: { label: string; badge?: string; icon?: string };
   interactionScript?: import("@/types/generation").InteractionEvent[];
   visualAnchor?: {
     icon: string;
@@ -792,6 +845,8 @@ interface ScenePlanRaw {
     colorTo: string;
     label: string;
   };
+  morphExport?: { id: string; rect: { x: number; y: number; w: number; h: number } };
+  morphImport?: { id: string; rect: { x: number; y: number; w: number; h: number } };
 }
 
 interface FullVideoPlanRaw {
@@ -799,6 +854,7 @@ interface FullVideoPlanRaw {
   bgSkill?: string;
   globalBg?: string;
   globalVisualThread?: string;
+  edges?: import("@/types/generation").FlowEdge[];
 }
 
 interface BrandTokensRaw {
@@ -1310,6 +1366,17 @@ Plan a complete 5–6 scene narrative video for this product, and extract brand 
                   skills: { type: Type.ARRAY, items: { type: Type.STRING }, description: "Ordered skill stack: [primarySkill, backgroundSkill?, polishSkill?]. See SKILL STACKING RULES." },
                   durationInFrames: { type: Type.NUMBER },
                   imageIndex: { type: Type.NUMBER },
+                  imageIndices: { type: Type.ARRAY, items: { type: Type.NUMBER }, description: "Multiple 0-based image indices for multi-view walkthrough scenes. When set, all referenced images become ATTACHED_IMAGES[0], [1], [2], etc." },
+                  featureHeader: {
+                    type: Type.OBJECT,
+                    description: "Persistent feature context bar (Qanapi-style). Shows feature name + integration badge above UI during multi-feature walkthroughs.",
+                    properties: {
+                      label: { type: Type.STRING, description: "Feature name, e.g. 'KMS for CSE'" },
+                      badge: { type: Type.STRING, description: "Integration badge, e.g. 'Google Workspace'" },
+                      icon: { type: Type.STRING, description: "Optional emoji icon" },
+                    },
+                    required: ["label"],
+                  },
                   voiceoverText: { type: Type.STRING },
                   transition: { type: Type.STRING },
                   emotionalIntent: { type: Type.STRING, description: "FRUSTRATION | RELIEF | CONFIDENCE | TRUST | URGENCY | EXCITEMENT" },
@@ -1318,6 +1385,25 @@ Plan a complete 5–6 scene narrative video for this product, and extract brand 
                   musicVolume: { type: Type.NUMBER, description: "Volume multiplier: 0.5 for pain/problem scenes, 1.0 normal, 1.3 for aha/relief, 1.5 for CTA" },
                   isWalkthroughScene: { type: Type.BOOLEAN, description: "true when this scene is part of a persistent-shell app walkthrough sequence" },
                   sectionLabel: { type: Type.STRING, description: "Short label shown as persistent section header above browser chrome" },
+                  stockFootage: { type: Type.STRING, description: "Stock video URL for background compositing. Available clips: /videos/stock/office-desk.mp4 (portrait desk view), /videos/stock/team-meeting.mp4 (1080p team), /videos/stock/person-computer.mp4 (4K person at screen), /videos/stock/startup-office.mp4 (4K modern office). Only for intro/problem scenes of B2B SaaS products." },
+                  macroZoom: {
+                    type: Type.OBJECT,
+                    description: "Bordio-style extreme close-up. Assign to 1-2 showcase scenes with complex UIs. zoomLevel 2-5, focusPoint normalized 0-1 targeting the key UI element.",
+                    properties: {
+                      zoomLevel: { type: Type.NUMBER, description: "Scale factor 2.0-5.0. 3.0 for sidebar, 3.5 for table row, 4.5 for single element" },
+                      focusPoint: {
+                        type: Type.OBJECT,
+                        properties: {
+                          x: { type: Type.NUMBER, description: "Normalized 0-1 horizontal center of zoom target" },
+                          y: { type: Type.NUMBER, description: "Normalized 0-1 vertical center of zoom target" },
+                        },
+                        required: ["x", "y"],
+                      },
+                      zoomInFrame: { type: Type.NUMBER, description: "Frame when zoom starts (default 30 — let UI settle first)" },
+                      holdFrames: { type: Type.NUMBER, description: "Frames at max zoom (default 80 — viewer reads focused area)" },
+                    },
+                    required: ["zoomLevel", "focusPoint"],
+                  },
                   visualAnchor: {
                     type: Type.OBJECT,
                     properties: {
@@ -1328,6 +1414,47 @@ Plan a complete 5–6 scene narrative video for this product, and extract brand 
                     },
                     required: ["icon", "colorFrom", "colorTo", "label"],
                   },
+                  exitAnchor: {
+                    type: Type.OBJECT,
+                    description: "Normalized 0-1 coordinate the camera zooms INTO as this scene exits. Set on Scene N when using zoomThrough transition into Scene N+1. Target the last-clicked UI element or most visually dominant element.",
+                    properties: {
+                      x: { type: Type.NUMBER, description: "Normalized 0-1 horizontal center" },
+                      y: { type: Type.NUMBER, description: "Normalized 0-1 vertical center" },
+                    },
+                    required: ["x", "y"],
+                  },
+                  morphExport: {
+                    type: Type.OBJECT,
+                    description: "Cross-scene element morph: bounding box of element exiting THIS scene. Max 1 morph per video. The element animates from this rect to morphImport rect in the next scene.",
+                    properties: {
+                      id: { type: Type.STRING, description: "Unique morph element id (e.g. 'hero-icon')" },
+                      rect: {
+                        type: Type.OBJECT,
+                        properties: {
+                          x: { type: Type.NUMBER }, y: { type: Type.NUMBER },
+                          w: { type: Type.NUMBER }, h: { type: Type.NUMBER },
+                        },
+                        required: ["x", "y", "w", "h"],
+                      },
+                    },
+                    required: ["id", "rect"],
+                  },
+                  morphImport: {
+                    type: Type.OBJECT,
+                    description: "Cross-scene element morph: bounding box where the morphExport element ARRIVES in THIS scene. Must match morphExport.id from previous scene.",
+                    properties: {
+                      id: { type: Type.STRING, description: "Must match morphExport.id from previous scene" },
+                      rect: {
+                        type: Type.OBJECT,
+                        properties: {
+                          x: { type: Type.NUMBER }, y: { type: Type.NUMBER },
+                          w: { type: Type.NUMBER }, h: { type: Type.NUMBER },
+                        },
+                        required: ["x", "y", "w", "h"],
+                      },
+                    },
+                    required: ["id", "rect"],
+                  },
                 },
                 required: ["id", "title", "prompt", "skills", "durationInFrames"],
               },
@@ -1335,6 +1462,27 @@ Plan a complete 5–6 scene narrative video for this product, and extract brand 
             bgSkill: { type: Type.STRING },
             globalBg: { type: Type.STRING, description: "arcs | grid | dots" },
             globalVisualThread: { type: Type.STRING, description: "One sentence describing the single geometric/color/motion motif that persists across ALL scenes and evolves from broken→resolved. E.g. 'A glowing ring: fragmented arcs in problem scenes, full brand-color ring in solution scenes, exploding into the logo on CTA.'" },
+            edges: {
+              type: Type.ARRAY,
+              description: "Flow graph edges describing transitions and state carry-over between adjacent scenes. Required for all walkthrough scene pairs.",
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  from: { type: Type.NUMBER, description: "Source scene id" },
+                  to: { type: Type.NUMBER, description: "Destination scene id" },
+                  transition: { type: Type.STRING, description: "Transition type: fade | slide | scale | flash | none | cameraPan | zoomThrough" },
+                  carryOver: {
+                    type: Type.OBJECT,
+                    properties: {
+                      cursor: { type: Type.BOOLEAN, description: "Cursor position continues across the cut" },
+                      camera: { type: Type.BOOLEAN, description: "Camera zoom/pan state maintained — no reset to 1.0" },
+                      ui: { type: Type.BOOLEAN, description: "App shell (sidebar, topbar) stays mounted unchanged" },
+                    },
+                  },
+                },
+                required: ["from", "to", "transition"],
+              },
+            },
             uiSchemas: {
               type: Type.ARRAY,
               description: "For each uploaded screenshot (by index), extract the UI layout structure. Return one entry per image.",
@@ -1457,7 +1605,31 @@ Plan a complete 5–6 scene narrative video for this product, and extract brand 
 
       const safeDuration = Number.isFinite(s.durationInFrames) ? s.durationInFrames : 240;
 
-      return { ...s, skills: resolvedSkills, durationInFrames: safeDuration, imageIndex: imageIdx, interactionScript, uiSchema, emotionalIntent: s.emotionalIntent, isAhaMoment: s.isAhaMoment ?? false, stageDirection: s.stageDirection, visualAnchor: s.visualAnchor, musicVolume: s.musicVolume, isWalkthroughScene: s.isWalkthroughScene, sectionLabel: s.sectionLabel };
+      // Validate and clamp exitAnchor to [0,1] range
+      let exitAnchor = s.exitAnchor as { x: number; y: number } | undefined;
+      if (exitAnchor) {
+        const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
+        exitAnchor = { x: clamp01(exitAnchor.x), y: clamp01(exitAnchor.y) };
+      }
+
+      // Validate and clamp macroZoom focusPoint to [0,1] range
+      let macroZoom = s.macroZoom as { zoomLevel: number; focusPoint: { x: number; y: number }; zoomInFrame?: number; holdFrames?: number } | undefined;
+      if (macroZoom?.focusPoint) {
+        const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
+        macroZoom = {
+          ...macroZoom,
+          zoomLevel: Math.max(1.5, Math.min(5, macroZoom.zoomLevel)),
+          focusPoint: { x: clamp01(macroZoom.focusPoint.x), y: clamp01(macroZoom.focusPoint.y) },
+        };
+      }
+
+      const effectiveMusicVolume = (s.isAhaMoment ?? false) ? Math.max(s.musicVolume ?? 1.0, 1.6) : s.musicVolume;
+
+      // Pass through imageIndices and featureHeader from planner output
+      const imageIndices = Array.isArray(s.imageIndices) ? s.imageIndices.filter((idx: number) => typeof idx === "number" && idx >= 0 && idx <= maxImageIdx) : undefined;
+      const featureHeader = (s.featureHeader && typeof (s.featureHeader as any).label === "string") ? s.featureHeader as { label: string; badge?: string; icon?: string } : undefined;
+
+      return { ...s, skills: resolvedSkills, durationInFrames: safeDuration, imageIndex: imageIdx, imageIndices, featureHeader, interactionScript, uiSchema, emotionalIntent: s.emotionalIntent, isAhaMoment: s.isAhaMoment ?? false, stageDirection: s.stageDirection, visualAnchor: s.visualAnchor, musicVolume: effectiveMusicVolume, isWalkthroughScene: s.isWalkthroughScene, sectionLabel: s.sectionLabel, exitAnchor, macroZoom, stockFootage: s.stockFootage, morphExport: s.morphExport, morphImport: s.morphImport };
     });
 
     // ── Auto-insert section-title dividers ─────────────────────────────────
@@ -1487,7 +1659,7 @@ Plan a complete 5–6 scene narrative video for this product, and extract brand 
     const globalBg = parsed.globalBg ?? (brand.style === "light" ? "grid" : "arcs");
 
     const globalVisualThread = parsed.globalVisualThread ?? undefined;
-    return new Response(JSON.stringify({ scenes: finalScenes, brand, bgSkill, globalBg, globalVisualThread, imageDescriptions: finalDescriptions }), {
+    return new Response(JSON.stringify({ scenes: finalScenes, brand, bgSkill, globalBg, globalVisualThread, imageDescriptions: finalDescriptions, edges: parsed.edges ?? [] }), {
       status: 200,
       headers: { "Content-Type": "application/json" },
     });

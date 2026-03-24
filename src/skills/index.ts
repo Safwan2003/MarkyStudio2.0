@@ -73,6 +73,13 @@ import premiumLiveActionCompositeSkill from "./premium-live-action-composite.md"
 import premiumBoldColorShowcaseSkill from "./premium-bold-color-showcase.md";
 import premiumPersonCardsSkill from "./premium-person-cards.md";
 import premiumChaosToUiResolveSkill from "./premium-chaos-to-ui-resolve.md";
+import premium3dDeviceMockupSkill from "./premium-3d-device-mockup.md";
+import premiumMacroCloseupSkill from "./premium-macro-closeup.md";
+import premiumNarrationRevealSkill from "./premium-narration-reveal.md";
+import premiumFloatingIconChaosSkill from "./premium-floating-icon-chaos.md";
+import premiumNotificationScatterSkill from "./premium-notification-scatter.md";
+import premiumInAppChatSkill from "./premium-in-app-chat.md";
+import premiumMultiViewWalkthroughSkill from "./premium-multi-view-walkthrough.md";
 
 // Guidance skills (markdown files with patterns/rules)
 const GUIDANCE_SKILLS = [
@@ -148,6 +155,13 @@ const GUIDANCE_SKILLS = [
   "premium-bold-color-showcase",
   "premium-person-cards",
   "premium-chaos-to-ui-resolve",
+  "premium-3d-device-mockup",
+  "premium-macro-closeup",
+  "premium-narration-reveal",
+  "premium-floating-icon-chaos",
+  "premium-notification-scatter",
+  "premium-in-app-chat",
+  "premium-multi-view-walkthrough",
 ] as const;
 
 // Example skills (complete working code references)
@@ -241,6 +255,13 @@ const guidanceSkillContent: Record<(typeof GUIDANCE_SKILLS)[number], string> = {
   "premium-bold-color-showcase": premiumBoldColorShowcaseSkill,
   "premium-person-cards": premiumPersonCardsSkill,
   "premium-chaos-to-ui-resolve": premiumChaosToUiResolveSkill,
+  "premium-3d-device-mockup": premium3dDeviceMockupSkill,
+  "premium-macro-closeup": premiumMacroCloseupSkill,
+  "premium-narration-reveal": premiumNarrationRevealSkill,
+  "premium-floating-icon-chaos": premiumFloatingIconChaosSkill,
+  "premium-notification-scatter": premiumNotificationScatterSkill,
+  "premium-in-app-chat": premiumInAppChatSkill,
+  "premium-multi-view-walkthrough": premiumMultiViewWalkthroughSkill,
 };
 
 // Map example skill names to example IDs
@@ -312,6 +333,7 @@ Premium SaaS / Agency-quality template skills:
 - premium-network-intro: network graph, avatar nodes connected by polka-dot SVG paths, B2B ecosystem, "join the network", ripple ring on avatar pop, elastic spring node entrance
 - premium-feature-list: feature list, product features, bullet points, 3-4 items, benefit list, key features, feature showcase, "what you get", "why choose us", staggered feature reveal
 - premium-device-mockup: device mockup, MacBook mockup, laptop with screenshot, browser window with product, phone mockup, product screenshot inside device shell, ATTACHED_IMAGES on screen, device frame
+- premium-3d-device-mockup: true 3D device mockup, 3D MacBook, three.js device, 3D phone render, cinematic 3D orbit, physically accurate device, 3D product render, orbital camera device, enterprise launch scene
 - premium-scroll-demo: scroll simulation, scrolling product demo, website walkthrough, scroll through page, animated scroll, browser scroll, "living product" demo, scroll reveal
 - premium-data-reveal: animated stats, counting numbers, animated metrics, KPI reveal, number counter, stat cards, progress ring, bar fill animation, percentage counter, data credibility
 - premium-split-screen: before/after, comparison, side-by-side, problem vs solution, split screen, chaos vs clean, old way vs new way, contrast scene, divider reveal
@@ -360,6 +382,12 @@ Premium SaaS / Agency-quality template skills:
 - premium-narrative-overlay: on-screen text, story text, narrative headline, bold copy overlay, section label, sub-line, kinetic narrative, outcome headline, emotional text, word-by-word reveal, story layer, text-driven narrative, visual storytelling, problem statement text, relief headline
 - premium-bold-color-showcase: bold color background, saturated bg, AHA moment reveal, confidence scene, dramatic background, brand-color fill, white card on color bg, punch scene, transformation reveal
 - premium-person-cards: team personas, avatar cards, person with role, headshot photo cards, named faces, disconnected team, frustrated user, persona showcase, team orbit cards, social proof photos, person with badge
+- premium-macro-closeup: macro zoom, extreme close-up, deep dive UI, zoom into sidebar, zoom into table row, selective focus, depth of field, DOF blur, Bordio-style zoom, UI section zoom, magnify UI element, macro camera, close-up detail, zoom 3x, focus isolation, blurred background UI
+- premium-narration-reveal: word by word text, narration sync, voiceover text reveal, progressive text coloring, gray to active, word timing, summary text, conclusion text, key takeaway, Qanapi-style, narration highlight, word illuminate, spoken word sync
+- premium-floating-icon-chaos: floating icons, app icons, communication chaos, tool overload, WhatsApp Slack Gmail icons floating, chat bubbles, Fronter-style intro, icon orbit, communication fragmentation, scattered app logos, before state, chaos intro
+- premium-notification-scatter: notification cards, floating cards dark bg, CRM notifications, activity feed, card scatter, Pretaa-style, notification feed, event cards, white cards on dark, workflow notifications, alert cards
+- premium-in-app-chat: chat panel, messaging thread, team chat, collaboration chat, typing indicator, message thread, Bordio-style chat, customer support chat, comment thread, in-app messaging, chat overlay
+- premium-multi-view-walkthrough: multi-view, product tour, multiple screenshots, tab switching, view switching, table to kanban, calendar view, multi-screenshot, product views, Bordio-style walkthrough, view tabs, dashboard tour
 
 Code examples (complete working references):
 - example-histogram: animated bar chart with spring animations and @remotion/shapes

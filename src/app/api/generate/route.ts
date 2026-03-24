@@ -164,6 +164,14 @@ const headlineProgress = spring({ frame: frame - HEADLINE_START, fps, config: { 
 
 **Accent word rule**: Identify the ONE most powerful word in the headline and render it in BRAND.primary. Wrap it in a span with the gradient text pattern.
 
+## INTERPOLATE RULES (CRITICAL — outputRange must be numbers only)
+
+interpolate() outputRange MUST contain only plain numbers — never CSS strings or color strings.
+WRONG: interpolate(frame, [0, 30], ['0px', '100px'])  // crashes
+WRONG: interpolate(frame, [0, 30], ['rgba(0,0,0,0)', 'rgba(0,0,0,1)'])  // crashes
+RIGHT: \`\${interpolate(frame, [0, 30], [0, 100])}px\`  // compute number, then wrap in template literal
+RIGHT: Use spring() combined with a template literal for spring-driven CSS values.
+
 ## EASING PATTERNS (always add easing to visible interpolations)
 
 Never use bare interpolate(frame, [0,90], [0,1]) for visible motion.
@@ -225,15 +233,16 @@ When BRAND.style === "light":
 5. Accent color (BRAND.primary) on max 2–3 elements — never as background fill
 6. Border: 1px solid rgba(0,0,0,0.08) on cards and dividers
 
-## UI_SCHEMA & RECONSTRUCTED UI (use when UI_SCHEMA block is present in prompt)
+## UI_SCHEMA & RECONSTRUCTED UI (MANDATORY when UI_SCHEMA block is present in prompt)
 
-When the prompt contains a "## UI_SCHEMA" block, Vision AI has extracted a structural schema of the product screenshot. In this case:
+When the prompt contains a "## UI_SCHEMA" block, Vision AI has extracted a structural schema of the product screenshot. **This is the primary visual anchor of the scene — non-UI visuals are secondary.**
 
-1. DO NOT render the screenshot as an <img> tag
-2. Use <ReconstructedAppShell uiSchema={UI_SCHEMA} brand={BRAND} /> to render the full reconstructed UI
-3. Or use individual components: AnimatedSidebar, AnimatedTopbar, AnimatedMetricCards, AnimatedTable, AnimatedChart, AnimatedForm
-4. Place the reconstructed UI inside a device frame if appropriate
-5. Add <LightArcBg brand={BRAND} variant={GLOBAL_BG || "arcs"} /> as first child of AbsoluteFill
+MANDATORY RULES (violations = broken video):
+1. **DO NOT render the screenshot as an <img> tag** — the reconstructed UI replaces it.
+2. **MUST use <ReconstructedAppShell uiSchema={UI_SCHEMA} brand={BRAND} />** as the primary UI element. Individual Animated* components are only for partial overrides.
+3. **Non-UI visuals (floating nodes, abstract shapes, text blocks) MUST be at zIndex ≤ 2** — the AppShell is at zIndex 3–10, cursor at zIndex 100+. No floating element may visually compete with the UI.
+4. Place the reconstructed UI inside a device frame if appropriate.
+5. Add <LightArcBg brand={BRAND} variant={GLOBAL_BG || "arcs"} /> as first child of AbsoluteFill.
 
 UI_SCHEMA and GLOBAL_BG are already in scope (do NOT re-declare). Access UI_SCHEMA directly:
 - UI_SCHEMA.layout.sidebar.items → sidebar nav items
@@ -244,6 +253,20 @@ UI_SCHEMA and GLOBAL_BG are already in scope (do NOT re-declare). Access UI_SCHE
 The Animated* components handle all spring animations, stagger timing, and interaction. You only need to pass data props.
 
 FALLBACK: If a section has _fallback: true, that zone's Vision extraction failed. For fallback zones, render a placeholder or use screenshot overlay instead.
+
+## INTERACTION TARGET FALLBACK
+
+When rendering cursor interactions (CURSOR_STEPS / INTERACTION_SCRIPT), some targets may not have a matching UI element. **NEVER crash or render erratically** — use this fallback:
+
+\`\`\`tsx
+// Safe click coordinate resolver — falls back to viewport center if target not found
+const safeClickX = (targetBox?: {x:number;y:number;w:number;h:number}) =>
+  targetBox ? (targetBox.x + targetBox.w / 2) * width : width * 0.5;
+const safeClickY = (targetBox?: {x:number;y:number;w:number;h:number}) =>
+  targetBox ? (targetBox.y + targetBox.h / 2) * height : height * 0.5;
+\`\`\`
+
+Always wrap element lookups in optional chaining: UI_SCHEMA?.mainContent?.sections?.[0]?.data ?? []
 
 ## RECONSTRUCTION CROSSFADE — MANDATORY HARD RULE
 
@@ -690,10 +713,45 @@ const CURSOR_STEPS = [
 \`\`\`
 Without this anchor, the cursor is pre-positioned at the first waypoint from frame 0 instead of traveling to it.
 
-## SECTION HEADER REQUIREMENTS
+## CURSOR SCENE LAYOUT — NO OVERLAP (CRITICAL — #1 quality failure)
 
-For cursor-engine and chameleon-ui scenes with 3+ interaction steps, include a sectionHeader on each interaction event naming the feature being demonstrated.
-In the scene prompt, instruct: "Label each cursor step with a contextual section header above the UI — large bold text (64px, weight 800) in brand.text color that slides in from above and identifies the feature. Format: 'Feature Name' above the device frame."
+In cursor/walkthrough scenes, the UI screenshot fills most of the frame and the cursor walks over it. NOTHING else may compete with the screenshot or cursor.
+
+**ABSOLUTELY FORBIDDEN in cursor scenes (will look broken if violated):**
+- ANY headline, subtitle, or title text overlaid on the frame — NO TEXT AT ALL
+- Voiceover text, kinetic text, or animated text of any kind
+- Floating shapes, badges, or icons positioned over the screenshot
+- Section header text above the screenshot — use PersistentSectionLabel component instead (it auto-pins to top-left corner at small size)
+- Multiple overlapping elements in the same area as the cursor path
+
+**The ONLY elements allowed in a cursor scene:**
+1. Background: \`LightArcBg\` at z:0
+2. Screenshot/UI: \`ContentCard\` wrapping the \`<Img src={ATTACHED_IMAGES[n]} />\` at z:10, filling 85-95% of frame width, vertically centered
+3. PersistentSectionLabel: small label pinned to top-left corner at z:5 (optional)
+4. Cursor: \`{HAND_CURSOR}\` at z:150, positioned at cursorX/cursorY — NOTHING ELSE at z:100+
+5. Cursor ripples: at z:100, same position as cursor
+
+\`\`\`tsx
+// CORRECT cursor scene structure:
+return (
+  <AbsoluteFill style={{ backgroundColor: BRAND.bg }}>
+    <LightArcBg brand={BRAND} variant={GLOBAL_BG} />
+    <div style={{ position: "absolute", inset: 0, zIndex: 10, display: "flex", alignItems: "center", justifyContent: "center" }}>
+      <ContentCard brand={BRAND} startFrame={0}>
+        <Img src={ATTACHED_IMAGES[0]} style={{ width: "100%", height: "100%", objectFit: "cover", objectPosition: "top" }} />
+      </ContentCard>
+    </div>
+    {/* Cursor layer — ONLY cursor here, no text */}
+    <div style={{ position: "absolute", left: cursorX - 4, top: cursorY - 2, zIndex: 150, pointerEvents: "none" }}>
+      <div style={{ transform: \`scale(\${clickSqueeze})\`, transformOrigin: "12px 4px" }}>
+        {HAND_CURSOR}
+      </div>
+    </div>
+  </AbsoluteFill>
+);
+\`\`\`
+
+**Cursor waypoint coordinates must target elements INSIDE the screenshot.** The cursor x/y values (0–1 normalized) should point to buttons, inputs, and links visible in the screenshot — not to empty space or below the content.
 
 ## PERFORMANCE RULES
 
@@ -801,6 +859,27 @@ boilerplate and guarantees consistency:
   // Use for scale, opacity, or glow pulses on each beat
   style={{ transform: \`scale(\${1 + beat * 0.04})\` }}
   \`\`\`
+- **useBeatClock()** — Returns \`{ beat, bar, beatProgress, barProgress, isDownbeat }\` for musical choreography. Auto-reads MUSIC_BPM from scope.
+  \`\`\`tsx
+  const { beat, isDownbeat, barProgress } = useBeatClock();
+  // isDownbeat = true on beats 1, 5, 9... (every 4 beats). Use for major element entrances.
+  // barProgress 0→1 over each 4-beat bar. Use for continuous progress animations.
+  \`\`\`
+- **snapToDownbeat(approxFrame, bpm?, fps?)** — Snaps a frame number to the nearest musical downbeat. Use to align major visual events to the music grid.
+  \`\`\`tsx
+  const CARD_ENTER = snapToDownbeat(45); // snaps 45 → nearest downbeat frame
+  \`\`\`
+- **MUSIC_BPM** — Current track BPM (number, in scope). Derived from brand.musicStyle: corporate=90, energetic=128, cinematic=80, calm=68, playful=110. useBeat()/useBeatClock() auto-read this — only pass explicit BPM to override.
+
+- **useMorphEntrance(morphFrom, targetRect)** — Cross-scene element morphing. When MORPH_FROM is set (non-null), the previous scene exported an element's rect. This hook animates FROM that rect TO a new position with spring physics.
+  \`\`\`tsx
+  // MORPH_FROM is in scope (auto-set when previous scene has morphExport)
+  const morph = useMorphEntrance(MORPH_FROM, { x: 0.3, y: 0.2, w: 0.4, h: 0.5 });
+  <div style={{ transform: morph.transform, opacity: morph.opacity }}>{/* element */}</div>
+  \`\`\`
+  Use SPARINGLY — max 1 morph portal per video. Best for the single most dramatic shape transition (e.g., problem icon → solution card).
+- **MORPH_FROM** — Scope variable (\`{x,y,w,h} | null\`). Set when previous scene has \`morphExport\`. Pass to \`useMorphEntrance()\`. Null when no morph is active.
+
 - **WORD_TIMINGS** — Pre-computed word timing array for the scene's voiceover. Pass to useAudioSync(). Array of \`{ word, startFrame, endFrame }\`.
 
 ## KINETIC TEXT + WORD-SYNC PATTERN (use when WORD_TIMINGS is non-empty)
@@ -997,6 +1076,7 @@ Also available: **SyncedWord** component for individual word spring reveals:
 - **AnimatedChart** — SVG animated charts: \`<AnimatedChart type="line|bar|donut" dataPoints={[...]} color={BRAND.primary} brand={BRAND} />\`
 - **AnimatedForm** — Sequential form field reveal: \`<AnimatedForm title="" fields={[{label, type, value}]} submitLabel="" brand={BRAND} />\`
 - **ReconstructedAppShell** — Full app reconstruction from UISchema: \`<ReconstructedAppShell uiSchema={UI_SCHEMA} brand={BRAND} />\`
+- **FocusController** — Timeline Engine attention director: dims background, blurs non-focused elements, and zooms camera toward a target. Use to direct viewer attention at a specific interaction moment: \`<FocusController focusTarget="#element" triggerFrame={60} releaseFrame={120} focusX={0.62} focusY={0.45} dimOpacity={0.55} zoomAmount={1.06} brand={BRAND}><AppShell .../></FocusController>\`
 - **AbstractSkeletonUI** — Background cognitive-masked UI: renders layout as geometric skeleton blocks (no readable text). Use for scenes where UI context is needed but the headline/cursor/nodes are the focus: \`<AbstractSkeletonUI brand={BRAND} uiSchema={UI_SCHEMA} opacity={0.75} />\`
 - **HeroSplit** — Pre-built 2-column layout (text left, visual right). Eliminates manual AbsoluteFill positioning: \`<HeroSplit left={<headlineBlock />} right={<ContentCard brand={BRAND}>...</ContentCard>} brand={BRAND} leftWeight={1} rightWeight={1.2} />\`
 - **AnimatedConnectionLine** — SVG connector that draws from point A to point B: \`<AnimatedConnectionLine x1={0.25} y1={0.4} x2={0.65} y2={0.35} startFrame={20} dashed curved color={\`\${BRAND.primary}55\`} />\`. x1/y1/x2/y2 are normalized (0–1).
@@ -1067,7 +1147,8 @@ These are the exact patterns used in premium B2B SaaS explainer videos. Use them
 
 ### Rule 1 — CinematicCamera + ParallaxLayer on showcase scenes (duration ≥ 210f)
 Any scene with duration ≥ 210 frames AND 3+ distinct visual layers MUST:
-1. Wrap ALL content in \`<CinematicCamera targetX={0.5} targetY={0.45} zoomTo={1.06}>\`
+1. Wrap ALL content in \`<CinematicCamera targetX={0.5} targetY={0.45} zoomTo={1.06} initialZoom={INITIAL_CAMERA_ZOOM} initialPan={INITIAL_CAMERA_PAN}>\`
+   (INITIAL_CAMERA_ZOOM / INITIAL_CAMERA_PAN are already in scope — they carry previous scene's end state for seamless zoom continuity. Pass them always.)
 2. Separate background, midground, and foreground into \`<ParallaxLayer>\` divs:
 \`\`\`tsx
 const camProg = spring({ frame: Math.min(frame, 60), fps, config: SPRING_CONFIGS.cinematic });
@@ -1117,6 +1198,7 @@ const entranceChroma = interpolate(frame, [0, 8], [0.4, 0], { extrapolateRight: 
 ## RESERVED NAMES (CRITICAL — never shadow these)
 
 spring, interpolate, useCurrentFrame, useVideoConfig, AbsoluteFill, Sequence,
+INITIAL_CAMERA_ZOOM, INITIAL_CAMERA_PAN,
 ATTACHED_IMAGES, getGlassCard, ParallaxLayer, SheenOverlay, MotionBlurWhip, SPRING_CONFIGS, EASINGS, Audio, BRAND,
 MeshGradientBg, CameraMotionBlur, useAudioSync, useBeat, WORD_TIMINGS, random,
 ChromaticAberration, GlowBloom, glowBloomStyle, DepthBlur,
@@ -1125,13 +1207,13 @@ ChameleonInput, ChameleonHighlight, DropdownMenu,
 CinematicCamera, TaskDetailPanel, ModalOverlay, InputField, ChatBubble, SidebarNav, AppShell, HeroSplit,
 cubicBezier, LightArcBg, AnimatedConnectionLine,
 ActionCamera, SpotlightCutout, GhostHighlight,
-GLOBAL_STYLE, FilmGrain, ContextualSectionHeader, SfxSequencer, AnimatedSidebar, AnimatedMetricCards, AnimatedTable, AnimatedChart, AnimatedForm, ReconstructedAppShell, AbstractSkeletonUI,
+GLOBAL_STYLE, FilmGrain, ContextualSectionHeader, SfxSequencer, AnimatedSidebar, AnimatedMetricCards, AnimatedTable, AnimatedChart, AnimatedForm, ReconstructedAppShell, AbstractSkeletonUI, FocusController,
 AnimatedTopbar, SectionTitle, NotificationToast, StatusBadge, TableActionButton,
 PersistentSectionLabel, FloatingShapes, ContentCard, GLOBAL_BG,
 useInteractionFeedback, ContextualBgPulse,
 useEntropy, useEntropyWithAttractor, useStagger, useMagnetic, SAFE_ZONES, CURSOR_STATE_DEFAULT, useCursorState, SyncedWord,
 MaskedReveal,
-HandwrittenLabel, PersonCard, STOCK_AVATARS, GarbledText, OrbitRing, BoldColorBg
+HandwrittenLabel, PersonCard, STOCK_AVATARS, GarbledText, OrbitRing, BoldColorBg, HAND_CURSOR
 
 ## NEW SCOPE COMPONENTS (already in scope — do NOT re-declare)
 
@@ -1145,6 +1227,105 @@ HandwrittenLabel, PersonCard, STOCK_AVATARS, GarbledText, OrbitRing, BoldColorBg
 - **OrbitRing({ centerX?, centerY?, radius, color?, startFrame, dotSpeed?, brand })** — Dotted circle arc with traveling dot. centerX/Y normalized 0–1. For network/concept scenes.
   Example: \`<OrbitRing centerX={0.5} centerY={0.5} radius={280} color={BRAND.primary} startFrame={15} dotSpeed={0.025} brand={BRAND} />\`
 - **BoldColorBg({ color, vignetteStrength? })** — Solid saturated background. ONLY for AHA/CONFIDENCE scenes. Example: \`<BoldColorBg color={BRAND.primary} vignetteStrength={0.12} />\`
+
+- **HAND_CURSOR** — Pre-built pointing hand SVG React element (white hand, dark outline, fingertip hotspot). MANDATORY for ALL cursor scenes — do NOT create your own cursor SVG. Render it like this:
+  \`\`\`tsx
+  <div style={{ position: "absolute", left: cursorX - 4, top: cursorY - 2,
+    transform: \`scale(\${clickSqueeze})\`, transformOrigin: "12px 4px",
+    zIndex: 150, pointerEvents: "none" }}>
+    {HAND_CURSOR}
+  </div>
+  \`\`\`
+  **Rule:** NEVER create an inline \`<svg>\` for the cursor. NEVER use an arrow cursor. Always use \`{HAND_CURSOR}\` from scope.
+
+- **MacroCamera({ zoomLevel?, focusPoint?, zoomInFrame?, holdFrames?, zoomDuration?, driftAmount?, zoomOutDuration? })** — Extreme 2–5x zoom into a specific UI region. Three phases: snap zoom-in (easeOutExpo) → hold with drift → whip zoom-out (easeInExpo). Bordio-style macro close-up.
+  Props: zoomLevel (2–5, default 3), focusPoint ({x,y} normalized 0–1), zoomInFrame (when zoom starts), holdFrames (duration at max zoom, default 60), zoomDuration (transition frames, default 25), driftAmount (subtle hold drift in px, default 8).
+  Example: \`<MacroCamera zoomLevel={3.5} focusPoint={{x:0.65, y:0.4}} zoomInFrame={20} holdFrames={80} zoomDuration={25}><AppShell ... /></MacroCamera>\`
+  **Rules**: Max 2 MacroCamera per video. Always pair with SelectiveFocus. Keep cursor layers OUTSIDE MacroCamera.
+
+- **SelectiveFocus({ focusX?, focusY?, focusRadius?, blurAmount?, active? })** — Radial depth-of-field blur. Renders children twice: blurred full layer behind + sharp masked layer on top using radial-gradient mask. Simulates camera DOF.
+  Props: focusX/focusY (0–1 center of sharp area), focusRadius (0–1 how much is sharp, default 0.35), blurAmount (blur px on edges, default 8), active (boolean toggle).
+  Example: \`<SelectiveFocus focusX={0.65} focusY={0.4} focusRadius={0.3} blurAmount={10}><AppShell ... /></SelectiveFocus>\`
+  **Rules**: focusRadius 0.25–0.4 for UI sections, 0.15–0.25 for single elements. blurAmount 6–10 subtle, 10–16 dramatic.
+
+- **OffthreadVideo** — Remotion's video component for stock footage backgrounds. Already in scope. Usage: \`<OffthreadVideo src={STOCK_VIDEO_URL} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />\`. Always add a dark overlay div on top (rgba(0,0,0,0.15)).
+- **STOCK_VIDEO_URL** — Scope variable (string | null). When set, contains a stock video URL for background compositing. Use with OffthreadVideo.
+
+- **NarrationReveal({ text, timings?, activeColor?, inactiveColor?, fontSize?, fontWeight?, boldOnActive?, startFrame?, brand?, lineHeight?, maxWidth? })** — Word-by-word color reveal synced to voiceover. Words start gray/transparent and transition to active color as narration reaches them. Qanapi-style "perceived intelligence" effect.
+  Props: text (full sentence), timings (WORD_TIMINGS from scope), activeColor (default BRAND.text), inactiveColor (default semi-transparent gray), boldOnActive (fontWeight 400→700 on activation).
+  Example: \`<NarrationReveal text="In just a few clicks, you've deployed complete security" timings={WORD_TIMINGS} activeColor={BRAND.text} brand={BRAND} fontSize={56} />\`
+  **Rules**: Always pass WORD_TIMINGS when available. Use for summary/conclusion/CTA scenes only. Max 1 NarrationReveal per video.
+
+- **FeatureContextBar({ label, badge?, icon?, brand, startFrame? })** — Persistent header bar above UI during multi-feature walkthroughs (Qanapi-style). Semi-transparent white bg with blur, brand-colored badge pill.
+  Example: \`<FeatureContextBar label="KMS for CSE" badge="Google Workspace" icon="🔐" brand={BRAND} />\`
+  If FEATURE_HEADER is set in scope (not null), render it: \`{FEATURE_HEADER && <FeatureContextBar {...FEATURE_HEADER} brand={BRAND} />}\`
+
+- **NotificationCard({ category, message, timestamp?, avatar?, categoryColor?, index?, startFrame?, brand, x?, y? })** — White notification card for CRM/workflow scatter scenes. Built-in staggered spring entrance (8f per card via index prop) + gentle float.
+  Example: \`<NotificationCard category="Pipeline" message="New deal: Acme $50K" avatar="🏢" categoryColor="#6366f1" index={0} startFrame={20} brand={BRAND} x={200} y={150} />\`
+
+- **usePathTraveler(points, startFrame, duration)** — Hook returning \`{x, y, angle, progress}\` for animating an element along a waypoint path. Used with PaperPlane or custom dot.
+  Example: \`const pos = usePathTraveler([{x:100,y:200}, {x:500,y:300}, {x:900,y:200}], 20, 90);\`
+
+- **PaperPlane({ x, y, angle?, size?, color?, brand? })** — Triangular SVG arrow. Pair with usePathTraveler for Screenjar-style traveling element.
+  Example: \`<PaperPlane x={pos.x} y={pos.y} angle={pos.angle} brand={BRAND} />\`
+
+- **InAppChatPanel({ messages, startFrame?, brand, side?, overlay? })** — Slide-in team messaging panel (Bordio-style). Messages stagger in 10f apart. Last message can have \`isTyping: true\` for animated dots.
+  Example: \`<InAppChatPanel startFrame={40} brand={BRAND} messages={[{name:"Sarah", text:"Can you check the report?"}, {name:"Mike", text:"", isTyping:true}]} />\`
+
+- **ConcentricRings({ rings?, centerX?, centerY?, maxRadius?, color?, startFrame?, brand? })** — SVG ring emanation (Screenjar/Viable style). N rings with staggered spring expansion + different dash patterns.
+  Example: \`<ConcentricRings rings={5} centerX={0.5} centerY={0.5} maxRadius={250} brand={BRAND} startFrame={10} />\`
+
+- **ICON_PATHS** — Map of 24+ SVG path strings keyed by name: shield, lock, key, clock, calendar, dollar, chart-up, person, team, message, bell, mail, cloud, code, gear, lightning, check, warning, target, star, heart, database, globe, phone.
+
+- **DrawOnIcon({ icon?, path?, size?, color?, startFrame?, drawDuration?, brand? })** — SVG icon with strokeDashoffset draw-on animation. Pass \`icon\` key from ICON_PATHS or custom \`path\`.
+  Example: \`<DrawOnIcon icon="shield" size={100} brand={BRAND} startFrame={20} drawDuration={30} />\`
+
+- **AppShell chromeColor** — Pass \`chromeColor={BRAND.primary}\` for Viable-style branded browser chrome title bar instead of default dark.
+
+## MACRO ZOOM COMPOSITION STANDARD (WhatAStory tier)
+
+Every video with product screenshots SHOULD include at least 1 macro zoom moment:
+- Wrap the UI in \`<MacroCamera>\` + \`<SelectiveFocus>\` for Bordio-style extreme close-ups
+- The focus point should target the most important interactive element (sidebar item, button, data row)
+- MacroCamera goes OUTSIDE SelectiveFocus: \`<MacroCamera ...><SelectiveFocus ...><AppShell /></SelectiveFocus></MacroCamera>\`
+- Cursor layers (CursorRenderer, CursorAnnotationPill) must stay OUTSIDE both wrappers
+- Pattern:
+\`\`\`tsx
+<MacroCamera zoomLevel={3} focusPoint={{x:0.6, y:0.45}} zoomInFrame={30} holdFrames={70}>
+  <SelectiveFocus focusX={0.6} focusY={0.45} focusRadius={0.3} blurAmount={8}>
+    {/* UI content here */}
+  </SelectiveFocus>
+</MacroCamera>
+{/* Cursor OUTSIDE */}
+\`\`\`
+
+## CAMERA INTENTIONALITY (every zoom needs a reason)
+
+Before using MacroCamera, SteppedCamera, or CinematicCamera zoom, the scene must have a REASON:
+- "focus-detail": Zoom into a specific UI element the viewer needs to read (metric, button, sidebar item)
+- "guide-attention": Camera leads viewer to next interaction target before cursor arrives
+- "reveal-depth": Zoom out or tilt to show spatial relationship between UI layers
+- "narrative-beat": Zoom matches emotional beat (push-in on AHA moment, pull-back on RELIEF)
+
+If none of these reasons apply → use a STATIC camera. A scene with a fixed, well-composed frame is MORE premium than one with unmotivated camera movement.
+
+**Camera + Cursor Sync Rule**: When a scene has BOTH camera motion AND cursor motion:
+1. Camera must lead — begin moving 8-15 frames BEFORE cursor arrives at its next target
+2. Camera focus point and cursor target must be in the same quadrant of the frame
+3. Use \`usePreFocusCamera(targetX, targetY, cursorArrivalFrame)\` to create anticipatory camera drift before cursor arrives (already in scope)
+4. NEVER have camera panning left while cursor moves right — they must agree on direction
+
+**usePreFocusCamera** — Anticipatory camera (already in scope):
+Creates subtle zoom + pan toward upcoming cursor target BEFORE the cursor arrives there. Makes the camera feel "intelligent" — it knows where to look.
+\`\`\`tsx
+// Camera pre-focuses on target at (0.62, 0.45) before cursor arrives at frame 72
+const { zoom, panX, panY } = usePreFocusCamera(0.62, 0.45, 72);
+// Apply to a wrapper or CinematicCamera:
+<div style={{ transform: \`scale(\${zoom}) translate(\${panX}px, \${panY}px)\`, transformOrigin: "50% 50%" }}>
+  {/* UI content */}
+</div>
+\`\`\`
+Use in every cursor-interaction scene for cinematic anticipation. The camera should always feel like it's "thinking ahead."
 
 ## VIOLATIONS — automatic failures, NEVER produce these
 
@@ -1164,6 +1345,29 @@ These patterns produce broken or amateur output. Any violation = regenerate:
 12. **whiteSpace: "nowrap" on headlines** — NEVER use nowrap on any text larger than 24px. Long product names WILL overflow.
 13. **Silent cursor/chameleon scenes** — Any scene with INTERACTION_SCRIPT MUST include \`<SfxSequencer events={INTERACTION_SCRIPT} />\`. A cursor clicking silently is an amateur output. Sound design is 50% of perceived quality.
 14. **Flat z-depth** — All content layers must be separated into bg (z:0), midground (z:10–50), foreground (z:100+). Every scene must have a visible background texture or color — never a plain solid fill as the only layer.
+15. **Calling an undefined function** — NEVER call a function you have not (a) defined in your code or (b) confirmed is in the SCOPE LIST above. Common crash: inventing helpers like \`statStagger\`, \`fadeDelay\`, \`getOffset\`, \`nodeOpacity\` without defining them. Write the logic inline or use the provided \`useStagger(i, base, step)\`.
+16. **Missing \`key\` prop in .map()** — every JSX element returned inside a \`.map()\` MUST have a unique \`key\` prop (e.g. \`key={i}\` or \`key={item.id}\`). Missing keys cause React warnings and DOM reuse bugs.
+
+## SCENE ANIMATION BUDGET (MANDATORY — prevents visual overload)
+
+Every scene has a strict animation budget. Exceeding ANY limit produces amateur "busy" output:
+
+| Resource | Max per Scene | Why |
+|---|---|---|
+| spring() calls | 6 | More = competing motion, eye can't track |
+| filter: effects (blur, saturate, hue-rotate) | 2 elements | GPU cost + visual mud |
+| useVitality() calls | 3 | More floating elements = screensaver, not premium |
+| useEntropy() calls | 2 | Jitter on everything = chaos, not energy |
+| Simultaneous moving elements at any frame | 3 | Viewer tracks ONE thing; 3 is the hard ceiling |
+| ConcentricRings rings prop | 5 | More = clutter |
+| useBeat() calls | 2 | Beat-driven motion on everything = headache |
+| CSS filter properties per element | 2 | blur + saturate is fine; blur + saturate + hue-rotate + brightness = soup |
+
+**The Stillness Rule**: At least 25% of every scene's duration must be HOLD — zero new entrances, zero movement, just the final composed frame. This is Act 3. Stillness IS the design. A scene that animates wall-to-wall feels frantic, not premium.
+
+**The "Why" Test**: Before adding ANY animation, answer: "What story does this motion tell?" Valid: "card enters to reveal the feature" / "cursor guides to click target" / "zoom focuses on key metric". Invalid: "it looks cool" / "the space felt empty" / "I haven't used this component yet". If no story reason → don't animate it.
+
+**Negative Space Rule**: Every scene must have at least ONE region (≥20% of frame area) that is calm — no moving elements, no text, just background/texture. This gives the eye a rest anchor.
 
 ## VISUAL NARRATIVE PRINCIPLES (agency quality)
 

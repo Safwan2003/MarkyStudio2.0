@@ -21,6 +21,7 @@ export interface CompiledScene {
   cursorWaypoints?: CursorWaypoint[];
   transition?: "fade" | "slide" | "scale" | "flash" | "none" | "cameraPan" | "zoomThrough";
   exitAnchor?: { x: number; y: number };
+  morphExport?: { id: string; rect: { x: number; y: number; w: number; h: number } };
   auditScore?: number;
   hasVoiceover?: boolean;
   isAhaMoment?: boolean;
@@ -30,11 +31,75 @@ export interface CompiledScene {
   wordTimings?: { word: string; startFrame: number; endFrame: number }[];
 }
 
-// Module-level cache — persists for the browser session
-const sceneCache = new Map<string, CompiledScene>();
+// Module-level LRU cache — max 30 entries, evicts least-recently-used to prevent memory leaks
+class LRUCache<K, V> {
+  private readonly max: number;
+  private readonly map = new Map<K, V>();
+  constructor(max: number) { this.max = max; }
+  has(key: K): boolean { return this.map.has(key); }
+  get(key: K): V | undefined {
+    if (!this.map.has(key)) return undefined;
+    const val = this.map.get(key)!;
+    this.map.delete(key);
+    this.map.set(key, val);
+    return val;
+  }
+  set(key: K, val: V): void {
+    if (this.map.has(key)) this.map.delete(key);
+    else if (this.map.size >= this.max) this.map.delete(this.map.keys().next().value!);
+    this.map.set(key, val);
+  }
+}
+const sceneCache = new LRUCache<string, CompiledScene>(30);
 
 // Task 0.4: Module-level brand cache — avoids re-running brand extraction on re-generation
 let cachedBrandStore: { imageHash: string; brand: BrandTokens } | null = null;
+
+/** Build a collision-resistant hash from a base64 image string.
+ *  Samples start + middle + end chunks so two images of equal length
+ *  but different content still produce different hashes.
+ */
+function buildImageHash(base64: string): string {
+  const len = base64.length;
+  const start = base64.slice(0, 50);
+  const mid = len > 100 ? base64.slice(Math.floor(len / 2) - 25, Math.floor(len / 2) + 25) : "";
+  const end = len > 50 ? base64.slice(-50) : "";
+  return `${len}:${start}|${mid}|${end}`;
+}
+
+/** Deterministic pacing profile — adjusts scene durations post-plan for rhythm variety.
+ *  Rules:
+ *  - FRUSTRATION/PAIN scenes: clamp to ≤180f (urgency — don't drag the pain)
+ *  - RELIEF/AHA scenes: boost by +15% clamped to ≤330f (let the payoff breathe)
+ *  - Consecutive same-duration scenes: alternate ±10% to break monotony
+ *  - CTA scenes: clamp to ≤240f (concise — user already convinced)
+ */
+function applyPacingProfile(scenes: ScenePlan[]): ScenePlan[] {
+  return scenes.map((scene, i) => {
+    let dur = scene.durationInFrames;
+    const intent = (scene.emotionalIntent ?? "").toUpperCase();
+    const isCta = (scene.title ?? "").toLowerCase().includes("cta") || intent === "URGENCY";
+
+    if (intent === "FRUSTRATION" || intent === "PAIN") {
+      dur = Math.min(dur, 180);
+    } else if (scene.isAhaMoment || intent === "RELIEF") {
+      dur = Math.min(Math.round(dur * 1.15), 330);
+    } else if (isCta) {
+      dur = Math.min(dur, 240);
+    }
+
+    // Break monotony: alternate ±10% if adjacent scenes have same duration
+    const prevDur = scenes[i - 1]?.durationInFrames;
+    const nextDur = scenes[i + 1]?.durationInFrames;
+    if (prevDur === dur && nextDur === dur) {
+      dur = i % 2 === 0 ? Math.round(dur * 0.91) : Math.round(dur * 1.09);
+    }
+
+    // Clamp to valid range [60, 360] and align to 30f boundary
+    dur = Math.max(60, Math.min(360, Math.round(dur / 30) * 30));
+    return dur !== scene.durationInFrames ? { ...scene, durationInFrames: dur } : scene;
+  });
+}
 
 function cacheKey(scene: ScenePlan, brand: BrandTokens): string {
   const vo = scene.voiceoverText?.slice(0, 40) ?? "";
@@ -285,6 +350,9 @@ function createMasterComponent(
   // FRUSTRATION/PAIN → heavier grain (gritty, oppressive)
   // RELIEF/CONFIDENCE → lighter grain (clean, elevated)
   // EXCITEMENT/URGENCY → fast grain shift (kinetic energy)
+  // Two slightly different grain SVGs to alternate between frames for organic variation
+  const GRAIN_A = `url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='6' seed='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E")`;
+  const GRAIN_B = `url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.87' numOctaves='6' seed='9' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E")`;
   const FilmGrainLayer = function FilmGrainLayer() {
     const frame = useCurrentFrame();
     const intent = sceneIntentMap.find(s => frame >= s.from && frame < s.to)?.emotionalIntent ?? "";
@@ -294,11 +362,13 @@ function createMasterComponent(
       : 0.03;
     const grainSpeed = intent === "EXCITEMENT" || intent === "URGENCY" ? 72 : 37;
     const shift = (frame * grainSpeed) % 100;
+    // Alternate between two grain patterns each frame for organic, non-repeating texture
+    const bgImage = (frame % 7) < 3 ? GRAIN_A : GRAIN_B;
     return React.createElement("div", {
       style: {
         position: "absolute", inset: 0, zIndex: 9999, pointerEvents: "none",
         opacity,
-        backgroundImage: `url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E")`,
+        backgroundImage: bgImage,
         backgroundSize: "180px 180px",
         backgroundPosition: `${shift}px ${(shift * 0.7).toFixed(0)}px`,
         mixBlendMode: "multiply" as const,
@@ -314,13 +384,15 @@ function createMasterComponent(
         const active = sceneSectionLabelMap.find(s => frame >= s.from && frame < s.to);
         if (!active) return null;
         const fadeIn = Math.min(1, (frame - active.from) / 12);
+        const fadeOut = Math.min(1, (active.to - frame) / 10);
+        const opacity = Math.min(fadeIn, fadeOut);
         return React.createElement("div", {
           style: {
             position: "absolute",
             top: 28, left: 36,
             zIndex: 200,
             pointerEvents: "none" as const,
-            opacity: fadeIn,
+            opacity,
           },
         },
           React.createElement("div", {
@@ -348,10 +420,18 @@ function createMasterComponent(
   // RELIEF → subtle vignette (open, clean)
   const VignetteLayer = function VignetteLayer() {
     const frame = useCurrentFrame();
-    const intent = sceneIntentMap.find(s => frame >= s.from && frame < s.to)?.emotionalIntent ?? "";
-    const vignetteOpacity = intent === "FRUSTRATION" || intent === "PAIN" ? 0.15
-      : intent === "RELIEF" ? 0.05
-      : 0.08;
+    // Find current and adjacent scene boundary to interpolate vignette
+    const currentEntry = sceneIntentMap.find(s => frame >= s.from && frame < s.to);
+    const nextEntry = sceneIntentMap.find(s => s.from > (currentEntry?.from ?? 0));
+    const getVigOpacity = (intent: string) =>
+      intent === "FRUSTRATION" || intent === "PAIN" ? 0.15 : intent === "RELIEF" ? 0.05 : 0.08;
+    const currentOpacity = getVigOpacity(currentEntry?.emotionalIntent ?? "");
+    const nextOpacity = nextEntry ? getVigOpacity(nextEntry.emotionalIntent ?? "") : currentOpacity;
+    // Crossfade vignette over 12 frames at scene boundary
+    const boundaryFrame = nextEntry?.from ?? Infinity;
+    const vignetteOpacity = frame >= boundaryFrame - 12 && frame < boundaryFrame
+      ? interpolate(frame, [boundaryFrame - 12, boundaryFrame], [currentOpacity, nextOpacity], { extrapolateLeft: "clamp", extrapolateRight: "clamp" })
+      : currentOpacity;
     return React.createElement("div", {
       style: {
         position: "absolute", inset: 0,
@@ -528,11 +608,14 @@ function createMasterComponent(
 /** Build a Lambda-ready code string from compiled scenes.
  * ATTACHED_IMAGES are passed separately via inputProps.images — not embedded in the code —
  * to avoid a variable-shadowing conflict with the compiler's scope parameter of the same name.
+ * Now mirrors createMasterComponent: includes AnimatedBg, Vignette, and FilmGrain layers
+ * so the Lambda render matches the browser preview.
  */
 export function buildMasterCode(
   scenes: CompiledScene[],
   musicUrl?: string | null,
   sfxUrls?: Record<string, string>,
+  brand?: BrandTokens,
 ): string {
   const sceneComponents = scenes
     .map((scene, i) => {
@@ -548,9 +631,14 @@ export function buildMasterCode(
 
   let offset = 0;
   const sfxSequences: string[] = [];
+  const sectionLabelMap: Array<{ from: number; to: number; label: string }> = [];
   const sequences = scenes
     .map((scene, i) => {
       const from = offset;
+      // Mirror createMasterComponent: each slot = durationInFrames + HOLD_FRAMES
+      const seqDuration = scene.durationInFrames + HOLD_FRAMES;
+      const label = (scene as any).sectionLabel as string | undefined;
+      if (label) sectionLabelMap.push({ from, to: from + seqDuration, label });
       if (i > 0) {
         const transType = scene.transition ?? "fade";
         let sfxUrl: string | null = null;
@@ -561,8 +649,11 @@ export function buildMasterCode(
           sfxSequences.push(`    <Sequence from={${from}} durationInFrames={30}><Audio src={${JSON.stringify(sfxUrl)}} volume={0.25} /></Sequence>`);
         }
       }
-      offset += scene.durationInFrames;
-      return `    <Sequence from={${from}} durationInFrames={${scene.durationInFrames}}><Scene${i} /></Sequence>`;
+      // Advance offset same way createMasterComponent does: +HOLD_FRAMES, -TRANSITION_FRAMES overlap
+      if (i < scenes.length - 1) {
+        offset += scene.durationInFrames + HOLD_FRAMES - TRANSITION_FRAMES;
+      }
+      return `    <Sequence from={${from}} durationInFrames={${seqDuration}}><Scene${i} /></Sequence>`;
     })
     .join("\n");
 
@@ -572,12 +663,63 @@ export function buildMasterCode(
 
   const allSequences = [sequences, ...sfxSequences].join("\n");
 
+  // Master layer components inlined as strings — mirrors createMasterComponent layers
+  const bgColor = JSON.stringify(brand?.bg ?? "#0f0f1a");
+  const brandFont = JSON.stringify(brand?.font ?? "Inter");
+  const brandPrimary = JSON.stringify(brand?.primary ?? "#6366f1");
+  const brandBorder = JSON.stringify(brand?.border ?? "rgba(255,255,255,0.12)");
+  const brandStyleDark = brand?.style !== "light";
+
+  const sectionLabelsComponent = sectionLabelMap.length > 0
+    ? `const _SectionLabels = () => {
+  const _f = useCurrentFrame();
+  const _map = ${JSON.stringify(sectionLabelMap)};
+  const _active = _map.find(s => _f >= s.from && _f < s.to);
+  if (!_active) return null;
+  const _fadeIn = Math.min(1, (_f - _active.from) / 12);
+  const _fadeOut = Math.min(1, (_active.to - _f) / 10);
+  const _op = Math.min(_fadeIn, _fadeOut);
+  return (
+    <div style={{ position: "absolute", top: 28, left: 36, zIndex: 200, pointerEvents: "none", opacity: _op }}>
+      <div style={{ fontFamily: ${brandFont}, fontSize: 13, fontWeight: 600, letterSpacing: "0.18em", textTransform: "uppercase", color: ${brandPrimary}, background: "${brandStyleDark ? "rgba(0,0,0,0.35)" : "rgba(255,255,255,0.7)"}", backdropFilter: "blur(8px)", borderRadius: 6, padding: "4px 10px", border: "1px solid " + ${brandBorder} }}>{_active.label}</div>
+    </div>
+  );
+};`
+    : "";
+
+  const masterLayers = `
+const _MasterBg = () => (
+  <div style={{ position: "absolute", inset: 0, zIndex: 0, background: ${bgColor} }} />
+);
+const _MasterVignette = () => (
+  <div style={{ position: "absolute", inset: 0, background: "radial-gradient(ellipse at center, transparent 50%, rgba(0,0,0,0.08) 100%)", pointerEvents: "none", zIndex: 9998 }} />
+);
+const _MasterGrain = () => {
+  const _f = useCurrentFrame();
+  const _s = (_f * 37) % 100;
+  return (
+    <div style={{ position: "absolute", inset: 0, zIndex: 9999, pointerEvents: "none", opacity: 0.025,
+      backgroundImage: "url(\\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4'/%3E%3C/filter%3E%3Crect width='200' height='200' filter='url(%23n)'/%3E%3C/svg%3E\\")",
+      backgroundSize: "200px 200px", backgroundPosition: _s + "px " + Math.round(_s * 0.7) + "px",
+      mixBlendMode: "multiply" }} />
+  );
+};
+${sectionLabelsComponent}`;
+
+  const sectionLabelsJsx = sectionLabelMap.length > 0
+    ? "\n      <_SectionLabels />"
+    : "";
+
   return `${sceneComponents}
+${masterLayers}
 
 export const DynamicAnimation = () => {
   return (
     <AbsoluteFill>
+      <_MasterBg />
 ${musicLine}${allSequences}
+      <_MasterVignette />
+      <_MasterGrain />${sectionLabelsJsx}
     </AbsoluteFill>
   );
 };`;
@@ -684,9 +826,16 @@ async function prefetchSfx(): Promise<Record<string, string>> {
 
 /** Pre-fetch ElevenLabs voiceover for every scene that has voiceoverText. Runs in parallel. */
 async function prefetchVoiceovers(scenes: ScenePlan[], voiceId?: string): Promise<ScenePlan[]> {
+  // Deduplicate by voiceover text to avoid redundant ElevenLabs calls
+  const textToAudio = new Map<string, { audioUrl: string; wordTimings: ScenePlan["wordTimings"] }>();
   return Promise.all(
     scenes.map(async (scene) => {
       if (!scene.voiceoverText?.trim()) return scene;
+      const text = scene.voiceoverText.trim();
+      if (textToAudio.has(text)) {
+        const cached = textToAudio.get(text)!;
+        return { ...scene, voiceoverAudioUrl: cached.audioUrl, wordTimings: cached.wordTimings };
+      }
       try {
         const res = await fetch("/api/tts", {
           method: "POST",
@@ -697,6 +846,9 @@ async function prefetchVoiceovers(scenes: ScenePlan[], voiceId?: string): Promis
         const { audioUrl, wordTimings } = await res.json();
         if (!audioUrl) return scene;
         const timings = Array.isArray(wordTimings) && wordTimings.length > 0 ? wordTimings : scene.wordTimings;
+        if (audioUrl) {
+          textToAudio.set(text, { audioUrl, wordTimings: timings });
+        }
         return { ...scene, voiceoverAudioUrl: audioUrl, wordTimings: timings };
       } catch {
         return scene; // non-fatal — generation proceeds without audio
@@ -724,8 +876,12 @@ function waypointSfx(wp: CursorWaypoint): string | null {
 }
 
 function buildInteractionScript(waypoints: CursorWaypoint[]): string {
-  // TRAVEL = frames for cursor spring to settle at destination (must match cursor skill)
-  const TRAVEL = 22;
+  // Dynamic TRAVEL: frames scale with pointer distance (short hop → fast, long diagonal → slow)
+  // Formula: clamp(round(distance * 180), 12, 32) where distance is normalized 0-√2 hypot
+  // This makes the cursor feel human — quick micro-adjustments, slower large traversals.
+  const travelFrames = (fromX: number, fromY: number, toX: number, toY: number): number =>
+    Math.min(32, Math.max(12, Math.round(Math.hypot(toX - fromX, toY - fromY) * 180)));
+
   // Start with cursor off-screen (initial anchor step at time=0)
   let frame = 20; // first spring starts at frame 20 (gives 20 frames of fade-in before cursor moves)
 
@@ -739,13 +895,21 @@ function buildInteractionScript(waypoints: CursorWaypoint[]): string {
   // the first time boundary, so the cursor is already at the destination from frame 0.
   stepEntries.push(`  { x: 0.5, y: 1.10, label: "", time: 0, action: "none" }`);
 
+  // Track previous position for distance-based TRAVEL calculation
+  let prevX = 0.5;
+  let prevY = 1.10;
+
   waypoints.forEach((wp, i) => {
     // `arrive` = frame when this step's spring starts (cursor begins traveling)
     // `actionFrame` = frame when cursor physically arrives (spring settled = arrive + TRAVEL)
+    // TRAVEL is now distance-based: short moves settle faster, long diagonals take longer
+    const TRAVEL = travelFrames(prevX, prevY, wp.x, wp.y);
     const arrive = frame;
     const actionFrame = arrive + TRAVEL; // when click fires / chameleon overlays activate
     const dwell = wp.dwellFrames ?? 22;  // frames cursor stays at destination before next move
     frame = actionFrame + dwell;         // next step's spring starts after dwell ends
+    prevX = wp.x;
+    prevY = wp.y;
 
     const action = wp.action ?? 'click';
     const boxStr = wp.box
@@ -811,8 +975,9 @@ function buildInteractionScript(waypoints: CursorWaypoint[]): string {
   return `## CURSOR WAYPOINTS (USER-CONFIRMED — MANDATORY CODE INJECTION)
 CRITICAL: You MUST paste BOTH constants VERBATIM in your component. Do NOT alter any values.
 
-TIMING MODEL: step.time = when spring/movement starts; click fires at step.time + 25 (TRAVEL frames later).
-Use this for chameleon overlay startFrame/triggerFrame: framesAfterArrival = frame - step.time - 25.
+TIMING MODEL: step.time = when spring/movement starts; click fires at step.time + TRAVEL frames later.
+TRAVEL is distance-based (12–32f): short hops settle in ~12f, long diagonals in ~32f.
+Use this for chameleon overlay startFrame/triggerFrame: framesAfterArrival = frame - step.time - TRAVEL.
 
 ${cursorStepsCode}
 
@@ -844,12 +1009,16 @@ async function consumeSceneGeneration(
   // - scroll-demo / saas-showcase: element labels used to populate realistic content
   const VISION_SKILLS = new Set([
     "premium-cursor-engine",
-    "premium-scroll-demo",
     "premium-chameleon-ui",
   ]);
   let detectedElementsBlock = "";
+  // scroll-demo: only call vision if there are no existing waypoints with content
+  const needsVisionForScrollDemo =
+    scene.skills.includes("premium-scroll-demo") &&
+    images && images.length > 0 &&
+    !scene.cursorWaypoints?.length;
   if (
-    scene.skills.some(sk => VISION_SKILLS.has(sk)) &&
+    (scene.skills.some(sk => VISION_SKILLS.has(sk)) || needsVisionForScrollDemo) &&
     images &&
     images.length > 0 &&
     !errorContext // skip on retry — don't double-call vision
@@ -1050,10 +1219,16 @@ Do NOT declare VOICEOVER_AUDIO_URL — it is already in scope.`;
     const _schema = scene.uiSchema as any;
     uiSchemaBlock = `
 
-## UI_SCHEMA (PRE-EXTRACTED — ALREADY IN SCOPE as UI_SCHEMA)
+## UI_SCHEMA (PRE-EXTRACTED — ALREADY IN SCOPE as UI_SCHEMA) ⚠ MANDATORY RENDER
+
 A structural decomposition of the product UI has been pre-extracted from the screenshot.
 UI_SCHEMA is injected into compiler scope — DO NOT declare it.
-Use ReconstructedAppShell or individual Animated* components with this data.
+
+**CRITICAL: You MUST render <ReconstructedAppShell uiSchema={UI_SCHEMA} brand={BRAND} /> as the PRIMARY visual element.**
+- Non-UI visuals (floating shapes, headlines, nodes) MUST be at zIndex ≤ 2. AppShell uses zIndex 3–10. Cursor uses zIndex 100+.
+- DO NOT skip or substitute this component — this IS the product UI. Rendering a blank/placeholder breaks the video.
+- If cursor interactions target UI elements that cannot be matched, fall back to viewport center: x=width*0.5, y=height*0.5.
+- Always guard schema access: UI_SCHEMA?.mainContent?.sections?.[0]?.data ?? []
 
 // Reference only — schema shape:
 // UI_SCHEMA.layout.type = "${_schema?.layout?.type ?? "sidebar-main"}"
@@ -1136,9 +1311,116 @@ Example:
 Border-radius auto-interpolates from circular blob → card corner radius as the spring settles.`
     : "";
 
+  // Stock video background block: instructs the LLM to use OffthreadVideo
+  const stockFootage = (scene as any).stockFootage as string | undefined;
+  const stockVideoBlock = stockFootage
+    ? `\n\n## STOCK VIDEO BACKGROUND (MANDATORY — Fronter/Viable-style cinematic composite)
+STOCK_VIDEO_URL is in scope (string): "${stockFootage}"
+OffthreadVideo is in scope — use it as the base background layer.
+
+Pattern:
+<AbsoluteFill>
+  <OffthreadVideo src={STOCK_VIDEO_URL} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+  <div style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.15)', zIndex: 1 }} />
+</AbsoluteFill>
+<AbsoluteFill style={{ zIndex: 2 }}>
+  {/* Floating animated overlays here */}
+</AbsoluteFill>
+
+Rules:
+- ALWAYS add a dark overlay (rgba(0,0,0,0.12-0.25)) over the video for contrast
+- Floating UI elements (icons, cards, labels) go in a SEPARATE AbsoluteFill at zIndex: 2+
+- Stock footage is the BASE — it grounds the scene in reality. Do NOT obscure it entirely.`
+    : "";
+
+  // Feature header block: instructs LLM to render FeatureContextBar
+  const featureHeader = scene.featureHeader;
+  const featureHeaderBlock = featureHeader
+    ? `\n\n## FEATURE CONTEXT HEADER (MANDATORY — Qanapi-style)
+FEATURE_HEADER is in scope: ${JSON.stringify(featureHeader)}
+Render it as the topmost layer:
+{FEATURE_HEADER && <FeatureContextBar {...FEATURE_HEADER} brand={BRAND} />}
+This persistent header bar identifies WHICH feature the viewer is watching.`
+    : "";
+
+  // Multi-view walkthrough block: instructs LLM on multi-screenshot scenes
+  const imageIndices = scene.imageIndices;
+  const multiViewBlock = imageIndices && imageIndices.length > 1
+    ? `\n\n## MULTI-VIEW WALKTHROUGH (${imageIndices.length} screenshots assigned)
+ATTACHED_IMAGES contains ${imageIndices.length} different product views in order.
+Create a tab-switching walkthrough: show a tab bar, crossfade between ATTACHED_IMAGES[0], [1], [2] etc.
+Each view gets ~${Math.round(scene.durationInFrames / imageIndices.length)} frames.
+Use spring crossfade (not hard cut) between views. Active tab highlights.
+
+UI CONTINUITY (critical for premium feel):
+- Render ONE persistent AppShell frame — only the inner content region crossfades between views
+- The cursor MUST click each tab before the view switches — no unmotivated transitions
+- Keep the screenshot container at the SAME position and scale across all views
+- Animate the tab indicator (pill slides from old to new tab over 12 frames)
+- Shared elements (sidebar, topbar) stay static — never re-enter between views
+This must feel like ONE app evolving, not separate screenshots being swapped.`
+    : "";
+
+  // Macro zoom block: instructs the LLM to use MacroCamera + SelectiveFocus
+  const mz = (scene as any).macroZoom as { zoomLevel: number; focusPoint: { x: number; y: number }; zoomInFrame?: number; holdFrames?: number } | undefined;
+  const macroZoomBlock = mz
+    ? `\n\n## MACRO ZOOM (Bordio-style extreme close-up — MANDATORY)
+This scene MUST use MacroCamera + SelectiveFocus for an extreme close-up effect.
+Both components are already in scope — do NOT re-declare them.
+
+Configuration (from planner):
+- zoomLevel: ${mz.zoomLevel}
+- focusPoint: { x: ${mz.focusPoint.x}, y: ${mz.focusPoint.y} }
+- zoomInFrame: ${mz.zoomInFrame ?? 30}
+- holdFrames: ${mz.holdFrames ?? 80}
+
+Pattern — wrap your UI content like this:
+<MacroCamera zoomLevel={${mz.zoomLevel}} focusPoint={{x:${mz.focusPoint.x}, y:${mz.focusPoint.y}}} zoomInFrame={${mz.zoomInFrame ?? 30}} holdFrames={${mz.holdFrames ?? 80}}>
+  <SelectiveFocus focusX={${mz.focusPoint.x}} focusY={${mz.focusPoint.y}} focusRadius={0.3} blurAmount={10} active={frame >= ${mz.zoomInFrame ?? 30} && frame < ${(mz.zoomInFrame ?? 30) + 25 + (mz.holdFrames ?? 80) + 25}}>
+    {/* Your UI content (screenshot, AppShell, etc.) */}
+  </SelectiveFocus>
+</MacroCamera>
+{/* Cursor layers OUTSIDE both wrappers */}
+
+Rules:
+- Cursor/annotation layers MUST be OUTSIDE MacroCamera — they stay at screen scale
+- Let the UI settle for ${mz.zoomInFrame ?? 30} frames before the zoom snaps in
+- The hold phase (${mz.holdFrames ?? 80}f) is where the viewer absorbs the focused UI — use cursor interactions during this phase
+- CAMERA-CURSOR SYNC: All cursor click targets during the hold phase MUST be within ±0.15 of the focusPoint (x:${mz.focusPoint.x}, y:${mz.focusPoint.y}). The viewer can only see what's in the zoom region — clicking outside it is invisible and pointless.
+- Use usePreFocusCamera(${mz.focusPoint.x}, ${mz.focusPoint.y}, ${mz.zoomInFrame ?? 30}) for anticipatory camera drift BEFORE the macro zoom snaps in — makes the camera feel intentional, not abrupt.`
+    : "";
+
+  // Timeline Engine: structured event array to decouple timing from raw LLM math
+  // The LLM outputs a SCENE_TIMELINE constant — an ordered array of timed events.
+  // This prevents hallucinated frame offsets and makes timing logic auditable.
+  const dur = scene.durationInFrames;
+  const timelineBlock = `
+
+## SCENE TIMELINE (structured timing — MANDATORY output)
+Your component MUST declare a SCENE_TIMELINE constant near the top of the function body.
+This is an ordered array of timed events that drives all animations in this scene.
+Each entry has: t (frame number), type (what fires), and optional meta fields.
+
+Example structure (adapt frame numbers to this scene's ${dur} frame duration):
+const SCENE_TIMELINE = [
+  { t: 0,   type: "bg-enter" },
+  { t: 12,  type: "headline", text: "Main message" },
+  { t: 28,  type: "subtext" },
+  { t: 45,  type: "ui-reveal" },
+  { t: 60,  type: "cursor-start" },
+  { t: ${Math.round(dur * 0.7)},  type: "cta-glow" },
+  { t: ${Math.round(dur * 0.85)}, type: "hold" },
+];
+
+Rules:
+- Use SCENE_TIMELINE[n].t as the startFrame for each element's spring/interpolate — never hardcode raw numbers elsewhere
+- All frame values MUST be ≤ ${dur} (this scene's duration)
+- Cursor events use CURSOR_STEPS/INTERACTION_SCRIPT timings (already calculated) — reference them, don't duplicate
+- "hold" marks where animation stops and the scene simply plays out before the transition fires`;
+
   const scenePrompt = errorContext
-    ? `${brandBlock}\n\n${scene.prompt}${detectedElementsBlock}${uiSchemaBlock}${voiceoverBlock}${narrativeBlock}${continuityBlock}${stageDirectionBlock}${visualAnchorBlock}${zoomThroughBlock}${morphImportBlock} \n\nPrevious attempt failed with this error: \n${errorContext} \nPlease fix the issues and regenerate.`
-    : `${brandBlock} \n\n${scene.prompt}${detectedElementsBlock}${uiSchemaBlock}${voiceoverBlock}${narrativeBlock}${continuityBlock}${stageDirectionBlock}${visualAnchorBlock}${zoomThroughBlock}${morphImportBlock} `;
+    ? `${brandBlock}\n\n${scene.prompt}${detectedElementsBlock}${uiSchemaBlock}${voiceoverBlock}${narrativeBlock}${continuityBlock}${stageDirectionBlock}${visualAnchorBlock}${zoomThroughBlock}${morphImportBlock}${macroZoomBlock}${stockVideoBlock}${featureHeaderBlock}${multiViewBlock}${timelineBlock} \n\nPrevious attempt failed with this error: \n${errorContext} \nPlease fix the issues and regenerate.`
+    : `${brandBlock} \n\n${scene.prompt}${detectedElementsBlock}${uiSchemaBlock}${voiceoverBlock}${narrativeBlock}${continuityBlock}${stageDirectionBlock}${visualAnchorBlock}${zoomThroughBlock}${morphImportBlock}${macroZoomBlock}${stockVideoBlock}${featureHeaderBlock}${multiViewBlock}${timelineBlock} `;
 
   const response = await fetch("/api/generate", {
     method: "POST",
@@ -1260,6 +1542,17 @@ function calculateSceneOffsets(scenes: { durationInFrames: number }[]): number[]
   return offsets;
 }
 
+/** Camera state at the end of a scene — used for seamless zoom continuity across cuts. */
+interface CameraEndState {
+  zoom: number;
+  panX: number;
+  panY: number;
+}
+
+const DEFAULT_CAMERA_STATE: CameraEndState = { zoom: 1.0, panX: 0, panY: 0 };
+/** Standard CinematicCamera ending state — what the camera settles at after 90 frames. */
+const CINEMATIC_CAMERA_END: CameraEndState = { zoom: 1.06, panX: 0, panY: 0 };
+
 /** Generate, compile, and error-recover a single scene. Never throws. */
 async function processScene(
   scene: ScenePlan,
@@ -1272,6 +1565,10 @@ async function processScene(
   continuityContext?: string,
   globalFrameOffset: number = 0,
   sfxUrls: Record<string, string> = {},
+  /** Camera state inherited from the previous scene — enables zoom continuity on cameraPan cuts */
+  initialCameraState: CameraEndState = DEFAULT_CAMERA_STATE,
+  /** MorphPortal rect from the previous scene's morphExport — passed as MORPH_FROM scope to compiler */
+  morphFrom: { x: number; y: number; w: number; h: number } | null = null,
 ): Promise<CompiledScene> {
   const key = cacheKey(scene, brand);
 
@@ -1296,7 +1593,10 @@ async function processScene(
   }
 
   // Use scene-specific image ordering (imageIndex becomes ATTACHED_IMAGES[0])
-  const sceneImages = reorderImagesForScene(images, scene);
+  // Multi-screenshot support: when imageIndices is set, collect all referenced images
+  const sceneImages = scene.imageIndices && scene.imageIndices.length > 0 && images
+    ? scene.imageIndices.filter(idx => idx >= 0 && idx < images!.length).map(idx => images![idx])
+    : reorderImagesForScene(images, scene);
 
   // If this scene continues from the same app as the previous scene,
   // hint the generator to use a persistent shell pattern
@@ -1317,7 +1617,7 @@ async function processScene(
   try {
     const code = await consumeSceneGeneration(enrichedScene, resolvedModel, brand, undefined, sceneImages, continuityContext);
     if (code.trim()) {
-      const result = compileCode(code, sceneImages, brand as Record<string, string>, scene.voiceoverAudioUrl ?? null, scene.wordTimings ?? [], (scene.uiSchema as unknown as Record<string, unknown> | null) ?? null, globalBg, globalFrameOffset, (scene.morphImport?.rect ?? null), sfxUrls);
+      const result = compileCode(code, sceneImages, brand as Record<string, string>, scene.voiceoverAudioUrl ?? null, scene.wordTimings ?? [], (scene.uiSchema as unknown as Record<string, unknown> | null) ?? null, globalBg, globalFrameOffset, (morphFrom ?? scene.morphImport?.rect ?? null), sfxUrls, {}, initialCameraState, (scene as any).stockFootage ?? null, scene.featureHeader ?? null);
       if (!result.error && result.Component) {
         // ── Quality audit gate ───────────────────────────────────────────────
         // Audit compiled code for visual quality issues. If score < 70, retry
@@ -1358,7 +1658,7 @@ async function processScene(
                 try {
                   const qualityCode = await consumeSceneGeneration(enrichedScene, resolvedModel, brand, fixContext, sceneImages);
                   if (qualityCode.trim()) {
-                    const qualityResult = compileCode(qualityCode, sceneImages, brand as Record<string, string>, scene.voiceoverAudioUrl ?? null, scene.wordTimings ?? [], (scene.uiSchema as unknown as Record<string, unknown> | null) ?? null, globalBg, globalFrameOffset, (scene.morphImport?.rect ?? null), sfxUrls);
+                    const qualityResult = compileCode(qualityCode, sceneImages, brand as Record<string, string>, scene.voiceoverAudioUrl ?? null, scene.wordTimings ?? [], (scene.uiSchema as unknown as Record<string, unknown> | null) ?? null, globalBg, globalFrameOffset, (morphFrom ?? scene.morphImport?.rect ?? null), sfxUrls, {}, initialCameraState, (scene as any).stockFootage ?? null, scene.featureHeader ?? null);
                     if (!qualityResult.error && qualityResult.Component) {
                       finalCode = qualityCode;
                       finalComponent = qualityResult.Component;
@@ -1383,6 +1683,7 @@ async function processScene(
           cursorWaypoints: scene.cursorWaypoints,
           transition: scene.transition,
           exitAnchor: (scene as any).exitAnchor,
+          morphExport: scene.morphExport,
           auditScore,
           hasVoiceover: !!scene.voiceoverAudioUrl,
           isAhaMoment: (scene as any).isAhaMoment ?? false,
@@ -1393,14 +1694,32 @@ async function processScene(
         return compiled;
       }
 
+      // Log the actual error so it's visible in the browser console for debugging
+      console.error(`[Scene "${scene.title}"] Compile error (attempt 1):`, result.error);
+
       // Retry with error context + skill fallback (let LLM pick an alternative skill)
       try {
         const failedSkills = enrichedScene.skills.join(", ");
+        const errMsg = result.error ?? "JSX or syntax error";
+        // Classify error type to provide targeted fix strategy
+        const isJsxParseError = /unexpected token|jsx|unterminated|expected/i.test(errMsg);
+        const isUndefinedVar = /is not defined|cannot access|ReferenceError/i.test(errMsg);
+        const isRuntimeError = /TypeError|cannot read|null|undefined/i.test(errMsg);
+        const errorStrategy = isJsxParseError
+          ? "- JSX PARSE ERROR: Simplify component structure. Use React.createElement instead of JSX. Avoid nested ternaries in JSX."
+          : isUndefinedVar
+          ? "- UNDEFINED VARIABLE: Add scope guards. Check all variables are declared before use. Use optional chaining (?.) on all external scope refs."
+          : isRuntimeError
+          ? "- RUNTIME ERROR: Add null checks. Guard all array accesses with optional chaining. Ensure all objects are initialized before use."
+          : "- SYNTAX ERROR: Check for unclosed brackets, missing commas, or invalid template literals.";
         const retryErrorCtx = `COMPILATION FAILED — the previous attempt could not be rendered.
 
-Error: ${result.error ?? "JSX or syntax error"}
+Error: ${errMsg}
 
 Failed skills: ${failedSkills}
+
+FIX STRATEGY:
+${errorStrategy}
 
 RETRY INSTRUCTIONS:
 - Do NOT repeat the same code that caused the error
@@ -1419,7 +1738,10 @@ RETRY INSTRUCTIONS:
           "fallback",
         );
         if (retryCode.trim()) {
-          const retryResult = compileCode(retryCode, sceneImages, brand as Record<string, string>, scene.voiceoverAudioUrl ?? null, scene.wordTimings ?? [], (scene.uiSchema as unknown as Record<string, unknown> | null) ?? null, globalBg, globalFrameOffset, (scene.morphImport?.rect ?? null), sfxUrls);
+          const retryResult = compileCode(retryCode, sceneImages, brand as Record<string, string>, scene.voiceoverAudioUrl ?? null, scene.wordTimings ?? [], (scene.uiSchema as unknown as Record<string, unknown> | null) ?? null, globalBg, globalFrameOffset, (morphFrom ?? scene.morphImport?.rect ?? null), sfxUrls, {}, initialCameraState, (scene as any).stockFootage ?? null, scene.featureHeader ?? null);
+          if (retryResult.error) {
+            console.error(`[Scene "${scene.title}"] Compile error (retry):`, retryResult.error);
+          }
           if (!retryResult.error && retryResult.Component) {
             const compiled: CompiledScene = {
               Component: retryResult.Component,
@@ -1432,18 +1754,19 @@ RETRY INSTRUCTIONS:
               cursorWaypoints: scene.cursorWaypoints,
               transition: scene.transition,
               exitAnchor: (scene as any).exitAnchor,
+              morphExport: scene.morphExport,
               hasVoiceover: !!scene.voiceoverAudioUrl,
             };
             sceneCache.set(key, compiled);
             return compiled;
           }
         }
-      } catch {
-        // fall through to placeholder
+      } catch (retryErr) {
+        console.error(`[Scene "${scene.title}"] Retry threw:`, retryErr);
       }
     }
-  } catch {
-    // fall through to placeholder
+  } catch (outerErr) {
+    console.error(`[Scene "${scene.title}"] Generation threw:`, outerErr);
   }
 
   console.warn(`Scene "${scene.title}" failed to compile after retry, using placeholder`);
@@ -1551,6 +1874,7 @@ export function useFullVideoGeneration() {
     bgSkill?: string;
     globalBg?: string;
     globalVisualThread?: string;
+    edges?: import("@/types/generation").FlowEdge[];
   } | null>(null);
   const [pendingFlow, setPendingFlow] = useState<{
     images: string[];
@@ -1582,6 +1906,7 @@ export function useFullVideoGeneration() {
       screenFlow?: ScreenFlow,
       globalBg: string = "arcs",
       globalVisualThread?: string,
+      edges?: import("@/types/generation").FlowEdge[],
     ) => {
       setIsGenerating(true);
       setError(null);
@@ -1614,6 +1939,25 @@ export function useFullVideoGeneration() {
         }
         const scenesWithNavContext = detectNavigationSequences(enrichedScenes, uiSchemasByImageIndex);
 
+        // Apply FlowEdge.carryOver — explicit planner signals for UI/camera state carry
+        // carryOver.ui → marks the destination scene as a navigation continuation (persistent shell)
+        // carryOver.camera → builds a set of scene indices where camera should not reset to 1.0
+        const edgeCameraCarrySet = new Set<number>();
+        if (edges?.length) {
+          for (const edge of edges) {
+            const dest = scenesWithNavContext[edge.to];
+            if (!dest) continue;
+            if (edge.carryOver?.ui && !(dest as any)._isNavigationContinuation) {
+              (dest as any)._isNavigationContinuation = true;
+              console.log(`FlowEdge ui carryOver: scene[${edge.to}] "${dest.title}" marked as navigation continuation`);
+            }
+            if (edge.carryOver?.camera) {
+              edgeCameraCarrySet.add(edge.to);
+              console.log(`FlowEdge camera carryOver: scene[${edge.to}] "${dest.title}" will inherit camera state`);
+            }
+          }
+        }
+
         const compiledScenesArr: CompiledScene[] = new Array(scenesWithNavContext.length);
         const sceneOffsets = calculateSceneOffsets(scenesWithNavContext);
 
@@ -1639,15 +1983,29 @@ export function useFullVideoGeneration() {
             : continuityBase;
 
           const batchResults = await Promise.allSettled(
-            batch.map((scene, j) =>
-              processScene(scene, model, brand, false, (title) => {
+            batch.map((scene, j) => {
+              // Camera continuity: if this scene enters via cameraPan and both this and the
+              // previous scene are walkthrough scenes, pass the standard CinematicCamera end
+              // state (zoom=1.06) so the next scene begins mid-zoom instead of resetting to 1.0.
+              const sceneIdx = i + j;
+              const prevPlanScene = sceneIdx > 0 ? scenesWithNavContext[sceneIdx - 1] : undefined;
+              const WALKTHROUGH_SKILLS = new Set(["premium-cursor-engine","premium-app-walkthrough","premium-chameleon-ui","premium-scroll-demo"]);
+              const sceneIsWalkthrough = scene.skills?.some(s => WALKTHROUGH_SKILLS.has(s));
+              const prevIsWalkthrough = prevPlanScene?.skills?.some(s => WALKTHROUGH_SKILLS.has(s));
+              // Camera carries over if: (walkthrough skills + cameraPan) OR explicit FlowEdge carryOver.camera
+              const cameraCarryOver =
+                (scene.transition === "cameraPan" && sceneIsWalkthrough && prevIsWalkthrough) ||
+                edgeCameraCarrySet.has(sceneIdx);
+              const camState = cameraCarryOver ? CINEMATIC_CAMERA_END : DEFAULT_CAMERA_STATE;
+
+              return processScene(scene, model, brand, false, (title) => {
                 setProgress({
-                  current: i + j + 1,
+                  current: sceneIdx + 1,
                   total: planScenes.length,
                   sceneTitle: title,
                 });
-              }, images, globalBg, continuityCtx, sceneOffsets[i + j], sfxUrlsRef.current),
-            ),
+              }, images, globalBg, continuityCtx, sceneOffsets[sceneIdx], sfxUrlsRef.current, camState, sceneIdx > 0 ? (compiledScenesArr[sceneIdx - 1]?.morphExport?.rect ?? null) : null);
+            }),
           );
 
           for (let j = 0; j < batchResults.length; j++) {
@@ -1671,7 +2029,7 @@ export function useFullVideoGeneration() {
         const musicStyle = brand.musicStyle ?? brand.accentName ?? "cinematic";
         const musicUrl = musicUrlRef.current ?? MUSIC_TRACKS[musicStyle] ?? "";
         const master = createMasterComponent(validScenes, brand.bg, musicUrl, brand, sfxUrlsRef.current);
-        const masterCodeStr = buildMasterCode(validScenes, musicUrl, sfxUrlsRef.current);
+        const masterCodeStr = buildMasterCode(validScenes, musicUrl, sfxUrlsRef.current, brand);
         // Total duration accounts for HOLD_FRAMES padding and TRANSITION_FRAMES overlap between scenes
         const total = validScenes.reduce((sum, s) => sum + s.durationInFrames + HOLD_FRAMES, 0)
           - Math.max(0, validScenes.length - 1) * TRANSITION_FRAMES;
@@ -1715,7 +2073,7 @@ export function useFullVideoGeneration() {
 
       try {
         // Task 0.4: Include cached brand if images haven't changed
-        const imageHash = images.length > 0 ? images[0].slice(0, 100) : "";
+        const imageHash = images.length > 0 ? buildImageHash(images[0]) : "";
         const shouldUseCachedBrand = cachedBrandStore && cachedBrandStore.imageHash === imageHash;
         if (shouldUseCachedBrand) {
           console.log("Plan: using cached brand tokens (skipping brand re-extraction)");
@@ -1744,15 +2102,37 @@ export function useFullVideoGeneration() {
         const brand: BrandTokens = { ...DEFAULT_BRAND, ...(data.brand ?? {}) };
         // Task 0.4: Cache brand for future regenerations
         if (images.length > 0 && data.brand) {
-          cachedBrandStore = { imageHash: images[0].slice(0, 100), brand };
+          cachedBrandStore = { imageHash: buildImageHash(images[0]), brand };
         }
         const imageDescriptions: string[] = data.imageDescriptions ?? [];
         const bgSkill: string | undefined = data.bgSkill;
         const globalBgFromPlan: string = data.globalBg ?? "arcs";
         const globalVisualThread: string | undefined = data.globalVisualThread;
+        if (!globalVisualThread) {
+          console.warn("Plan: globalVisualThread missing from planner response — visual continuity may be weaker");
+        }
+        const planEdges: import("@/types/generation").FlowEdge[] = data.edges ?? [];
 
         if (!planScenes.length) {
           throw new Error("No scenes returned from planner");
+        }
+
+        // Validate act structure — warn if key emotional beats are missing
+        const hasAhaMoment = planScenes.some(s => s.isAhaMoment);
+        const hasFrustration = planScenes.some(s => s.emotionalIntent === "FRUSTRATION" || s.emotionalIntent === "PAIN");
+        const hasCta = planScenes.some(s => s.emotionalIntent === "URGENCY" || s.skills?.some(sk => sk.includes("cta")));
+        if (!hasAhaMoment) console.warn("Plan: no AHA MOMENT scene — marking last non-CTA scene");
+        if (!hasFrustration) console.warn("Plan: no FRUSTRATION/PAIN scene — PAS narrative arc incomplete");
+        if (!hasCta) console.warn("Plan: no CTA scene detected");
+        // Auto-mark aha moment if planner forgot to set it
+        if (!hasAhaMoment && planScenes.length > 2) {
+          const lastNonCta = [...planScenes].reverse().find(s =>
+            !s.skills?.some(sk => sk.includes("cta")) && s.emotionalIntent !== "URGENCY"
+          );
+          if (lastNonCta) {
+            (lastNonCta as any).isAhaMoment = true;
+            console.log(`Auto-marked "${lastNonCta.title}" as aha moment`);
+          }
         }
 
         pendingModelRef.current = model;
@@ -1771,7 +2151,9 @@ export function useFullVideoGeneration() {
               }))
             : planScenes;
 
-        setPendingPlan({ scenes: scenesWithWaypoints, brand, imageDescriptions, screenFlow, bgSkill, globalBg: globalBgFromPlan, globalVisualThread });
+        // Apply pacing profile — adjusts durations for rhythmic variety
+        const pacedScenes = applyPacingProfile(scenesWithWaypoints);
+        setPendingPlan({ scenes: pacedScenes, brand, imageDescriptions, screenFlow, bgSkill, globalBg: globalBgFromPlan, globalVisualThread, edges: planEdges });
       } catch (err) {
         setError(err instanceof Error ? err.message : "Planning failed");
       } finally {
@@ -1803,14 +2185,29 @@ export function useFullVideoGeneration() {
       setPendingFlow(null);
 
       if (images.length >= 2) {
-        // Task 0.6: Skip flow-analyze for ≤4 images — use minimal synthetic ScreenFlow
+        // For ≤4 images skip the API call but build a synthetic flow with navigate transitions
+        // so plan/route.ts still gets a journey map (transitions: [] causes the block to be omitted)
         if (images.length <= 4) {
-          console.log(`Skipping flow-analyze for ${images.length} images — using synthetic flow`);
-          const minimalFlow: ScreenFlow = {
-            screens: images.map((_, i) => ({ index: i, description: `Screen ${i + 1}` })),
-            transitions: [],
+          console.log(`Skipping flow-analyze for ${images.length} images — using synthetic flow with transitions`);
+          const syntheticFlow: ScreenFlow = {
+            screens: images.map((_, i) => ({
+              index: i,
+              description: imageUserDescriptions?.[i]?.trim() || `Screen ${i + 1}`,
+            })),
+            // Generate navigate transitions between every consecutive pair of screens
+            transitions: images.slice(0, -1).map((_, i) => ({
+              from: i,
+              to: i + 1,
+              action: imageUserDescriptions?.[i]?.trim()
+                ? `transitions from "${imageUserDescriptions[i]}" to next screen`
+                : `navigates from screen ${i + 1} to screen ${i + 2}`,
+              type: "navigate" as const,
+            })),
+            energyLevel: "medium",
+            visualComplexity: 0.5,
+            uiPace: "slow",
           };
-          setPendingFlow({ images, detectedFlow: minimalFlow });
+          setPendingFlow({ images, detectedFlow: syntheticFlow });
           setIsFlowDetecting(false);
         } else {
           // Show flow editor immediately (empty), then fill in once detection completes
@@ -1898,6 +2295,7 @@ export function useFullVideoGeneration() {
       pendingScreenFlowRef.current = effectiveFlow;
       const effectiveGlobalBg = pendingPlan?.globalBg ?? "arcs";
       const effectiveGlobalVisualThread = pendingPlan?.globalVisualThread;
+      const effectiveEdges = pendingPlan?.edges;
       effectiveGlobalBgRef.current = effectiveGlobalBg;
       setPendingPlan(null);
       // Pre-fetch ElevenLabs TTS + SFX + Music in parallel (non-blocking on failure)
@@ -1911,8 +2309,20 @@ export function useFullVideoGeneration() {
       sfxUrlsRef.current = sfxUrls;
       musicUrlRef.current = musicUrl;
       setIsPrefetchingAudio(false);
+      // Phase 2.5: Clamp durationInFrames to match actual audio length
+      const scenesWithClampedDuration = scenesWithAudio.map(scene => {
+        if (scene.wordTimings && scene.wordTimings.length > 0) {
+          const lastTiming = scene.wordTimings[scene.wordTimings.length - 1];
+          const audioDurFrames = (lastTiming.endFrame ?? 0) + 15; // 15-frame tail
+          if (audioDurFrames > scene.durationInFrames) {
+            console.log(`Duration extended: "${scene.title}" ${scene.durationInFrames}→${audioDurFrames}f (audio)`);
+            return { ...scene, durationInFrames: audioDurFrames };
+          }
+        }
+        return scene;
+      });
       // Phase 3: Auto-align scene durations to match audio timing
-      const { scenes: alignedScenes, adjustments } = alignSceneDurations(scenesWithAudio);
+      const { scenes: alignedScenes, adjustments } = alignSceneDurations(scenesWithClampedDuration);
       if (adjustments.length > 0) {
         console.log(`Alignment: ${adjustments.length} scene(s) adjusted:`, adjustments.map(a => `"${a.title}" ${a.oldDuration}→${a.newDuration}f`).join(", "));
       }
@@ -1924,6 +2334,7 @@ export function useFullVideoGeneration() {
         effectiveFlow,
         effectiveGlobalBg,
         effectiveGlobalVisualThread,
+        effectiveEdges,
       );
     },
     [runGeneration],
@@ -1965,7 +2376,27 @@ export function useFullVideoGeneration() {
         const sceneOffsets = calculateSceneOffsets(scenes);
         const globalFrameOffset = sceneOffsets[index] ?? 0;
 
-        const updated = await processScene(scenePlan, model, brand, true, () => { }, images, effectiveGlobalBgRef.current ?? "arcs", undefined, globalFrameOffset, sfxUrlsRef.current);
+        // Reconstruct camera state and continuity from the previous compiled scene
+        const prevCompiledScene = index > 0 ? scenes[index - 1] : undefined;
+        const WALKTHROUGH_SKILLS_REGEN = new Set(["premium-cursor-engine","premium-app-walkthrough","premium-chameleon-ui","premium-scroll-demo"]);
+        const prevIsWalkthroughRegen = prevCompiledScene?.skills?.some(s => WALKTHROUGH_SKILLS_REGEN.has(s));
+        const thisIsWalkthroughRegen = scene.skills?.some(s => WALKTHROUGH_SKILLS_REGEN.has(s));
+        const regenCamState = scene.transition === "cameraPan" && thisIsWalkthroughRegen && prevIsWalkthroughRegen
+          ? CINEMATIC_CAMERA_END : DEFAULT_CAMERA_STATE;
+        const regenContinuity = prevCompiledScene
+          ? buildContinuityContext(prevCompiledScene, {
+              title: prevCompiledScene.title,
+              prompt: prevCompiledScene.prompt,
+              skills: prevCompiledScene.skills,
+              durationInFrames: prevCompiledScene.durationInFrames,
+              id: index - 1,
+              emotionalIntent: prevCompiledScene.emotionalIntent,
+              isAhaMoment: prevCompiledScene.isAhaMoment,
+              visualAnchor: (prevCompiledScene as any).visualAnchor,
+            }, brand)
+          : undefined;
+        const regenMorphFrom = index > 0 ? (scenes[index - 1]?.morphExport?.rect ?? null) : null;
+        const updated = await processScene(scenePlan, model, brand, true, () => { }, images, effectiveGlobalBgRef.current ?? "arcs", regenContinuity, globalFrameOffset, sfxUrlsRef.current, regenCamState, regenMorphFrom);
 
         setScenes((prev) => {
           const next = [...prev];
@@ -1974,7 +2405,7 @@ export function useFullVideoGeneration() {
           const musicStyle = brand.musicStyle ?? brand.accentName ?? "cinematic";
           const musicUrl = musicUrlRef.current ?? MUSIC_TRACKS[musicStyle] ?? "";
           const master = createMasterComponent(next, brand.bg, musicUrl, brand, sfxUrlsRef.current);
-          const masterCodeStr = buildMasterCode(next, musicUrl, sfxUrlsRef.current);
+          const masterCodeStr = buildMasterCode(next, musicUrl, sfxUrlsRef.current, brand);
           setMasterComponent(() => master);
           setMasterCode(masterCodeStr);
           setMasterVoiceovers(buildVoiceoverMap(next));
@@ -2029,7 +2460,9 @@ export function useFullVideoGeneration() {
           const musicStyle = b.musicStyle ?? b.accentName ?? "cinematic";
           const musicUrl = musicUrlRef.current ?? MUSIC_TRACKS[musicStyle] ?? "";
           setMasterComponent(() => createMasterComponent(next, b.bg, musicUrl, b, sfxUrlsRef.current));
-          setMasterCode(buildMasterCode(next, musicUrl, sfxUrlsRef.current));
+          const masterCodeStr2 = buildMasterCode(next, musicUrl, sfxUrlsRef.current, b);
+          setMasterCode(masterCodeStr2);
+          setMasterVoiceovers(buildVoiceoverMap(next));
           return next;
         });
       } catch (err) {
@@ -2058,6 +2491,10 @@ export function useFullVideoGeneration() {
           0,
           (prev[index] as any).morphImport?.rect ?? null,
           sfxUrlsRef.current,
+          {},
+          { zoom: 1, panX: 0, panY: 0 },
+          (prev[index] as any).stockFootage ?? null,
+          (prev[index] as any).featureHeader ?? null,
         );
         if (result.error || !result.Component) return prev;
         const next = [...prev];
@@ -2070,9 +2507,10 @@ export function useFullVideoGeneration() {
         const musicStyle = brand.musicStyle ?? brand.accentName ?? "cinematic";
         const musicUrl = musicUrlRef.current ?? MUSIC_TRACKS[musicStyle] ?? "";
         const master = createMasterComponent(next, brand.bg, musicUrl, brand, sfxUrlsRef.current);
-        const masterCodeStr = buildMasterCode(next, musicUrl, sfxUrlsRef.current);
+        const masterCodeStr = buildMasterCode(next, musicUrl, sfxUrlsRef.current, brand);
         setMasterComponent(() => master);
         setMasterCode(masterCodeStr);
+        setMasterVoiceovers(buildVoiceoverMap(next));
         return next;
       });
     },
@@ -2082,6 +2520,7 @@ export function useFullVideoGeneration() {
   const reset = useCallback(() => {
     setMasterComponent(null);
     setMasterCode(null);
+    setMasterVoiceovers({});
     setScenes([]);
     setTotalDuration(0);
     setError(null);

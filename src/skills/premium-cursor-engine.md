@@ -145,20 +145,9 @@ export const CursorShowcase = ({ BRAND, ATTACHED_IMAGES }) => {
         <div style={{ position: "absolute", width: 44, height: 44, borderRadius: "50%", border: `2px solid ${BRAND.primary || "#6366f1"}`, transform: `translate(-50%,-50%) scale(${ripple1Scale})`, opacity: ripple1Opacity, left: 8, top: 8 }} />
         <div style={{ position: "absolute", width: 32, height: 32, borderRadius: "50%", border: "1.5px solid rgba(255,255,255,0.6)", transform: `translate(-50%,-50%) scale(${ripple2Scale})`, opacity: ripple2Opacity, left: 8, top: 8 }} />
 
-        {/* Hand cursor SVG (realistic finger anatomy, hotspot at fingertip) */}
-        <div style={{ transform: `scale(${clickSqueeze})`, transformOrigin: "8px 2px" }}>
-          <svg width="30" height="38" viewBox="0 0 30 38" fill="none"
-            style={{
-              transform: "rotate(-8deg) translate(-8px, -2px)",
-              transformOrigin: "8px 4px",
-              filter: "drop-shadow(0 3px 6px rgba(0,0,0,0.30))",
-            }}
-          >
-            {/* Pointing finger */}
-            <path d="M8 2 C8 1 9 0 10 0 C11 0 12 1 12 2 L12 16 C14 14 17 14 18 16 L18 22 C18 26 22 28 22 32 C22 35 20 38 17 38 L10 38 C7 38 5 36 5 33 L5 16 C4 16 2 15 2 13 L2 8 C2 6 3 5 4 5 C5 5 6 6 6 7 L6 12 C6 13 8 13 8 12 Z" fill="white" stroke="#1e293b" strokeWidth="1.2"/>
-            {/* Knuckle crease */}
-            <path d="M6 10 Q8 9.5 10 10" stroke="#d1d5db" strokeWidth="0.8" fill="none"/>
-          </svg>
+        {/* HAND_CURSOR — use the scope variable, NEVER create inline SVG */}
+        <div style={{ transform: `scale(${clickSqueeze})`, transformOrigin: "12px 4px" }}>
+          {HAND_CURSOR}
         </div>
 
         {/* Intent pill — visible during long-distance travel, fades as cursor decelerates */}
@@ -506,7 +495,9 @@ const focusRingOpacity = isHovering && inputTargeted ? hoverProgress : 0;
 ---
 
 ## Anti-Patterns (NEVER do these)
-- **NEVER use the arrow SVG** (`M0 0 L0 20...`). It looks robotic. Always use the hand cursor.
+- **NEVER create an inline `<svg>` for the cursor**. Always use `{HAND_CURSOR}` from scope. Creating your own SVG is a quality violation.
+- **NEVER add headline text, subtitles, or floating text to a cursor scene**. The screenshot + cursor IS the content. Text goes in separate scenes.
+- **NEVER use the arrow SVG** (`M0 0 L0 20...`). It looks robotic. Always use `{HAND_CURSOR}`.
 - **NEVER skip hover pre-states**. Buttons that don't react before the click feel like slideshows, not products.
 - **NEVER click the instant the cursor arrives**. Zero-dwell feels artificial. Always add 10-frame DWELL with micro-jitter.
 - **NEVER move in straight lines**. Use `cubicBezier()` for natural arcs.

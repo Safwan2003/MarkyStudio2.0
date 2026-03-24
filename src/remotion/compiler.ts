@@ -12,18 +12,22 @@ import { fade } from "@remotion/transitions/fade";
 import { flip } from "@remotion/transitions/flip";
 import { slide } from "@remotion/transitions/slide";
 import { wipe } from "@remotion/transitions/wipe";
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useContext, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import {
   AbsoluteFill,
   Audio,
   Img,
+  OffthreadVideo,
   Sequence,
   interpolate,
+  interpolateColors,
   random,
   spring,
   useCurrentFrame,
   useVideoConfig,
 } from "remotion";
+// Alias for LLM-generated code that uses either name
+const interpolateColor = interpolateColors;
 
 // ---------------------------------------------------------------------------
 // Pre-built style constants — injected into every generated component's scope
@@ -485,6 +489,340 @@ const ContextualBgPulse = ({
 };
 
 // ---------------------------------------------------------------------------
+// useVelocityMomentum — frame-over-frame velocity measurement for spring values
+// ---------------------------------------------------------------------------
+
+/** Measures the velocity (units/frame) of any spring-animated value.
+ *  In Remotion, each frame is rendered independently — we can compute velocity
+ *  by evaluating the value at (frame) and (frame-1) and taking the delta.
+ *
+ *  getValue: pure function that returns the animated value for any given frame.
+ *  Returns velocity (signed), speed (absolute), direction (-1/0/1), isSettled.
+ *
+ *  Use to carry momentum across scene transitions:
+ *    // At the last frame of Scene A, measure exit velocity:
+ *    const { velocity } = useVelocityMomentum(f => spring({ frame: f, fps, config }));
+ *    // Pass velocity → INITIAL_MOMENTUM for Scene B so it starts with matching inertia.
+ *
+ *  Usage — swipe transition that accelerates if there's carry-over momentum:
+ *    const { speed } = useVelocityMomentum(f => interpolate(f, [0, 30], [0, 1]));
+ *    const INITIAL_MOMENTUM_X = typeof INITIAL_MOMENTUM !== "undefined" ? INITIAL_MOMENTUM.x : 0;
+ *    const boostedSpeed = speed + Math.abs(INITIAL_MOMENTUM_X) * 0.4;
+ */
+function useVelocityMomentum(
+  getValue: (frame: number) => number,
+): { velocity: number; speed: number; direction: 1 | -1 | 0; isSettled: boolean } {
+  const frame = useCurrentFrame();
+  const cur = getValue(frame);
+  const prev = frame > 0 ? getValue(frame - 1) : cur;
+  const velocity = cur - prev;
+  const speed = Math.abs(velocity);
+  const direction: 1 | -1 | 0 = velocity > 0.05 ? 1 : velocity < -0.05 ? -1 : 0;
+  return { velocity, speed, direction, isSettled: speed < 0.08 };
+}
+
+// ---------------------------------------------------------------------------
+// useHumanizedCursor — drop-in for useCursorState with motion realism
+// ---------------------------------------------------------------------------
+
+/** Adds micro-jitter, breath-pause, and intent-based arc curves to cursor motion.
+ *  Drop-in replacement for useCursorState — same return shape, more human feel.
+ *
+ *  Enhancements over useCursorState:
+ *  - micro-jitter: ±1.5px random walk during travel (removes machine-slide straightness)
+ *  - breath-pause: subtle ±2px Y sine during long dwells (subconscious human idle)
+ *  - intent arc: "searching" mode adds a lateral deviation mid-path (human uncertainty)
+ *  - decisive path: when step.intent is "decisive", jitter is reduced by 70%
+ *
+ *  Usage (drop-in — same as useCursorState):
+ *    const { x, y, isClicking, hoverProgress, intent } = useHumanizedCursor(CURSOR_STEPS);
+ *    const cx = x * width;
+ *    const cy = y * height;
+ */
+function useHumanizedCursor(
+  steps: Array<{ x: number; y: number; time: number; action?: string; dwellFrames?: number; intent?: "searching" | "decisive" }>,
+  magneticStrength: number = 1,
+): ReturnType<typeof useCursorState> {
+  const frame = useCurrentFrame();
+  const base = useCursorState(steps as any, magneticStrength);
+
+  // Click guard: snap to clean position — no jitter during 4-frame click window
+  if (base.isClicking) return base;
+
+  // Find current step intent
+  let currentIntent: "searching" | "decisive" = "searching";
+  if (steps?.length) {
+    for (let i = steps.length - 1; i >= 0; i--) {
+      if (frame >= steps[i].time) { currentIntent = steps[i].intent ?? "searching"; break; }
+    }
+  }
+
+  // Micro-jitter: reseed every 7 frames so pattern doesn't become visible
+  const bucket = Math.floor(frame / 7);
+  const jitterScale = currentIntent === "decisive" ? 0.3 : 1.0;
+  const jx = ((random(`hc-jx-${bucket}`) as number) - 0.5) * 2 * 0.0015 * jitterScale;
+  const jy = ((random(`hc-jy-${bucket}`) as number) - 0.5) * 2 * 0.0009 * jitterScale;
+
+  // Breath-pause: gentle Y sine only during dwell (speed ~0)
+  const breathY = base.speed < 0.005 ? Math.sin(frame * 0.022) * 0.0016 : 0;
+
+  // Intent arc: "searching" adds lateral waviness mid-travel
+  const arcX = (currentIntent === "searching" && base.speed > 0.005)
+    ? Math.sin(frame * 0.13 + (random(`hc-arc-${bucket}`) as number) * Math.PI) * 0.0025
+    : 0;
+
+  return {
+    ...base,
+    x: base.x + jx + arcX,
+    y: base.y + jy + breathY,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// UITransition — cinematic state-change wrapper component
+// ---------------------------------------------------------------------------
+
+/** Wraps a UI state change with configurable entrance/exit animation.
+ *  Replaces bare `visible && <div>` with a fully animated reveal.
+ *  type: "fade" | "slideUp" | "slideRight" | "scale" | "blur" | "flipY"
+ *  startFrame: when the transition begins
+ *  duration: frames for the full transition (default 20)
+ *  exit: if true, reverses the animation (element is being removed)
+ *
+ *  Usage (modal opening at frame 40):
+ *    <UITransition type="scale" startFrame={40} duration={18}>
+ *      <ModalOverlay ... />
+ *    </UITransition>
+ *
+ *  Usage (dropdown closing at frame 90):
+ *    <UITransition type="slideUp" startFrame={90} duration={14} exit>
+ *      <DropdownMenu ... />
+ *    </UITransition>
+ */
+const UITransition = ({
+  children,
+  type = "fade",
+  startFrame = 0,
+  duration = 20,
+  exit: isExit = false,
+  config = SPRING_CONFIGS.entrance,
+}: {
+  children: React.ReactNode;
+  type?: "fade" | "slideUp" | "slideRight" | "scale" | "blur" | "flipY";
+  startFrame?: number;
+  duration?: number;
+  exit?: boolean;
+  config?: { damping: number; stiffness: number };
+}) => {
+  const frame = useCurrentFrame();
+  const { fps } = useVideoConfig();
+  const rawProgress = spring({ frame: frame - startFrame, fps, config, durationInFrames: duration + 10 });
+  const progress = isExit ? 1 - rawProgress : rawProgress;
+
+  let opacity = 1, tx = 0, ty = 0, scale = 1, blurPx = 0, rotX = 0;
+  if (type === "fade") {
+    opacity = progress;
+  } else if (type === "slideUp") {
+    ty = interpolate(progress, [0, 1], [22, 0]);
+    opacity = Math.min(progress * 1.8, 1);
+  } else if (type === "slideRight") {
+    tx = interpolate(progress, [0, 1], [-22, 0]);
+    opacity = Math.min(progress * 1.8, 1);
+  } else if (type === "scale") {
+    scale = interpolate(progress, [0, 1], [0.88, 1]);
+    opacity = progress;
+  } else if (type === "blur") {
+    blurPx = interpolate(progress, [0, 1], [8, 0]);
+    opacity = progress;
+  } else if (type === "flipY") {
+    rotX = interpolate(progress, [0, 1], [-90, 0]);
+    opacity = Math.abs(rotX) > 60 ? 0 : 1;
+  }
+
+  const transform = `translateX(${tx.toFixed(1)}px) translateY(${ty.toFixed(1)}px) scale(${scale.toFixed(3)})${rotX ? ` perspective(600px) rotateX(${rotX.toFixed(1)}deg)` : ""}`;
+  return React.createElement("div", {
+    style: { opacity, transform, filter: blurPx > 0.2 ? `blur(${blurPx.toFixed(1)}px)` : "none", willChange: "transform, opacity, filter" },
+  }, children);
+};
+
+// ---------------------------------------------------------------------------
+// usePreFocusCamera — camera begins pre-tracking target before cursor arrives
+// ---------------------------------------------------------------------------
+
+/** Returns camera zoom + pan that pre-focus the upcoming target element
+ *  before the cursor reaches it — giving scenes narrative intention.
+ *  The camera "leads the action": it starts zooming into the target 0.5s
+ *  before the click, so the viewer's eye is already drawn there.
+ *
+ *  targetX/Y: normalized 0–1 position of the target element
+ *  cursorArrivalFrame: when the cursor will arrive at the target
+ *  previewDuration: frames before arrival when tracking begins (default 20)
+ *  maxZoom: zoom level at peak focus (default 1.04 — subtle, not jarring)
+ *
+ *  Usage:
+ *    const { zoom, panX, panY } = usePreFocusCamera(0.62, 0.45, 72);
+ *    <CinematicCamera zoom={zoom} panX={panX} panY={panY} />
+ *  Or manually:
+ *    <div style={{ transform: `scale(${zoom}) translate(${panX}px, ${panY}px)`, transformOrigin: "50% 50%" }}>
+ */
+function usePreFocusCamera(
+  targetX: number = 0.5,
+  targetY: number = 0.5,
+  cursorArrivalFrame: number = 60,
+  previewDuration: number = 20,
+  maxZoom: number = 1.04,
+): { zoom: number; panX: number; panY: number; focusProgress: number } {
+  const frame = useCurrentFrame();
+  const { fps, width, height } = useVideoConfig();
+  const preStartFrame = cursorArrivalFrame - previewDuration;
+  const focusProgress = frame < preStartFrame ? 0
+    : spring({ frame: frame - preStartFrame, fps, config: { damping: 200, stiffness: 40 }, durationInFrames: previewDuration + 10 });
+  const zoom = 1 + (maxZoom - 1) * focusProgress;
+  const panX = (targetX - 0.5) * width * 0.04 * focusProgress;
+  const panY = (targetY - 0.5) * height * 0.04 * focusProgress;
+  return { zoom, panX, panY, focusProgress };
+}
+
+// ---------------------------------------------------------------------------
+// useInteractionCycle — 4-phase premium interaction model
+// ---------------------------------------------------------------------------
+
+/** Standardized interaction arc: approach → anticipate → act → confirm.
+ *  Every premium agency video click has all 4 phases — this hook returns
+ *  state values for each so elements respond across the full arc.
+ *
+ *  approach:    cursor decelerating (element brightens, scale nudges)
+ *  anticipate:  hover pre-state (glow/focus ring builds before click)
+ *  act:         click fires (squish + ripple + nudge)
+ *  confirm:     post-click success (checkmark/badge springs in)
+ *
+ *  Usage (button with full interaction arc):
+ *    const cycle = useInteractionCycle({ approachStart: 40, clickFrame: 72 });
+ *    <div style={{
+ *      transform: `scale(${cycle.act.scale})`,
+ *      filter: `brightness(${1 + 0.15 * cycle.approach.progress})`,
+ *      boxShadow: `0 0 ${20 * cycle.anticipate.progress}px ${BRAND.primary}60`,
+ *    }}>
+ *      {cycle.confirm.visible ? '✓ Done' : 'Submit'}
+ *    </div>
+ *    {cycle.act.rippleOpacity > 0 && <div style={{ opacity: cycle.act.rippleOpacity }} />}
+ */
+function useInteractionCycle({
+  approachStart = 0,
+  approachDuration = 12,
+  anticipateDuration = 18,
+  clickFrame,
+  confirmDuration = 20,
+}: {
+  approachStart?: number;
+  approachDuration?: number;
+  anticipateDuration?: number;
+  clickFrame: number;
+  confirmDuration?: number;
+}): {
+  approach: { progress: number };
+  anticipate: { progress: number };
+  act: { progress: number; scale: number; rippleOpacity: number; nudgeY: number };
+  confirm: { progress: number; visible: boolean };
+} {
+  const frame = useCurrentFrame();
+  const { fps } = useVideoConfig();
+
+  // Phase 1: approach — cursor decelerating toward target
+  const approachProgress = frame < approachStart ? 0
+    : Math.min(1, (frame - approachStart) / Math.max(1, approachDuration));
+
+  // Phase 2: anticipate — hover window before click (glow builds)
+  const anticipateStart = clickFrame - anticipateDuration;
+  const anticipateProgress = frame < anticipateStart ? 0
+    : Math.min(1, (frame - anticipateStart) / Math.max(1, anticipateDuration));
+
+  // Phase 3: act — click squish + ripple
+  const actProgress = spring({ frame: frame - clickFrame, fps, config: { damping: 8, stiffness: 450 }, durationInFrames: 22 });
+  const actScale = frame < clickFrame ? 1 : interpolate(actProgress, [0, 0.25, 0.65, 1], [1, 0.96, 1.03, 1.0]);
+  const rippleOpacity = interpolate(frame - clickFrame, [0, 4, 20, 45], [0, 0.7, 0.3, 0], { extrapolateRight: "clamp", extrapolateLeft: "clamp" });
+  const nudgeY = frame < clickFrame ? 0 : interpolate(actProgress, [0, 0.25, 1], [0, 2, 0]);
+
+  // Phase 4: confirm — post-click success badge/check springs in
+  const confirmStart = clickFrame + 8;
+  const confirmProgress = spring({ frame: frame - confirmStart, fps, config: SPRING_CONFIGS.pop, durationInFrames: confirmDuration });
+
+  return {
+    approach: { progress: approachProgress },
+    anticipate: { progress: anticipateProgress },
+    act: { progress: actProgress, scale: actScale, rippleOpacity, nudgeY },
+    confirm: { progress: confirmProgress, visible: frame >= confirmStart },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// useVelocityAudio — velocity-based procedural sound modulation
+// ---------------------------------------------------------------------------
+
+/** Maps frame-over-frame spring velocity to audio volume + pitch.
+ *  Creates organic swooshes that physically match the motion curve:
+ *  fast spring = louder + higher pitch; slow settle = quiet + lower pitch.
+ *
+ *  getValue: pure function returning the spring value for any frame.
+ *  peakFrame: approximate frame of peak motion (used for volume envelope).
+ *  sensitivityMultiplier: 1 = normal, 2 = more responsive to slow motions.
+ *
+ *  Usage (cursor swoosh that scales with travel speed):
+ *    const { volume, pitchShift } = useVelocityAudio(
+ *      f => cursorX_at_frame(f) * width,  // evaluate cursor X at any frame
+ *      travelMidFrame,
+ *    );
+ *    <Audio src={SFX_URLS.whoosh} volume={volume * 0.35} />
+ *
+ *  Usage (card entrance — faster spring = louder whoosh):
+ *    const { volume } = useVelocityAudio(
+ *      f => spring({ frame: f - startFrame, fps, config: SPRING_CONFIGS.snap }),
+ *      startFrame + 4,
+ *    );
+ */
+function useVelocityAudio(
+  getValue: (frame: number) => number,
+  peakFrame: number = 0,
+  sensitivityMultiplier: number = 1,
+): { volume: number; pitchShift: number; velocity: number } {
+  const frame = useCurrentFrame();
+  const cur = getValue(frame);
+  const prev = frame > 0 ? getValue(frame - 1) : cur;
+  const velocity = Math.abs(cur - prev) * sensitivityMultiplier;
+  // Sigmoid-like curve so tiny motions don't trigger audio
+  const volume = Math.min(1, Math.pow(Math.max(0, velocity / 4), 0.55));
+  // Pitch: faster = higher (1.0–1.25), slower = lower (0.8–1.0)
+  const pitchShift = 0.8 + 0.45 * Math.min(1, velocity / 8);
+  return { volume, pitchShift, velocity };
+}
+
+// ---------------------------------------------------------------------------
+// PacingProfile — deterministic rhythm constants for scene choreography
+// ---------------------------------------------------------------------------
+
+/** Pacing reference constants injected into scope.
+ *  Gives LLM-generated code access to the video's intended rhythm.
+ *
+ *  PACING_PROFILE.tempo: "slow" | "medium" | "fast" — overall video pace
+ *  PACING_PROFILE.beatFrames: frames per beat (derived from MUSIC_BPM)
+ *  PACING_PROFILE.barFrames: frames per 4-beat bar
+ *  PACING_PROFILE.breathFrames: minimum hold frames after animations settle (20–35)
+ *  PACING_PROFILE.staggerStep: recommended stagger interval for list items (4–8f)
+ *
+ *  Usage (align headline entrance to downbeat rhythm):
+ *    const BEAT = PACING_PROFILE.beatFrames;
+ *    const h1Start = snapToDownbeat(20, MUSIC_BPM, 30);
+ *    const h2Start = h1Start + BEAT * 2;
+ */
+const PACING_PROFILE = {
+  tempo: "medium" as "slow" | "medium" | "fast",
+  beatFrames: 20,   // overridden by MUSIC_BPM at runtime via useBeatClock
+  barFrames: 80,    // 4 beats × 20 frames/beat
+  breathFrames: 24, // minimum hold after animations settle (matches HOLD_FRAMES)
+  staggerStep: 6,   // recommended frames between staggered list items
+} as const;
+
+// ---------------------------------------------------------------------------
 // useEntropy — physics chaos engine for jitter → clean grid transitions
 // ---------------------------------------------------------------------------
 
@@ -921,6 +1259,98 @@ const SyncedWord = ({
 };
 
 // ---------------------------------------------------------------------------
+// NarrationReveal — word-by-word color transition synced to WORD_TIMINGS
+// ---------------------------------------------------------------------------
+
+/** Renders text where each word transitions from inactiveColor to activeColor
+ *  exactly as the voiceover speaks it, synced to WORD_TIMINGS.
+ *  Qanapi-style: words start gray/transparent and become solid/colored as narration reaches them.
+ *
+ *  Props:
+ *    text          — full sentence to render (split into words)
+ *    timings       — WORD_TIMINGS array (auto-wired from scope)
+ *    activeColor   — color when word is spoken (default: BRAND.text or black)
+ *    inactiveColor — color before word is spoken (default: semi-transparent gray)
+ *    fontSize      — default 64
+ *    fontWeight    — default 700; can transition to 900 on active if boldOnActive=true
+ *    boldOnActive  — if true, fontWeight transitions 400→700 as word activates
+ *    startFrame    — delay before narration begins (default 0)
+ *    brand         — for font family
+ *
+ *  Usage:
+ *    <NarrationReveal text="In just a few clicks, you've deployed complete security"
+ *      timings={WORD_TIMINGS} activeColor={BRAND.text} brand={BRAND} />
+ */
+const NarrationReveal = ({
+  text,
+  timings = [],
+  activeColor,
+  inactiveColor,
+  fontSize = 64,
+  fontWeight = 700,
+  boldOnActive = false,
+  startFrame = 0,
+  brand,
+  lineHeight = 1.3,
+  maxWidth = "80%",
+}: {
+  text: string;
+  timings?: Array<{ word: string; startFrame: number; endFrame: number }>;
+  activeColor?: string;
+  inactiveColor?: string;
+  fontSize?: number;
+  fontWeight?: number;
+  boldOnActive?: boolean;
+  startFrame?: number;
+  brand?: any;
+  lineHeight?: number;
+  maxWidth?: string;
+}) => {
+  const frame = useCurrentFrame();
+  const words = text.split(/\s+/).filter(Boolean);
+
+  const active = activeColor ?? brand?.text ?? "#000000";
+  const inactive = inactiveColor ?? (brand?.style === "dark" ? "rgba(255,255,255,0.25)" : "rgba(0,0,0,0.2)");
+  const fontFamily = brand?.font ? `${brand.font}, Inter, sans-serif` : "Inter, sans-serif";
+
+  return React.createElement("div", {
+    style: {
+      display: "flex", flexWrap: "wrap" as const, gap: "0.2em 0.3em",
+      fontSize, fontWeight: boldOnActive ? 400 : fontWeight,
+      fontFamily, lineHeight, maxWidth, wordBreak: "break-word" as const,
+    },
+  }, words.map((word, i) => {
+    // Find matching timing — try exact match first, then index-based fallback
+    const cleanWord = word.replace(/[.,!?;:'"()]/g, "").toLowerCase();
+    const timing = timings.find(t => t.word.toLowerCase().replace(/[.,!?;:'"()]/g, "") === cleanWord)
+      ?? timings[i];
+    const wordStart = (timing?.startFrame ?? (startFrame + i * 8));
+    const wordEnd = (timing?.endFrame ?? (wordStart + 6));
+
+    // Progress: 0 before word, 0→1 during word, 1 after
+    const progress = frame < wordStart ? 0
+      : frame >= wordEnd ? 1
+      : (frame - wordStart) / Math.max(1, wordEnd - wordStart);
+
+    // Smooth easing for color transition
+    const eased = 1 - Math.pow(1 - progress, 3); // easeOutCubic
+
+    const opacity = interpolate(eased, [0, 1], [0.3, 1]);
+
+    return React.createElement("span", {
+      key: i,
+      style: {
+        display: "inline-block",
+        color: eased >= 0.5 ? active : inactive,
+        opacity,
+        fontWeight: boldOnActive ? interpolate(eased, [0, 1], [400, 700]) : fontWeight,
+        transition: "color 0.1s ease",
+      },
+    }, word);
+  }));
+};
+
+// ---------------------------------------------------------------------------
 // MaskedReveal — headline slides up from an invisible baseline (overflow: hidden)
 // ---------------------------------------------------------------------------
 
@@ -1041,8 +1471,15 @@ const InWorldText = ({
 // useCursorState — derive reactive CURSOR_STATE from CURSOR_STEPS per frame
 // ---------------------------------------------------------------------------
 
+/** Cursor intent enum — reflects the current behavioral phase of the cursor.
+ *  "searching"  — cursor is traveling or dwelling between targets (default)
+ *  "hovering"   — cursor has settled on a target; hover pre-state active (hoverProgress rising)
+ *  "clicking"   — click event is firing (isClicking=true, 4-frame window)
+ */
+type CursorIntent = "searching" | "hovering" | "clicking";
+
 /** Default cursor state — used when no CURSOR_STEPS are present. */
-const CURSOR_STATE_DEFAULT = { x: 0.5, y: 0.85, vx: 0, vy: 0, isClicking: false, speed: 0, approachPhase: 0, isHovering: false, hoverProgress: 0, dragVector: { x: 0, y: 0, magnitude: 0 } };
+const CURSOR_STATE_DEFAULT = { x: 0.5, y: 0.85, vx: 0, vy: 0, isClicking: false, speed: 0, approachPhase: 0, isHovering: false, hoverProgress: 0, dragVector: { x: 0, y: 0, magnitude: 0 }, intent: "searching" as CursorIntent };
 
 /** Derives the current frame's cursor state from a CURSOR_STEPS array.
  *
@@ -1074,7 +1511,7 @@ const CURSOR_STATE_DEFAULT = { x: 0.5, y: 0.85, vx: 0, vy: 0, isClicking: false,
 function useCursorState(
   steps: Array<{ x: number; y: number; time: number; action?: string; dwellFrames?: number }> = [],
   magneticStrength: number = 1,
-): { x: number; y: number; vx: number; vy: number; isClicking: boolean; speed: number; approachPhase: number; isHovering: boolean; hoverProgress: number; dragVector: { x: number; y: number; magnitude: number } } {
+): { x: number; y: number; vx: number; vy: number; isClicking: boolean; speed: number; approachPhase: number; isHovering: boolean; hoverProgress: number; dragVector: { x: number; y: number; magnitude: number }; intent: CursorIntent } {
   const frame = useCurrentFrame();
   const { fps } = useVideoConfig();
 
@@ -1101,9 +1538,12 @@ function useCursorState(
   const travelEnd = travelStart + baseTravelFrames;
 
   // Hover window: cursor settled at destination, before click fires
+  // Micro-delay hesitation: 80–150ms randomized pre-click pause (2.4–4.5f @ 30fps)
+  // This is the #1 humanizing signal — the slight pause before committing to a click.
+  const hesitationFrames = Math.round(2.4 + random(`hesitate-${segIdx}`) * 2.1);
   const overshootWindow = 12;
-  const preClickPause = 5;
-  const hoverWindowDuration = overshootWindow + preClickPause; // ~17 frames total
+  const preClickPause = 5 + hesitationFrames; // randomized hesitation baked in
+  const hoverWindowDuration = overshootWindow + preClickPause; // ~19–22 frames total
 
   if (frame < travelStart) {
     const dwellProgress = (frame - from.time) / Math.max(1, effectiveDwell);
@@ -1116,6 +1556,7 @@ function useCursorState(
       speed: Math.abs(scanX * fps), approachPhase: 0,
       isHovering: false, hoverProgress: 0,
       dragVector: { x: 0, y: 0, magnitude: 0 },
+      intent: "searching" as CursorIntent,
     };
   }
 
@@ -1128,8 +1569,10 @@ function useCursorState(
     const oy = Math.sin(overshootDir) * overshootMag * (1 - easeOutCubic(overshootProgress));
     const clickReady = frame >= travelEnd + hoverWindowDuration;
     const isClicking = to.action === "click" && clickReady && frame <= travelEnd + hoverWindowDuration + 4;
-    // hoverProgress: 0→1 over the hover window, stays at 1 during and after click
+    // hoverProgress: 0→1 over the hover window — drives target element glow/scale/focus ring
+    // This builds anticipation: element lights up BEFORE the click fires (human pre-click signal)
     const hoverProgress = Math.min(1, (frame - travelEnd) / hoverWindowDuration);
+    const intent: CursorIntent = isClicking ? "clicking" : "hovering";
     return {
       x: to.x + ox, y: to.y + oy,
       vx: 0, vy: 0,
@@ -1138,6 +1581,7 @@ function useCursorState(
       isHovering: !isClicking && frame < travelEnd + hoverWindowDuration + 4,
       hoverProgress,
       dragVector: { x: 0, y: 0, magnitude: 0 },
+      intent,
     };
   }
 
@@ -1168,6 +1612,7 @@ function useCursorState(
     approachPhase: framesLeft <= 12 ? 1 - framesLeft / 12 : 0,
     isHovering: false, hoverProgress: 0,
     dragVector: { x: dragX, y: dragY, magnitude: dragMagnitude },
+    intent: "searching" as CursorIntent,
   };
 }
 
@@ -1536,18 +1981,32 @@ const DropdownMenu = ({ x, y, w, items, openFrame, closeFrame, brand }: {
   );
 };
 
-/** Slow push-in zoom + 3D perspective tilt tracking cursor target. */
-const CinematicCamera = ({ targetX = 0.5, targetY = 0.5, zoomTo = 1.06, children }: {
-  targetX?: number; targetY?: number; zoomTo?: number; children: React.ReactNode;
+/** Slow push-in zoom + 3D perspective tilt tracking cursor target.
+ *  initialZoom / initialPan — stitches scenes seamlessly when camera state carries over
+ *  from a previous scene (carryOver.camera: true in FlowEdge). Supply the ending zoom/pan
+ *  from the previous scene so this scene begins mid-motion instead of resetting to 1.0.
+ *  Pass via INITIAL_CAMERA_ZOOM and INITIAL_CAMERA_PAN scope variables when available. */
+const CinematicCamera = ({
+  targetX = 0.5, targetY = 0.5, zoomTo = 1.06,
+  initialZoom = 1.0, initialPan = { x: 0, y: 0 },
+  children
+}: {
+  targetX?: number; targetY?: number; zoomTo?: number;
+  /** Starting zoom level — use previous scene's end zoom for seamless continuity */
+  initialZoom?: number;
+  /** Starting pan offset in px — use previous scene's end pan for seamless continuity */
+  initialPan?: { x: number; y: number };
+  children: React.ReactNode;
 }) => {
   const frame = useCurrentFrame();
   const { width, height } = useVideoConfig();
   const easeInOut = (t: number) => t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
-  const zoom = interpolate(frame, [0, 90], [1, zoomTo], { extrapolateRight: "clamp", easing: easeInOut });
+  // Interpolate from initialZoom (may be >1 when carrying over) to zoomTo
+  const zoom = interpolate(frame, [0, 90], [initialZoom, zoomTo], { extrapolateRight: "clamp", easing: easeInOut });
   const tiltX = interpolate(frame, [0, 150], [0, 2], { extrapolateRight: "clamp", easing: (t) => 1 - Math.pow(1 - t, 3) });
   const tiltY = interpolate(frame, [0, 150], [0, -1.5], { extrapolateRight: "clamp", easing: (t) => 1 - Math.pow(1 - t, 3) });
-  const panX = (0.5 - targetX) * width * (zoom - 1);
-  const panY = (0.5 - targetY) * height * (zoom - 1);
+  const panX = (0.5 - targetX) * width * (zoom - 1) + initialPan.x * (1 - frame / 90);
+  const panY = (0.5 - targetY) * height * (zoom - 1) + initialPan.y * (1 - frame / 90);
   return React.createElement("div", { style: { position: "absolute", inset: 0, overflow: "hidden", perspective: 1200 } },
     React.createElement("div", {
       style: {
@@ -1599,6 +2058,98 @@ const CinematicCamera = ({ targetX = 0.5, targetY = 0.5, zoomTo = 1.06, children
  *  - "hold" easing makes a hard cut — only use for dramatic emphasis
  *  - Do not exceed zoomAmount 1.25 or the composition clips
  */
+
+// ---------------------------------------------------------------------------
+// FocusController — centralizes background dimming, secondary blur, and camera zoom
+// on a specific interaction target. The "Timeline Engine" attention director.
+//
+// Usage:
+//   <FocusController focusTarget="#submit-button" triggerFrame={60} brand={BRAND}>
+//     <AppShell ... />
+//   </FocusController>
+//
+// What it does:
+//   1. Background dims 0→70% opacity as focus rises (dark overlay)
+//   2. Non-focused elements gain blur filter (0→6px) — visual attention narrowing
+//   3. Camera gently zooms toward focusTarget center (1.0→1.08) over 20 frames
+//   4. On releaseFrame, reverses all effects smoothly
+//
+// Props:
+//   focusTarget     — CSS selector for the element to focus on (or normalized {x,y} coords)
+//   triggerFrame    — frame when focus effect starts
+//   releaseFrame    — frame when focus dissolves back to normal (optional)
+//   dimOpacity      — background dim strength 0–1 (default: 0.55)
+//   blurStrength    — blur on non-focused elements in px (default: 4)
+//   zoomAmount      — camera zoom multiplier 1.0–1.12 (default: 1.06)
+//   brand           — for accent color on focus ring
+// ---------------------------------------------------------------------------
+const FocusController = ({
+  children,
+  focusTarget,
+  triggerFrame = 0,
+  releaseFrame,
+  dimOpacity = 0.55,
+  blurStrength = 4,
+  zoomAmount = 1.06,
+  focusX = 0.5,
+  focusY = 0.5,
+  brand,
+}: {
+  children: React.ReactNode;
+  focusTarget?: string;
+  triggerFrame?: number;
+  releaseFrame?: number;
+  dimOpacity?: number;
+  blurStrength?: number;
+  zoomAmount?: number;
+  /** Normalized 0–1 horizontal center of the focus target (for camera zoom origin) */
+  focusX?: number;
+  /** Normalized 0–1 vertical center of the focus target (for camera zoom origin) */
+  focusY?: number;
+  brand?: any;
+}) => {
+  const frame = useCurrentFrame();
+  const focusDuration = 20;
+  const relFrame = releaseFrame ?? Infinity;
+
+  // Focus progress: 0→1 as focus engages, 1→0 as it releases
+  const engageProgress = Math.min(1, Math.max(0, (frame - triggerFrame) / focusDuration));
+  const releaseProgress = relFrame === Infinity ? 0 : Math.min(1, Math.max(0, (frame - relFrame) / focusDuration));
+  const focusProgress = Math.max(0, engageProgress - releaseProgress);
+
+  const easeOut = (t: number) => 1 - Math.pow(1 - t, 3);
+  const fp = easeOut(focusProgress);
+
+  const currentZoom = 1 + (zoomAmount - 1) * fp;
+  const panX = (0.5 - focusX) * currentZoom * 10 * fp;
+  const panY = (0.5 - focusY) * currentZoom * 10 * fp;
+
+  return React.createElement("div", {
+    style: { position: "absolute", inset: 0, overflow: "hidden" }
+  },
+    // Camera zoom layer
+    React.createElement("div", {
+      style: {
+        position: "absolute", inset: 0, willChange: "transform",
+        transform: `scale(${currentZoom}) translate(${panX}px, ${panY}px)`,
+        transformOrigin: `${focusX * 100}% ${focusY * 100}%`,
+      }
+    }, children),
+    // Background dim overlay — draws attention to focus target
+    fp > 0.01 ? React.createElement("div", {
+      style: {
+        position: "absolute", inset: 0, pointerEvents: "none",
+        background: `rgba(0,0,0,${dimOpacity * fp})`,
+        backdropFilter: `blur(${blurStrength * fp}px)`,
+        WebkitBackdropFilter: `blur(${blurStrength * fp}px)`,
+        // Cut-out hole where the focus target is — achieved by mix-blend-mode
+        mixBlendMode: "multiply" as any,
+        zIndex: 50,
+      }
+    }) : null,
+  );
+};
+
 const SteppedCamera = ({
   children,
   keyframes = [],
@@ -1662,6 +2213,584 @@ const SteppedCamera = ({
         transformOrigin: `${(cx * 100).toFixed(1)}% ${(cy * 100).toFixed(1)}%`,
       },
     }, children),
+  );
+};
+
+// ---------------------------------------------------------------------------
+// MacroCamera — extreme 2–5x zoom into a specific UI region
+// ---------------------------------------------------------------------------
+
+/** Extreme macro zoom camera — Bordio-style 3–5x close-up into a UI section.
+ *  Three phases: snap zoom-in (easeOutExpo) → hold at max zoom → whip zoom-out (easeInExpo).
+ *  Optional slow drift during hold for organic documentary feel.
+ *
+ *  Props:
+ *    zoomLevel      — target scale factor (2.0–5.0). Default 3.0.
+ *    focusPoint     — normalized {x, y} center of zoom (0–1). Default center.
+ *    zoomInFrame    — frame when zoom begins. Default 0.
+ *    holdFrames     — frames at max zoom before zoom-out. Default 60.
+ *    zoomDuration   — frames for zoom-in and zoom-out transitions. Default 25.
+ *    driftAmount    — pixels of slow linear drift during hold for organic feel. Default 8.
+ *    zoomOutDuration — frames for zoom-out (defaults to zoomDuration).
+ *
+ *  Usage:
+ *    <MacroCamera zoomLevel={3.5} focusPoint={{x:0.65, y:0.4}}
+ *      zoomInFrame={20} holdFrames={80} zoomDuration={25}>
+ *      <AppShell ... />
+ *    </MacroCamera>
+ *
+ *  Rules:
+ *  - Max 2 MacroCamera uses per video
+ *  - Always pair with <SelectiveFocus> for DOF blur effect
+ *  - Keep cursor layers OUTSIDE MacroCamera so they don't scale
+ *  - zoomLevel > 4 only for single-element close-ups (buttons, inputs)
+ */
+const MacroCamera = ({
+  children,
+  zoomLevel = 3,
+  focusPoint = { x: 0.5, y: 0.5 },
+  zoomInFrame = 0,
+  holdFrames = 60,
+  zoomDuration = 25,
+  driftAmount = 8,
+  zoomOutDuration,
+}: {
+  children: React.ReactNode;
+  zoomLevel?: number;
+  focusPoint?: { x: number; y: number };
+  zoomInFrame?: number;
+  holdFrames?: number;
+  zoomDuration?: number;
+  driftAmount?: number;
+  zoomOutDuration?: number;
+}) => {
+  const frame = useCurrentFrame();
+  const outDur = zoomOutDuration ?? zoomDuration;
+
+  // Phase boundaries
+  const zoomInEnd = zoomInFrame + zoomDuration;
+  const holdEnd = zoomInEnd + holdFrames;
+  const zoomOutEnd = holdEnd + outDur;
+
+  // Easing functions
+  const easeOutExpo = (t: number) => t >= 1 ? 1 : 1 - Math.pow(2, -10 * t);
+  const easeInExpo = (t: number) => t <= 0 ? 0 : Math.pow(2, 10 * (t - 1));
+
+  let zoom = 1;
+  let driftX = 0;
+  let driftY = 0;
+
+  if (frame < zoomInFrame) {
+    // Before zoom — static at 1x
+    zoom = 1;
+  } else if (frame < zoomInEnd) {
+    // Phase 1: Snap zoom-in (easeOutExpo — fast snap to target)
+    const t = (frame - zoomInFrame) / zoomDuration;
+    zoom = 1 + (zoomLevel - 1) * easeOutExpo(t);
+  } else if (frame < holdEnd) {
+    // Phase 2: Hold at max zoom with subtle drift
+    zoom = zoomLevel;
+    const holdProgress = (frame - zoomInEnd) / Math.max(1, holdFrames);
+    // Gentle sinusoidal drift for organic feel
+    driftX = Math.sin(holdProgress * Math.PI * 0.8) * driftAmount;
+    driftY = Math.cos(holdProgress * Math.PI * 0.6) * driftAmount * 0.5;
+  } else if (frame < zoomOutEnd) {
+    // Phase 3: Whip zoom-out (easeInExpo — accelerating departure)
+    const t = (frame - holdEnd) / outDur;
+    zoom = zoomLevel - (zoomLevel - 1) * easeInExpo(t);
+  } else {
+    // After zoom — back to 1x
+    zoom = 1;
+  }
+
+  return React.createElement("div", {
+    style: { position: "absolute", inset: 0, overflow: "hidden" },
+  },
+    React.createElement("div", {
+      style: {
+        position: "absolute", inset: 0, willChange: "transform",
+        transform: `scale(${zoom.toFixed(4)}) translate(${driftX.toFixed(1)}px, ${driftY.toFixed(1)}px)`,
+        transformOrigin: `${(focusPoint.x * 100).toFixed(1)}% ${(focusPoint.y * 100).toFixed(1)}%`,
+      },
+    }, children),
+  );
+};
+
+// ---------------------------------------------------------------------------
+// SelectiveFocus — radial depth-of-field blur (sharp center, blurred edges)
+// ---------------------------------------------------------------------------
+
+/** Selective depth-of-field blur — renders children twice:
+ *  1. Bottom layer: full blur (simulates out-of-focus background)
+ *  2. Top layer: sharp, masked with radial-gradient to create a "focus circle"
+ *
+ *  The result mimics camera DOF: sharp in the focus area, progressively blurred outside.
+ *
+ *  Props:
+ *    focusX, focusY — normalized 0–1 center of the sharp region. Default center.
+ *    focusRadius    — how much of the frame is sharp (0–1). Default 0.35.
+ *    blurAmount     — blur strength on out-of-focus areas in px. Default 8.
+ *    active         — enable/disable the effect (for animated toggle). Default true.
+ *
+ *  Usage:
+ *    <SelectiveFocus focusX={0.65} focusY={0.4} focusRadius={0.3} blurAmount={10}>
+ *      <AppShell ... />
+ *    </SelectiveFocus>
+ *
+ *  Rules:
+ *  - Always pair with MacroCamera for the full macro close-up effect
+ *  - focusRadius 0.25–0.4 for UI section zoom, 0.15–0.25 for single-element zoom
+ *  - blurAmount 6–10px for subtle DOF, 10–16px for dramatic isolation
+ */
+const SelectiveFocus = ({
+  children,
+  focusX = 0.5,
+  focusY = 0.5,
+  focusRadius = 0.35,
+  blurAmount = 8,
+  active = true,
+}: {
+  children: React.ReactNode;
+  focusX?: number;
+  focusY?: number;
+  focusRadius?: number;
+  blurAmount?: number;
+  active?: boolean;
+}) => {
+  if (!active) return React.createElement(React.Fragment, null, children);
+
+  const cx = (focusX * 100).toFixed(1);
+  const cy = (focusY * 100).toFixed(1);
+  const innerR = (focusRadius * 100).toFixed(1);
+  const outerR = (focusRadius * 100 + 20).toFixed(1); // feathered edge
+
+  // radial-gradient mask: fully opaque in center, transparent at edges
+  const maskImage = `radial-gradient(ellipse at ${cx}% ${cy}%, black ${innerR}%, transparent ${outerR}%)`;
+
+  return React.createElement("div", {
+    style: { position: "absolute", inset: 0 },
+  },
+    // Layer 1: Blurred background (full frame, behind sharp layer)
+    React.createElement("div", {
+      style: {
+        position: "absolute", inset: 0,
+        filter: `blur(${blurAmount}px)`,
+        WebkitFilter: `blur(${blurAmount}px)`,
+        willChange: "filter",
+      },
+    }, children),
+    // Layer 2: Sharp foreground (masked to focus circle)
+    React.createElement("div", {
+      style: {
+        position: "absolute", inset: 0,
+        maskImage,
+        WebkitMaskImage: maskImage,
+        maskSize: "100% 100%",
+        WebkitMaskSize: "100% 100%",
+      },
+    }, children),
+  );
+};
+
+// ---------------------------------------------------------------------------
+// FeatureContextBar — persistent header above UI during multi-feature walkthroughs
+// Qanapi-style: "KMS for CSE  Google Workspace" styled bar at top of scene.
+// ---------------------------------------------------------------------------
+const FeatureContextBar = ({
+  label,
+  badge,
+  icon,
+  brand,
+  startFrame = 0,
+}: {
+  label: string;
+  badge?: string;
+  icon?: string;
+  brand: BrandLike;
+  startFrame?: number;
+}) => {
+  const frame = useCurrentFrame();
+  const { fps } = useVideoConfig();
+  const slideIn = spring({ frame: frame - startFrame, fps, config: { damping: 200, stiffness: 120 }, durationInFrames: 20 });
+  const y = interpolate(slideIn, [0, 1], [-60, 0]);
+  if (frame < startFrame) return null;
+  return React.createElement("div", {
+    style: {
+      position: "absolute", top: 0, left: 0, right: 0, zIndex: 100,
+      display: "flex", alignItems: "center", gap: 12, padding: "12px 32px",
+      background: "rgba(255,255,255,0.85)", backdropFilter: "blur(16px)",
+      WebkitBackdropFilter: "blur(16px)",
+      borderBottom: "1px solid rgba(0,0,0,0.08)",
+      transform: `translateY(${y}px)`,
+      fontFamily: brand.font ?? "Inter",
+    },
+  },
+    icon && React.createElement("span", { style: { fontSize: 20 } }, icon),
+    React.createElement("span", {
+      style: { fontSize: 18, fontWeight: 700, color: "#0f172a", letterSpacing: -0.3 },
+    }, label),
+    badge && React.createElement("span", {
+      style: {
+        fontSize: 12, fontWeight: 600, color: brand.primary,
+        background: `${brand.primary}15`, borderRadius: 20,
+        padding: "4px 12px", marginLeft: 8,
+      },
+    }, badge),
+  );
+};
+
+// ---------------------------------------------------------------------------
+// NotificationCard — white card for CRM/workflow notification scatter scenes
+// Pretaa-style: 4-6 cards floating on dark bg with staggered spring entrance.
+// ---------------------------------------------------------------------------
+const NotificationCard = ({
+  category,
+  message,
+  timestamp,
+  avatar,
+  categoryColor,
+  index = 0,
+  startFrame = 0,
+  brand,
+  x,
+  y,
+}: {
+  category: string;
+  message: string;
+  timestamp?: string;
+  avatar?: string;
+  categoryColor?: string;
+  index?: number;
+  startFrame?: number;
+  brand: BrandLike;
+  x?: number | string;
+  y?: number | string;
+}) => {
+  const frame = useCurrentFrame();
+  const { fps } = useVideoConfig();
+  const staggerDelay = index * 8;
+  const entrance = spring({ frame: frame - startFrame - staggerDelay, fps, config: { damping: 160, stiffness: 220 }, durationInFrames: 20 });
+  const scale = interpolate(entrance, [0, 1], [0.85, 1]);
+  const opacity = interpolate(entrance, [0, 1], [0, 1]);
+  // Gentle float
+  const floatY = Math.sin((frame + index * 40) / 50) * 3;
+  if (frame < startFrame + staggerDelay) return null;
+  const color = categoryColor ?? brand.primary;
+  return React.createElement("div", {
+    style: {
+      position: "absolute",
+      left: x ?? "auto", top: y ?? "auto",
+      width: 280, padding: "16px 20px",
+      background: "#ffffff", borderRadius: 14,
+      boxShadow: "0 8px 32px rgba(0,0,0,0.12), 0 2px 6px rgba(0,0,0,0.06)",
+      transform: `scale(${scale}) translateY(${floatY}px)`,
+      opacity, fontFamily: brand.font ?? "Inter",
+    },
+  },
+    React.createElement("div", {
+      style: { display: "flex", alignItems: "center", gap: 10, marginBottom: 8 },
+    },
+      avatar && React.createElement("div", {
+        style: {
+          width: 28, height: 28, borderRadius: 14, background: `${color}20`,
+          display: "flex", alignItems: "center", justifyContent: "center",
+          fontSize: 14, color,
+        },
+      }, avatar),
+      React.createElement("span", {
+        style: {
+          fontSize: 10, fontWeight: 700, textTransform: "uppercase" as const,
+          letterSpacing: 1, color, background: `${color}12`,
+          borderRadius: 4, padding: "2px 8px",
+        },
+      }, category),
+      timestamp && React.createElement("span", {
+        style: { fontSize: 10, color: "#94a3b8", marginLeft: "auto" },
+      }, timestamp),
+    ),
+    React.createElement("div", {
+      style: { fontSize: 13, color: "#334155", lineHeight: 1.5 },
+    }, message),
+  );
+};
+
+// ---------------------------------------------------------------------------
+// usePathTraveler — animates a position along a series of waypoints
+// Screenjar-style: paper plane / dot travels along dotted bezier path.
+// ---------------------------------------------------------------------------
+const usePathTraveler = (
+  points: { x: number; y: number }[],
+  startFrame: number,
+  duration: number,
+): { x: number; y: number; angle: number; progress: number } => {
+  const frame = useCurrentFrame();
+  if (!points || points.length < 2) return { x: points?.[0]?.x ?? 0, y: points?.[0]?.y ?? 0, angle: 0, progress: 0 };
+  const t = Math.max(0, Math.min(1, (frame - startFrame) / Math.max(duration, 1)));
+  const totalSegments = points.length - 1;
+  const segFloat = t * totalSegments;
+  const segIndex = Math.min(Math.floor(segFloat), totalSegments - 1);
+  const segT = segFloat - segIndex;
+  const p0 = points[segIndex];
+  const p1 = points[segIndex + 1];
+  const x = p0.x + (p1.x - p0.x) * segT;
+  const y = p0.y + (p1.y - p0.y) * segT;
+  const dx = p1.x - p0.x;
+  const dy = p1.y - p0.y;
+  const angle = Math.atan2(dy, dx) * (180 / Math.PI);
+  return { x, y, angle, progress: t };
+};
+
+// PaperPlane — simple triangular SVG arrow, brand-colored
+const PaperPlane = ({
+  x,
+  y,
+  angle = 0,
+  size = 24,
+  color,
+  brand,
+}: {
+  x: number;
+  y: number;
+  angle?: number;
+  size?: number;
+  color?: string;
+  brand?: BrandLike;
+}) => {
+  const fill = color ?? brand?.primary ?? "#6366f1";
+  return React.createElement("div", {
+    style: {
+      position: "absolute",
+      left: x - size / 2, top: y - size / 2,
+      width: size, height: size,
+      transform: `rotate(${angle}deg)`,
+      zIndex: 10,
+    },
+  },
+    React.createElement("svg", {
+      viewBox: "0 0 24 24", width: size, height: size, fill: "none",
+    },
+      React.createElement("path", {
+        d: "M2 12L22 2L18 12L22 22L2 12Z",
+        fill, stroke: fill, strokeWidth: 1, strokeLinejoin: "round",
+      }),
+    ),
+  );
+};
+
+// ---------------------------------------------------------------------------
+// InAppChatPanel — team messaging overlay for collaboration tools
+// Bordio-style: slide-in chat thread with avatars, timestamps, typing indicator.
+// ---------------------------------------------------------------------------
+const InAppChatPanel = ({
+  messages = [],
+  startFrame = 0,
+  brand,
+  side = "right",
+  overlay = true,
+}: {
+  messages: { name: string; text: string; avatar?: string; isTyping?: boolean }[];
+  startFrame?: number;
+  brand: BrandLike;
+  side?: "left" | "right";
+  overlay?: boolean;
+}) => {
+  const frame = useCurrentFrame();
+  const { fps, width } = useVideoConfig();
+  const panelW = Math.round(width * 0.35);
+  const slideIn = spring({ frame: frame - startFrame, fps, config: { damping: 200, stiffness: 120 }, durationInFrames: 25 });
+  const slideX = interpolate(slideIn, [0, 1], [panelW, 0]);
+  if (frame < startFrame) return null;
+  const isRight = side === "right";
+  return React.createElement(React.Fragment, null,
+    overlay && React.createElement("div", {
+      style: {
+        position: "absolute", inset: 0, background: "rgba(0,0,0,0.3)",
+        opacity: interpolate(slideIn, [0, 1], [0, 1]), zIndex: 45, pointerEvents: "none" as const,
+      },
+    }),
+    React.createElement("div", {
+      style: {
+        position: "absolute", [isRight ? "right" : "left"]: 0, top: 0, bottom: 0, width: panelW,
+        background: brand.style === "dark" ? "rgba(20,20,30,0.95)" : "rgba(255,255,255,0.97)",
+        backdropFilter: "blur(24px)", WebkitBackdropFilter: "blur(24px)",
+        borderLeft: isRight ? `1px solid ${brand.border}` : "none",
+        borderRight: isRight ? "none" : `1px solid ${brand.border}`,
+        boxShadow: isRight ? "-12px 0 40px rgba(0,0,0,0.15)" : "12px 0 40px rgba(0,0,0,0.15)",
+        transform: `translateX(${isRight ? slideX : -slideX}px)`,
+        padding: "24px 16px", zIndex: 46, display: "flex", flexDirection: "column" as const, gap: 0,
+        fontFamily: brand.font ?? "Inter", overflow: "hidden",
+      },
+    },
+      // Header
+      React.createElement("div", {
+        style: { fontSize: 15, fontWeight: 700, color: brand.text, marginBottom: 16, paddingBottom: 12, borderBottom: `1px solid ${brand.border}` },
+      }, "Messages"),
+      // Messages
+      ...messages.map((msg, i) => {
+        const msgDelay = startFrame + 12 + i * 10;
+        const msgEntrance = spring({ frame: frame - msgDelay, fps, config: { damping: 160, stiffness: 180 }, durationInFrames: 18 });
+        if (frame < msgDelay) return null;
+        if (msg.isTyping) {
+          return React.createElement("div", {
+            key: i,
+            style: { display: "flex", alignItems: "center", gap: 8, padding: "8px 0", opacity: interpolate(msgEntrance, [0, 1], [0, 1]) },
+          },
+            React.createElement("div", {
+              style: { width: 28, height: 28, borderRadius: 14, background: `${brand.primary}20`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, color: brand.primary },
+            }, msg.avatar ?? msg.name[0]),
+            React.createElement("div", {
+              style: { display: "flex", gap: 4, padding: "6px 12px", background: brand.surface, borderRadius: 12 },
+            },
+              ...[0, 1, 2].map(d => React.createElement("div", {
+                key: d,
+                style: {
+                  width: 6, height: 6, borderRadius: 3, background: brand.textMuted,
+                  opacity: interpolate(Math.sin((frame + d * 8) / 10), [-1, 1], [0.3, 1]),
+                },
+              })),
+            ),
+          );
+        }
+        return React.createElement("div", {
+          key: i,
+          style: {
+            display: "flex", gap: 8, padding: "8px 0",
+            opacity: interpolate(msgEntrance, [0, 1], [0, 1]),
+            transform: `translateY(${interpolate(msgEntrance, [0, 1], [12, 0])}px)`,
+          },
+        },
+          React.createElement("div", {
+            style: { width: 28, height: 28, borderRadius: 14, background: `${brand.primary}20`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, color: brand.primary, flexShrink: 0 },
+          }, msg.avatar ?? msg.name[0]),
+          React.createElement("div", { style: { flex: 1, minWidth: 0 } },
+            React.createElement("div", {
+              style: { fontSize: 12, fontWeight: 600, color: brand.text, marginBottom: 2 },
+            }, msg.name),
+            React.createElement("div", {
+              style: { fontSize: 13, color: brand.textMuted, lineHeight: 1.45 },
+            }, msg.text),
+          ),
+        );
+      }),
+    ),
+  );
+};
+
+// ---------------------------------------------------------------------------
+// ConcentricRings — expanding ring emanation from center (Screenjar/Viable style)
+// ---------------------------------------------------------------------------
+const ConcentricRings = ({
+  rings = 4,
+  centerX = 0.5,
+  centerY = 0.5,
+  maxRadius = 200,
+  color,
+  startFrame = 0,
+  brand,
+}: {
+  rings?: number;
+  centerX?: number;
+  centerY?: number;
+  maxRadius?: number;
+  color?: string;
+  startFrame?: number;
+  brand?: BrandLike;
+}) => {
+  const frame = useCurrentFrame();
+  const { fps, width, height } = useVideoConfig();
+  const stroke = color ?? brand?.primary ?? "#6366f1";
+  const cx = centerX * width;
+  const cy = centerY * height;
+  return React.createElement("svg", {
+    style: { position: "absolute", inset: 0, zIndex: 1, pointerEvents: "none" as const },
+    width, height, viewBox: `0 0 ${width} ${height}`,
+  },
+    ...Array.from({ length: rings }, (_, i) => {
+      const delay = startFrame + i * 10;
+      const expand = spring({ frame: frame - delay, fps, config: { damping: 22, stiffness: 50 }, durationInFrames: 40 });
+      const r = interpolate(expand, [0, 1], [0, maxRadius * ((i + 1) / rings)]);
+      const opacity = interpolate(expand, [0, 1], [0, 0.6 - i * 0.1]);
+      const dashPatterns = ["8 6", "4 8", "12 4", "2 10", "16 8"];
+      return React.createElement("circle", {
+        key: i, cx, cy, r: Math.max(r, 0),
+        fill: "none", stroke, strokeWidth: 1.5,
+        strokeDasharray: dashPatterns[i % dashPatterns.length],
+        opacity: Math.max(opacity, 0),
+      });
+    }),
+  );
+};
+
+// ---------------------------------------------------------------------------
+// SVG Icon Library + DrawOnIcon — consistent line-art icons with draw-on animation
+// ---------------------------------------------------------------------------
+const ICON_PATHS: Record<string, string> = {
+  shield: "M12 2L3 7v5c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V7L12 2z",
+  lock: "M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zm-6 9c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zm3.1-9H8.9V6c0-1.71 1.39-3.1 3.1-3.1s3.1 1.39 3.1 3.1v2z",
+  key: "M12.65 10A5.99 5.99 0 007 6c-3.31 0-6 2.69-6 6s2.69 6 6 6a5.99 5.99 0 005.65-4H17v4h4v-4h2v-4H12.65zM7 14c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2z",
+  clock: "M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm.5-13H11v6l5.2 3.2.8-1.3-4.5-2.7V7z",
+  calendar: "M19 3h-1V1h-2v2H8V1H6v2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H5V8h14v11z",
+  dollar: "M11.8 10.9c-2.27-.59-3-1.2-3-2.15 0-1.09 1.01-1.85 2.7-1.85 1.78 0 2.44.85 2.5 2.1h2.21c-.07-1.72-1.12-3.3-3.21-3.81V3h-3v2.16c-1.94.42-3.5 1.68-3.5 3.61 0 2.31 1.91 3.46 4.7 4.13 2.5.6 3 1.48 3 2.41 0 .69-.49 1.79-2.7 1.79-2.06 0-2.87-.92-2.98-2.1h-2.2c.12 2.19 1.76 3.42 3.68 3.83V21h3v-2.15c1.95-.37 3.5-1.5 3.5-3.55 0-2.84-2.43-3.81-4.7-4.4z",
+  "chart-up": "M16 6l2.29 2.29-4.88 4.88-4-4L2 16.59 3.41 18l6-6 4 4 6.3-6.29L22 12V6h-6z",
+  person: "M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z",
+  team: "M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5s-3 1.34-3 3 1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z",
+  message: "M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2z",
+  bell: "M12 22c1.1 0 2-.9 2-2h-4c0 1.1.89 2 2 2zm6-6v-5c0-3.07-1.64-5.64-4.5-6.32V4c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5v.68C7.63 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2z",
+  mail: "M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 4l-8 5-8-5V6l8 5 8-5v2z",
+  cloud: "M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96z",
+  code: "M9.4 16.6L4.8 12l4.6-4.6L8 6l-6 6 6 6 1.4-1.4zm5.2 0l4.6-4.6-4.6-4.6L16 6l6 6-6 6-1.4-1.4z",
+  gear: "M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 00.12-.61l-1.92-3.32a.49.49 0 00-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.484.484 0 00-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.07.62-.07.94s.02.64.07.94l-2.03 1.58a.49.49 0 00-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z",
+  lightning: "M7 2v11h3v9l7-12h-4l4-8H7z",
+  check: "M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41L9 16.17z",
+  warning: "M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z",
+  target: "M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm0-14c-3.31 0-6 2.69-6 6s2.69 6 6 6 6-2.69 6-6-2.69-6-6-6zm0 10c-2.21 0-4-1.79-4-4s1.79-4 4-4 4 1.79 4 4-1.79 4-4 4zm0-6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z",
+  star: "M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z",
+  heart: "M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z",
+  database: "M12 3C7.58 3 4 4.79 4 7v10c0 2.21 3.58 4 8 4s8-1.79 8-4V7c0-2.21-3.58-4-8-4zm0 2c3.87 0 6 1.5 6 2s-2.13 2-6 2-6-1.5-6-2 2.13-2 6-2zM4 17v-2.34c1.37 1.05 3.54 1.73 6 1.88v2.41c-3.34-.21-6-1.36-6-1.95zm14 0c0 .59-2.66 1.74-6 1.95v-2.41c2.46-.15 4.63-.83 6-1.88V17z",
+  globe: "M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z",
+  phone: "M6.62 10.79c1.44 2.83 3.76 5.14 6.59 6.59l2.2-2.2c.27-.27.67-.36 1.02-.24 1.12.37 2.33.57 3.57.57.55 0 1 .45 1 1V20c0 .55-.45 1-1 1-9.39 0-17-7.61-17-17 0-.55.45-1 1-1h3.5c.55 0 1 .45 1 1 0 1.25.2 2.45.57 3.57.11.35.03.74-.25 1.02l-2.2 2.2z",
+};
+
+const DrawOnIcon = ({
+  icon,
+  path,
+  size = 80,
+  color,
+  startFrame = 0,
+  drawDuration = 30,
+  brand,
+}: {
+  icon?: string;
+  path?: string;
+  size?: number;
+  color?: string;
+  startFrame?: number;
+  drawDuration?: number;
+  brand?: BrandLike;
+}) => {
+  const frame = useCurrentFrame();
+  const d = path ?? (icon ? ICON_PATHS[icon] : undefined) ?? ICON_PATHS.check;
+  const stroke = color ?? brand?.primary ?? "#6366f1";
+  const progress = Math.max(0, Math.min(1, (frame - startFrame) / Math.max(drawDuration, 1)));
+  // Approximate path length — 300 works well for 24x24 viewBox icons
+  const pathLen = 300;
+  const dashOffset = pathLen * (1 - progress);
+  return React.createElement("svg", {
+    viewBox: "0 0 24 24",
+    width: size, height: size,
+    fill: "none",
+    style: { overflow: "visible" },
+  },
+    React.createElement("path", {
+      d,
+      stroke,
+      strokeWidth: 1.5,
+      strokeLinecap: "round" as const,
+      strokeLinejoin: "round" as const,
+      strokeDasharray: pathLen,
+      strokeDashoffset: dashOffset,
+      fill: progress >= 1 ? `${stroke}15` : "none",
+    }),
   );
 };
 
@@ -1811,14 +2940,22 @@ const SidebarNav = ({ appName, items, activeItem, brand }: {
 };
 
 /** Full SaaS app layout: sidebar + optional topbar + main content area. */
-const AppShell = ({ sidebar, topbar, children, brand, zoom = 1 }: {
+const AppShell = ({ sidebar, topbar, children, brand, zoom = 1, chromeColor }: {
   sidebar?: React.ReactNode;
   topbar?: React.ReactNode;
   children?: React.ReactNode;
   brand: BrandLike;
   zoom?: number;
+  /** Brand-colored title bar (Viable-style). When set, replaces default dark chrome. */
+  chromeColor?: string;
 }) => {
   const { width, height } = useVideoConfig();
+  const topbarBg = chromeColor
+    ? chromeColor
+    : "rgba(0,0,0,0.4)";
+  const topbarText = chromeColor
+    ? (parseInt(chromeColor.replace("#", "").slice(0, 2), 16) > 128 ? "#0f172a" : "#ffffff")
+    : brand.text;
   return React.createElement("div", {
     style: {
       position: "absolute", inset: 0, background: brand.bg,
@@ -1830,9 +2967,9 @@ const AppShell = ({ sidebar, topbar, children, brand, zoom = 1 }: {
   },
     topbar && React.createElement("div", {
       style: {
-        height: 52, background: "rgba(0,0,0,0.4)", backdropFilter: "blur(24px) saturate(150%)", WebkitBackdropFilter: "blur(24px) saturate(150%)",
+        height: 52, background: topbarBg, backdropFilter: chromeColor ? "none" : "blur(24px) saturate(150%)", WebkitBackdropFilter: chromeColor ? "none" : "blur(24px) saturate(150%)",
         borderBottom: `1px solid ${brand.border}`, display: "flex", alignItems: "center",
-        padding: "0 20px", flexShrink: 0, zIndex: 5,
+        padding: "0 20px", flexShrink: 0, zIndex: 5, color: topbarText,
       }
     }, topbar),
     React.createElement("div", { style: { display: "flex", flex: 1, overflow: "hidden" } },
@@ -4481,14 +5618,43 @@ export function extractComponentBody(code: string): string {
 
   cleaned = cleaned.trim();
 
-  // Extract body from "export const MyAnimation = () => { ... };"
-  const match = cleaned.match(
-    /^([\s\S]*?)export\s+const\s+\w+\s*=\s*\(\s*\)\s*=>\s*\{([\s\S]*)\};?\s*$/,
-  );
+  // Strip any leftover `export default ` / `export ` prefixes so none of the
+  // fallback paths below accidentally leave module syntax inside the body.
+  // Do this BEFORE pattern matching so the regexes don't need to handle it.
+  cleaned = cleaned.replace(/\bexport\s+default\s+(?=function\s)/g, "");
+  cleaned = cleaned.replace(/\bexport\s+(?=(?:function|class)\s)/g, "");
+  // Strip trailing `export default ComponentName;` re-export lines
+  cleaned = cleaned.replace(/^export\s+default\s+\w+\s*;?\s*$/gm, "");
 
-  if (match) {
-    const helpers = match[1].trim();
-    const body = match[2].trim();
+  // Pattern 1: export const X = [async] ([...params]) => { ... }
+  // \([\s\S]*?\) matches any params including destructured props
+  const arrowBraceMatch = cleaned.match(
+    /^([\s\S]*?)export\s+const\s+\w+\s*=\s*(?:async\s*)?\([\s\S]*?\)\s*=>\s*\{([\s\S]*)\};?\s*$/,
+  );
+  if (arrowBraceMatch) {
+    const helpers = arrowBraceMatch[1].trim();
+    const body = arrowBraceMatch[2].trim();
+    return helpers ? `${helpers}\n\n${body}` : body;
+  }
+
+  // Pattern 2: export const X = [async] ([...params]) => ( JSX ) — implicit return
+  const arrowParenMatch = cleaned.match(
+    /^([\s\S]*?)export\s+const\s+\w+\s*=\s*(?:async\s*)?\([\s\S]*?\)\s*=>\s*\(([\s\S]*)\);?\s*$/,
+  );
+  if (arrowParenMatch) {
+    const helpers = arrowParenMatch[1].trim();
+    const body = `return (\n${arrowParenMatch[2].trim()}\n);`;
+    return helpers ? `${helpers}\n\n${body}` : body;
+  }
+
+  // Pattern 3: function MyScene() { ... } (export already stripped above)
+  // Require PascalCase to avoid accidentally extracting a camelCase helper fn.
+  const funcDeclMatch = cleaned.match(
+    /^([\s\S]*?)function\s+([A-Z]\w*)\s*\(\s*\)\s*\{([\s\S]*)\}\s*$/,
+  );
+  if (funcDeclMatch) {
+    const helpers = funcDeclMatch[1].trim();
+    const body = funcDeclMatch[3].trim();
     return helpers ? `${helpers}\n\n${body}` : body;
   }
 
@@ -4651,6 +5817,15 @@ function postProcessCode(code: string): string {
     /backdropFilter:\s*["']([^"']+)["'](?!\s*,\s*WebkitBackdropFilter)/g,
     (match: string, filterVal: string) => `${match}, WebkitBackdropFilter: "${filterVal}"`
   );
+  // Strip TypeScript return type annotations on arrow functions before pattern extraction.
+  // e.g., `= (): JSX.Element => {` → `= () => {`
+  // Without this, extractComponentBody's regex fails to match and leaves `export const`
+  // inside the wrapped body, causing Babel to throw "export may only appear at top level".
+  processed = processed.replace(
+    /\)\s*:\s*(?:JSX\.Element|React\.(?:FC|ReactElement|ReactNode|Component|ComponentType)|void|never|unknown|any|boolean|string|number|null|Element|ReactElement)\b[^={]*?(?=\s*=>)/g,
+    ')',
+  );
+
   // Ensure first bare AbsoluteFill has backgroundColor if none exists
   if (processed.includes("<AbsoluteFill>") && !processed.includes("backgroundColor")) {
     processed = processed.replace(
@@ -4688,6 +5863,243 @@ function postProcessCode(code: string): string {
       }
     }
   }
+
+  // Hoist SCENE_TIMELINE declaration to prevent temporal dead zone errors.
+  // Same pattern as CURSOR_STEPS — LLM references SCENE_TIMELINE before declaring it.
+  if (processed.includes("const SCENE_TIMELINE")) {
+    const declStart = processed.indexOf("const SCENE_TIMELINE");
+    const arrStart = processed.indexOf("[", declStart);
+    if (arrStart !== -1) {
+      let depth = 0, end = arrStart, inStr = "", i = arrStart;
+      while (i < processed.length) {
+        const ch = processed[i];
+        if (inStr) {
+          if (ch === "\\" ) { i += 2; continue; }
+          if (ch === inStr) inStr = "";
+        } else {
+          if (ch === '"' || ch === "'") { inStr = ch; }
+          else if (ch === "[") { depth++; }
+          else if (ch === "]") { depth--; if (depth === 0) { end = i; break; } }
+        }
+        i++;
+      }
+      const semiEnd = processed.indexOf(";", end);
+      if (semiEnd !== -1) {
+        const fullDecl = processed.slice(declStart, semiEnd + 1);
+        processed = processed.slice(0, declStart) + processed.slice(semiEnd + 1);
+        processed = fullDecl + "\n" + processed;
+      }
+    }
+  }
+
+  // Hoist timing constants like TRAVEL_DURATION, DWELL, ZOOM_IN to appear before CURSOR_STEPS
+  // so they can be safely referenced in CURSOR_STEPS time offsets without TDZ errors.
+  const timingConstants = [
+    'TRAVEL_DURATION', 'DWELL_DURATION', 'CLICK_DURATION', 
+    'TRAVEL', 'DWELL', 'CLICK', 'ZOOM_IN', 'ZOOM_OUT', 'ZOOM_HOLD'
+  ];
+  for (const tc of timingConstants) {
+    const regex = new RegExp(`(?:const|let|var)\\s+${tc}\\s*=\\s*[-0-9.]+(?:\\s*\\*\\s*[-0-9.]+)*;?`, 'g');
+    const matches = Array.from(processed.matchAll(regex));
+    for (const match of matches) {
+      processed = processed.replace(match[0], '');
+      processed = match[0] + (match[0].endsWith(';') ? '' : ';') + '\n' + processed;
+    }
+  }
+
+  // ── Shared helpers for undeclared-identifier detection ──────────────────
+  // Strip string/template literals so identifiers inside quotes are ignored.
+  const _noStr = (s: string) =>
+    s.replace(/"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|`(?:[^`\\]|\\.)*`/g, '""');
+  const _noStrCode = _noStr(processed);
+
+  // ── (A) Auto-fallback for undeclared ALL_CAPS constants ──────────────────
+  // LLM often invents frame-offset constants (NODE_FADE_IN_START, etc.)
+  // without declaring them.  Inject `const X = 0;` for each unknown one.
+  {
+    const KNOWN = new Set([
+      // Scope constants
+      'BRAND','ATTACHED_IMAGES','VOICEOVER_AUDIO_URL','VOICEOVER_URLS',
+      'WORD_TIMINGS','DETECTED_ELEMENTS','DETECTED_SECTIONS','UI_SCHEMA',
+      'GLOBAL_BG','GLOBAL_FRAME_OFFSET','GLOBAL_STYLE','SPRING_CONFIGS',
+      'INITIAL_CAMERA_ZOOM','INITIAL_CAMERA_PAN','SCENE_TIMELINE',
+      'EASINGS','HAND_CURSOR','ENTROPY_DUST_PARTICLES','SAFE_ZONES',
+      'STOCK_AVATARS','CURSOR_STEPS','SFX_URLS','MUSIC_BPM','MORPH_FROM','STOCK_VIDEO_URL',
+      'CURSOR_STATE_DEFAULT',
+      // JS built-ins (ALL_CAPS subset)
+      'NaN','Infinity','Math','JSON','URL','NOT','AND','OR','NULL','TRUE','FALSE',
+      // Remotion / React
+      'AbsoluteFill','Audio','Img','Sequence','React',
+    ]);
+    const used = new Set<string>();
+    const declared = new Set<string>();
+    let cm: RegExpExecArray | null;
+    const useRe = /\b([A-Z][A-Z0-9_]{2,})\b/g;
+    while ((cm = useRe.exec(_noStrCode)) !== null) used.add(cm[1]);
+    const declRe = /(?:const|let|var)\s+([A-Z][A-Z0-9_]{2,})\b/g;
+    while ((cm = declRe.exec(_noStrCode)) !== null) declared.add(cm[1]);
+    const fallbacks: string[] = [];
+    Array.from(used).forEach((name) => {
+      if (!KNOWN.has(name) && !declared.has(name)) fallbacks.push(`const ${name} = 0;`);
+    });
+    if (fallbacks.length > 0) processed = fallbacks.join('\n') + '\n' + processed;
+  }
+
+  // ── (B) Auto-fallback for undeclared PascalCase components ───────────────
+  // LLM often invents component names like <StatCard />, <FeatureItem /> etc.
+  // Inject `const Name = ({children,...p}) => React.createElement('div',p,children);`
+  {
+    const KNOWN_COMPONENTS = new Set([
+      // Remotion / React shapes
+      'AbsoluteFill','Sequence','Img','Audio','TransitionSeries',
+      'Rect','Circle','Triangle','Star','Polygon','Ellipse','Heart','Pie',
+      // Scope components (all 64 PascalCase entries from the Function() call)
+      'TiltWrapper','ChameleonInput','ChameleonHighlight','DropdownMenu',
+      'CinematicCamera','SteppedCamera','MacroCamera','SelectiveFocus','NarrationReveal','OffthreadVideo','TaskDetailPanel','ModalOverlay',
+      'FeatureContextBar','NotificationCard','PaperPlane','InAppChatPanel','ConcentricRings','DrawOnIcon',
+      'InputField','ChatBubble','SidebarNav','AppShell','HeroSplit',
+      'AnimatedConnectionLine','DynamicConnectorLine','VideoPlateMockup',
+      'FilmGrain','ContextualSectionHeader','SfxSequencer','AnimatedSidebar',
+      'AnimatedMetricCards','AnimatedTable','AnimatedChart','AnimatedForm',
+      'ReconstructedAppShell','AbstractSkeletonUI','ChunkCard','SkeletonTextBlock',
+      'AnimatedTopbar','SectionTitle','NotificationToast','StatusBadge',
+      'TableActionButton','PersistentSectionLabel','FloatingShapes',
+      'AmbientEnvironment','DepthStack','AnimatedHighlighter','ContentCard',
+      'EntropyDust','MeshGradientBg','WrappedMeshGradientBg','CameraMotionBlur',
+      'SheenOverlay','ParallaxLayer','MotionBlurWhip',
+      'ChromaticAberration','GlowBloom','DepthBlur','ActionCamera',
+      'SpotlightCutout','GhostHighlight','HandwrittenLabel','PersonCard',
+      'GarbledText','OrbitRing','BoldColorBg','SyncedWord','KineticWord',
+      'MaskedReveal','InWorldText','FocusOrchestrator','FocusController','CursorAnnotationPill',
+      'ContextualBgPulse','LightArcBg','WrappedLightArcBg',
+      // React built-ins (PascalCase that show up)
+      'Fragment','StrictMode','Suspense','Lottie','ThreeCanvas',
+    ]);
+    // Find JSX usages: <ComponentName or <ComponentName[space/>/]
+    const usedComps = new Set<string>();
+    const declared = new Set<string>();
+    let cm: RegExpExecArray | null;
+    const jsxRe = /<([A-Z][a-zA-Z0-9]+)[\s/>]/g;
+    while ((cm = jsxRe.exec(_noStrCode)) !== null) usedComps.add(cm[1]);
+    // Find already-defined in code: const/let/var/function Foo or class Foo
+    const defRe = /(?:const|let|var|function|class)\s+([A-Z][a-zA-Z0-9]+)\b/g;
+    while ((cm = defRe.exec(_noStrCode)) !== null) declared.add(cm[1]);
+    const fallbacks: string[] = [];
+    Array.from(usedComps).forEach((name) => {
+      if (!KNOWN_COMPONENTS.has(name) && !declared.has(name)) {
+        fallbacks.push(
+          `const ${name} = ({children, ...p}) => React.createElement(React.Fragment, null, children ?? null);`
+        );
+      }
+    });
+    if (fallbacks.length > 0) processed = fallbacks.join('\n') + '\n' + processed;
+  }
+
+  // ── (C) Auto-fallback for undeclared camelCase functions ─────────────────
+  // LLM invents helpers like `statStagger(i, n)`, `fadeDelay(i)`, etc.
+  // Inject `const fn = (...args) => args[0] ?? 0;` for each unknown call.
+  {
+    const KNOWN_FUNCS = new Set([
+      // JS reserved keywords that can appear before ( e.g. return(...), typeof(x), new Foo()
+      // JS reserved keywords + short built-ins that can precede (
+      'return','typeof','instanceof','delete','void','throw','new',
+      'switch','case','default','break','continue','if','else',
+      'for','while','do','try','catch','finally','async','await','yield',
+      'import','export','from','class','extends','super','this',
+      'true','false','null','undefined','in','of','let','var','const',
+      'get','set','has','add','use','ref','key','ref','tag','run','log',
+      // JS built-ins
+      'parseInt','parseFloat','isNaN','isFinite','encodeURIComponent',
+      'decodeURIComponent','setTimeout','clearTimeout','setInterval',
+      'clearInterval','fetch','console','Boolean','Number','String',
+      'Object','Array','JSON','Math','Date','Promise','Map','Set',
+      // Common LLM-invented helpers that are actually valid patterns
+      'interpolateColor','clamp','lerp','easeIn','easeOut','easeInOut',
+      'hexToRgb','hexToRgba','rgbToHex','formatNumber','formatTime',
+      'transition','transform','translate','rotate','scale','opacity',
+      // Array methods commonly called as standalone
+      'map','filter','reduce','forEach','find','findIndex','some','every',
+      'flat','flatMap','includes','indexOf','join','slice','sort','splice',
+      'push','pop','shift','unshift','reverse','keys','values','entries',
+      // String methods
+      'trim','split','replace','replaceAll','startsWith','endsWith','padStart',
+      // Object methods
+      'assign','keys','values','entries','freeze','create','fromEntries',
+      // Math methods
+      'min','max','abs','floor','ceil','round','sqrt','pow','log','sin','cos',
+      // Remotion
+      'spring','interpolate','random','staticFile',
+      'useCurrentFrame','useVideoConfig',
+      // React
+      'useState','useEffect','useMemo','useCallback','useRef',
+      'useContext','useReducer','createElement','cloneElement','memo',
+      'forwardRef','createContext',
+      // Scope hooks & functions (camelCase only)
+      'useEntropy','useEntropyWithAttractor','useStagger','useCascadeTree',
+      'useVitality','useMagnetic','useTrackedParallax','useCursorState',
+      'useHumanizedCursor','useVelocityMomentum','useVelocityAudio',
+      'usePreFocusCamera','useInteractionCycle',
+      'useCursorPos','useMouseProximity','useInteractionFeedback',
+      'useTyping','usePopup','useAccordion','useDragItem','useMorphEntrance',
+      'useAudioSync','useBeat','useBeatClock','snapToDownbeat','usePathTraveler',
+      'cubicBezier','getGlassCard','glowBloomStyle','safeInterpolate',
+      'linearTiming','springTiming','fade','slide','wipe','flip','clockWipe',
+      'makeRect','makeCircle','makeTriangle','makeStar','makePolygon',
+      'makeEllipse','makeHeart','makePie',
+      // Additional JS built-ins
+      'require','Symbol','WeakMap','WeakSet','Proxy','Reflect',
+      'queueMicrotask','structuredClone','globalThis',
+      // Additional Math methods (may appear after `const { sin, cos } = Math`)
+      'atan','atan2','tan','asin','acos','exp','hypot','sign','trunc','cbrt',
+    ]);
+    const usedFns = new Set<string>();
+    const declared = new Set<string>();
+    let cm: RegExpExecArray | null;
+    // Calls: someFunc( — camelCase, ≥3 chars; exclude method calls (obj.method) and partial words
+    // \b ensures we match whole words only (no "uffix" from "suffix"); (?<!\.) excludes method calls
+    const callRe = /(?<!\.)\b([a-z][a-zA-Z0-9]{2,})\s*\(/g;
+    while ((cm = callRe.exec(_noStrCode)) !== null) usedFns.add(cm[1]);
+    // Simple declarations: const/let/var/function name
+    const defRe = /(?:const|let|var|function)\s+([a-z][a-zA-Z0-9]{2,})\b/g;
+    while ((cm = defRe.exec(_noStrCode)) !== null) declared.add(cm[1]);
+    // Array destructuring: const [a, setA, ...rest] = ...
+    const arrDestructRe = /(?:const|let|var)\s*\[([^\]]+)\]/g;
+    while ((cm = arrDestructRe.exec(_noStrCode)) !== null) {
+      cm[1].split(',').forEach(n => {
+        const t = n.trim().replace(/^\.\.\./, '').split(/\s*=\s*/)[0].trim();
+        if (/^[a-z][a-zA-Z0-9]+$/.test(t)) declared.add(t);
+      });
+    }
+    // Object destructuring: const { a, b: alias } = ...
+    const objDestructRe = /(?:const|let|var)\s*\{([^}]+)\}/g;
+    while ((cm = objDestructRe.exec(_noStrCode)) !== null) {
+      cm[1].split(',').forEach(part => {
+        const alias = part.trim().split(':').pop()?.trim().replace(/^\.\.\./, '') ?? '';
+        if (/^[a-z][a-zA-Z0-9]+$/.test(alias)) declared.add(alias);
+      });
+    }
+    // Named arrow function / callback params: (item, index) => or item =>
+    // Catches .map((item, i) => ...) style — prevents false fallbacks for callback params
+    const arrowParamRe = /\b([a-z][a-zA-Z0-9]{2,})\s*(?:,\s*[a-z]\w*)?\s*\)\s*=>/g;
+    while ((cm = arrowParamRe.exec(_noStrCode)) !== null) declared.add(cm[1]);
+    // Single-param arrow: item => expr
+    const singleParamRe = /\b([a-z][a-zA-Z0-9]{2,})\s*=>/g;
+    while ((cm = singleParamRe.exec(_noStrCode)) !== null) declared.add(cm[1]);
+    const fallbacks: string[] = [];
+    Array.from(usedFns).forEach((name) => {
+      // Skip React state setters (set+Uppercase), event handlers (on+Uppercase),
+      // and names already declared (including via destructuring)
+      if (
+        /^set[A-Z]/.test(name) ||
+        /^on[A-Z]/.test(name) ||
+        KNOWN_FUNCS.has(name) ||
+        declared.has(name)
+      ) return;
+      fallbacks.push(`const ${name} = (...args) => args[0] ?? 0;`);
+    });
+    if (fallbacks.length > 0) processed = fallbacks.join('\n') + '\n' + processed;
+  }
+
   return processed;
 }
 
@@ -4703,6 +6115,14 @@ export function compileCode(
   morphFrom: { x: number; y: number; w: number; h: number } | null = null,
   sfxUrls: Record<string, string> = {},
   voiceoverUrls: Record<string, string> = {},
+  /** Camera state from the end of the previous scene — enables seamless zoom continuity.
+   *  Pass the previous scene's ending zoom (typically 1.06) and pan offset in px.
+   *  Use when FlowEdge.carryOver.camera === true between two scenes. */
+  initialCameraState: { zoom: number; panX: number; panY: number } = { zoom: 1.0, panX: 0, panY: 0 },
+  /** Stock video URL for background compositing (Fronter/Viable-style office footage). */
+  stockVideoUrl: string | null = null,
+  /** Persistent feature context header for Qanapi-style walkthroughs. */
+  featureHeaderData: { label: string; badge?: string; icon?: string } | null = null,
 ): CompilationResult {
   if (!code?.trim()) {
     return { Component: null, error: "No code provided" };
@@ -4721,19 +6141,41 @@ export function compileCode(
       return { Component: null, error: "Transpilation failed" };
     }
 
-    // Safe interpolate: auto-sorts inputRange so LLM-generated code with
-    // inverted or non-monotonic ranges (e.g. [1, 0.94]) never crashes at runtime.
+    // Safe interpolate: sanitizes both ranges before passing to Remotion.
+    // Remotion throws synchronously inside checkInfiniteRange — sanitizing here
+    // prevents the throw entirely rather than trying to catch it after.
     const safeInterpolate: typeof interpolate = (input, inputRange, outputRange, options?) => {
-      if (inputRange.length < 2) return (outputRange[0] ?? 0) as number;
-      let needsSort = false;
-      for (let i = 1; i < inputRange.length; i++) {
-        if (inputRange[i] <= inputRange[i - 1]) { needsSort = true; break; }
-      }
-      if (!needsSort) return interpolate(input, inputRange, outputRange, options as any);
-      const pairs = inputRange.map((f, i) => [f, outputRange[i]] as [number, number]);
+      // Guard null/undefined inputs
+      if (!Array.isArray(inputRange) || !Array.isArray(outputRange)) return 0;
+      if ((inputRange?.length ?? 0) < 2) return (outputRange?.[0] ?? 0) as number;
+
+      // Coerce every outputRange value to a safe finite number.
+      // typeof check + isFinite together handle strings, null, undefined, NaN, Infinity.
+      const safeOut = (outputRange as unknown[]).map((v) =>
+        typeof v === "number" && Number.isFinite(v) ? v : 0
+      ) as number[];
+
+      // Coerce inputRange the same way (Remotion also validates this array).
+      const safeIn = inputRange.map((v) =>
+        typeof v === "number" && Number.isFinite(v) ? v : 0
+      );
+
+      // Sort + dedupe if inputRange is non-monotonic.
+      const pairs = safeIn.map((f, i) => [f, (typeof safeOut[i] === "number" && Number.isFinite(safeOut[i])) ? safeOut[i] : (safeOut[safeOut.length - 1] ?? 0)] as [number, number]);
       pairs.sort((a, b) => a[0] - b[0]);
       const deduped = pairs.filter((p, i) => i === 0 || p[0] > pairs[i - 1][0]);
-      return interpolate(input, deduped.map(p => p[0]), deduped.map(p => p[1]), options as any);
+      if (deduped.length < 2) return (safeOut[0] ?? 0) as number;
+
+      try {
+        return interpolate(
+          input,
+          deduped.map((p) => p[0]),
+          deduped.map((p) => p[1]),
+          options as any,
+        );
+      } catch {
+        return (safeOut[safeOut.length - 1] ?? 0) as number;
+      }
     };
 
     const Remotion = {
@@ -4763,6 +6205,7 @@ export function compileCode(
       "THREE",
       "AbsoluteFill",
       "interpolate",
+      "interpolateColor",
       "useCurrentFrame",
       "useVideoConfig",
       "spring",
@@ -4778,6 +6221,9 @@ export function compileCode(
       "useState",
       "useEffect",
       "useMemo",
+      "useCallback",
+      "useContext",
+      "useReducer",
       "useRef",
       "Rect",
       "Circle",
@@ -4816,6 +6262,13 @@ export function compileCode(
       "TiltWrapper",
       "CURSOR_STATE_DEFAULT",
       "useCursorState",
+      "useHumanizedCursor",
+      "useVelocityMomentum",
+      "useVelocityAudio",
+      "UITransition",
+      "usePreFocusCamera",
+      "useInteractionCycle",
+      "PACING_PROFILE",
       "SyncedWord",
       // GAP 1: Spatial proximity (cursor magnetism)
       "useCursorPos",
@@ -4826,6 +6279,8 @@ export function compileCode(
       "InWorldText",
       // GAP 4: Auto depth-blur on popup/panel events
       "FocusOrchestrator",
+      // Timeline Engine: centralized background dim + blur + camera zoom on a target
+      "FocusController",
       // GAP 5: Ambient cursor annotation pills
       "CursorAnnotationPill",
       // Interaction feedback + contextual bg
@@ -4841,6 +6296,20 @@ export function compileCode(
       "DropdownMenu",
       "CinematicCamera",
       "SteppedCamera",
+      "MacroCamera",
+      "SelectiveFocus",
+      "NarrationReveal",
+      "FeatureContextBar",
+      "NotificationCard",
+      "usePathTraveler",
+      "PaperPlane",
+      "InAppChatPanel",
+      "ConcentricRings",
+      "ICON_PATHS",
+      "DrawOnIcon",
+      "FEATURE_HEADER",
+      "OffthreadVideo",
+      "STOCK_VIDEO_URL",
       "TaskDetailPanel",
       "ModalOverlay",
       "InputField",
@@ -4914,6 +6383,9 @@ export function compileCode(
       "SpotlightCutout",
       "GhostHighlight",
       "GLOBAL_FRAME_OFFSET",
+      // Camera continuity — initial state from previous scene for seamless stitching
+      "INITIAL_CAMERA_ZOOM",
+      "INITIAL_CAMERA_PAN",
       // Phase 1: new scope components
       "HandwrittenLabel",
       "PersonCard",
@@ -4938,6 +6410,10 @@ export function compileCode(
     const MUSIC_BPM: number = TRACK_BPM[brand.musicStyle as string] ?? 90;
     const MORPH_FROM = morphFrom ?? null;
     const SFX_URLS = sfxUrls ?? {};
+    const INITIAL_CAMERA_ZOOM = initialCameraState.zoom;
+    const INITIAL_CAMERA_PAN = { x: initialCameraState.panX, y: initialCameraState.panY };
+    const STOCK_VIDEO_URL = stockVideoUrl;
+    const FEATURE_HEADER = featureHeaderData;
 
     const Component = createComponent(
       React,
@@ -4948,6 +6424,7 @@ export function compileCode(
       THREE,
       AbsoluteFill,
       safeInterpolate,
+      interpolateColor,
       useCurrentFrame,
       useVideoConfig,
       spring,
@@ -4963,6 +6440,9 @@ export function compileCode(
       useState,
       useEffect,
       useMemo,
+      useCallback,
+      useContext,
+      useReducer,
       useRef,
       RemotionShapes.Rect,
       RemotionShapes.Circle,
@@ -5001,6 +6481,13 @@ export function compileCode(
       TiltWrapper,
       CURSOR_STATE_DEFAULT,
       useCursorState,
+      useHumanizedCursor,
+      useVelocityMomentum,
+      useVelocityAudio,
+      UITransition,
+      usePreFocusCamera,
+      useInteractionCycle,
+      { ...PACING_PROFILE, beatFrames: Math.round(30 * 60 / MUSIC_BPM), barFrames: Math.round(30 * 60 / MUSIC_BPM) * 4 },
       SyncedWord,
       // GAP 1: Spatial proximity (cursor magnetism)
       useCursorPos,
@@ -5011,6 +6498,8 @@ export function compileCode(
       InWorldText,
       // GAP 4: Auto depth-blur on popup/panel events
       FocusOrchestrator,
+      // Timeline Engine: centralized background dim + blur + camera zoom on a target
+      FocusController,
       // GAP 5: Ambient cursor annotation pills
       CursorAnnotationPill,
       // Interaction feedback + contextual bg
@@ -5026,6 +6515,20 @@ export function compileCode(
       DropdownMenu,
       CinematicCamera,
       SteppedCamera,
+      MacroCamera,
+      SelectiveFocus,
+      NarrationReveal,
+      FeatureContextBar,
+      NotificationCard,
+      usePathTraveler,
+      PaperPlane,
+      InAppChatPanel,
+      ConcentricRings,
+      ICON_PATHS,
+      DrawOnIcon,
+      FEATURE_HEADER,
+      OffthreadVideo,
+      STOCK_VIDEO_URL,
       TaskDetailPanel,
       ModalOverlay,
       InputField,
@@ -5096,6 +6599,9 @@ export function compileCode(
       SpotlightCutout,
       GhostHighlight,
       globalFrameOffset,
+      // Camera continuity — initial state from previous scene for seamless stitching
+      INITIAL_CAMERA_ZOOM,
+      INITIAL_CAMERA_PAN,
       // Phase 1: new scope components
       HandwrittenLabel,
       PersonCard,
