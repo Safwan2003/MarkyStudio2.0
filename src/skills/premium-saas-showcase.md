@@ -232,8 +232,35 @@ For showing web apps in a realistic browser window — use when the product is w
 
 ---
 
+## AGENCY UPGRADE MANDATES (added 2026-03)
+
+These mandates close the gap between "functional" and "WhatAStory-quality":
+
+**1. BrowserMockup for ALL screenshots — no raw `<img>` tags**
+When UI_SCHEMA is present: use `<ReconstructedAppShell uiSchema={UI_SCHEMA} brand={BRAND} />` — no screenshots at all.
+When showing screenshot directly: ALWAYS wrap in the browser chrome frame (traffic lights + URL bar) shown in "Browser Frame Variant" below. A raw `<img>` floating in the scene is a quality fail.
+
+**2. useVitality on hold-phase elements (>60f holds)**
+During the hold phase, the floating badge and UI panel must breathe:
+```tsx
+const vBadge = useVitality("float", 0);    // badge floats: translateY(v * -6px)
+const vPanel = useVitality("breathe", 1);  // panel breathes: scale(1 + v * 0.008)
+```
+
+**3. SteppedCamera when this scene has cursor interactions**
+If the LLM adds cursor waypoints to this scene, use usePreFocusCamera:
+```tsx
+const { zoom, panX, panY } = usePreFocusCamera(cursorTargetX, cursorTargetY, arrivalFrame - 15);
+```
+
+**4. rotateY(-8deg) for lighter tilt when using BrowserMockup**
+When the UI is in a browser frame (not raw isometric), use `rotateY(-8deg)` instead of `-12deg` for a more natural perspective.
+
+---
+
 ## Anti-Patterns
 
+- **NEVER use a raw `<img>` tag for product screenshots.** Always wrap in browser chrome or use ReconstructedAppShell. Raw screenshots look like a PowerPoint slide.
 - **NEVER center the UI and put text below.** It creates dead space and kills readability. Always use the 40/60 split.
 - **NEVER present the UI completely flat** unless doing a direct cursor interaction. Use `perspective:1200` + `rotateY(-12deg)` to create an isometric volume.
 - **NEVER fit the UI perfectly inside the 60% column.** Set width to `120%` so it bleeds off the right edge — this implies a larger, expansive software system.
@@ -246,8 +273,10 @@ For showing web apps in a realistic browser window — use when the product is w
 
 - [ ] Scene uses 40/60 split (not centered layout)
 - [ ] Text follows 3-Layer Stack: label → headline (MaskedReveal) → subline
-- [ ] UI container has `perspective:1200` + `rotateY(-12deg) rotateX(4deg)`
+- [ ] UI container has `perspective:1200` + `rotateY(-12deg) rotateX(4deg)` (or -8deg for browser frame)
 - [ ] UI shadow direction matches rotation (left tilt = shadow falls bottom-left)
 - [ ] UI width is `120%` to bleed off right edge
 - [ ] Floating badge uses High-Depth glass formula with directional borders
 - [ ] Scene wrapped in slow cinematic zoom (`1.0→1.05` over 150f)
+- [ ] **No raw `<img>` tags** — all screenshots inside browser frame or ReconstructedAppShell
+- [ ] Hold phase elements use `useVitality` (float/breathe/bounce)

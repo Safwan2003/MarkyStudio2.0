@@ -41,6 +41,11 @@ export const CursorShowcase = ({ BRAND, ATTACHED_IMAGES }) => {
     { x: 0.50, y: 0.80, label: "",               time: 154, action: "none"  },
   ];
 
+  // Optional but recommended: add elementType so CursorRenderer can switch icons
+  // elementType: "button" | "input" | "dropdown" | "card" | "nav"
+  // Example:
+  // { x:0.45, y:0.38, label:"Open Dashboard", time:30, action:"click", elementType:"nav" }
+
   // 2. TIMING CONSTANTS (MANDATORY EXACT VALUES)
   const TRAVEL = 22;   // fast, snappy travel
   const DWELL  = 10;   // pause before clicking — makes it feel human
@@ -138,8 +143,12 @@ export const CursorShowcase = ({ BRAND, ATTACHED_IMAGES }) => {
         {/* Chameleon overlays go inside this div at z=10 */}
       </div>
 
-      {/* Cursor layer (always outside zoom, at z=100) */}
-      <div style={{ position: "absolute", left: cursorX, top: cursorY, zIndex: 100, pointerEvents: "none" }}>
+      {/* Cursor layer (always outside zoom/camera wrappers, at z=150) */}
+      {/* Preferred: use CursorRenderer so icon switching is automatic */}
+      {/* <CursorRenderer steps={CURSOR_STEPS} uiSchema={UI_SCHEMA} /> */}
+
+      {/* Manual cursor rendering (fallback) */}
+      <div style={{ position: "absolute", left: cursorX, top: cursorY, zIndex: 150, pointerEvents: "none" }}>
 
         {/* Double ripple */}
         <div style={{ position: "absolute", width: 44, height: 44, borderRadius: "50%", border: `2px solid ${BRAND.primary || "#6366f1"}`, transform: `translate(-50%,-50%) scale(${ripple1Scale})`, opacity: ripple1Opacity, left: 8, top: 8 }} />
@@ -494,6 +503,13 @@ const focusRingOpacity = isHovering && inputTargeted ? hoverProgress : 0;
 
 ---
 
+## When to Use the Hand Cursor
+
+- Any cursor-engine scene for a SaaS explainer, tutorial, or product demo video
+- Particularly when the brand style is friendly, consumer-facing, or the video tone is "watch how easy this is"
+- **Do NOT** use for technical/dev tool brands — those look better with the default arrow cursor
+- The flat cartoon pointing-hand is the #1 cursor style in SaaS explainer videos (Fronter, Arcade, Loom). It reads as a human demonstrating the product rather than a system cursor.
+
 ## Anti-Patterns (NEVER do these)
 - **NEVER create an inline `<svg>` for the cursor**. Always use `{HAND_CURSOR}` from scope. Creating your own SVG is a quality violation.
 - **NEVER add headline text, subtitles, or floating text to a cursor scene**. The screenshot + cursor IS the content. Text goes in separate scenes.
@@ -505,12 +521,56 @@ const focusRingOpacity = isHovering && inputTargeted ? hoverProgress : 0;
 - **NEVER skip the click-zoom**. Even 1.0→1.06 centered on the click point adds enormous production value.
 - **NEVER show intent pill for short hops** (< 200px). Only show for significant cross-screen travel.
 
+## AGENCY UPGRADE MANDATES (added 2026-03)
+
+**SteppedCamera — MANDATORY for all cursor scenes**
+The camera must anticipate the cursor, not follow it. Use usePreFocusCamera:
+```tsx
+// Camera pre-locks on next target 15f before cursor arrives
+const nextTarget = CURSOR_STEPS[stepIndex + 1];
+const { zoom, panX, panY } = usePreFocusCamera(
+  nextTarget?.x ?? curX, nextTarget?.y ?? curY,
+  (nextTarget?.time ?? frame) - 15
+);
+```
+Camera sequence per click: drift toward target → hard lock (hold 20f) → cursor arrives → click.
+
+**Anticipation Rule — cursor arrives 10–15f before click**
+The hover pre-state (glow/focus-ring) MUST be visible for at least 10 frames before the click triggers. This is the #1 difference between agency-quality and robotic cursor demos. The `isHovering` state from useHumanizedCursor handles this automatically — just make sure the UI element reacts to `hoverProgress`.
+
+**Context-aware cursor icon (WhatAStory style)**
+- Use `CursorRenderer` (in scope) to auto-switch icons:
+  - buttons/tabs: hand cursor
+  - inputs: I‑beam
+  - elsewhere: pointer
+- If you render cursor manually, you must still switch the icon based on `elementType`.
+
+**Premium path smoothing**
+If you need UI elements to react to cursor proximity, compute cursor position with Catmull–Rom smoothing:
+```tsx
+const cursorPos = useCursorPos(CURSOR_STEPS, 30, { smoothing: "catmullRom", tension: 0.5 });
+```
+
+**Tactile Feedback — mandatory at every click**
+Every click MUST trigger `useInteractionFeedback`:
+```tsx
+const { squish, nudgeX, nudgeY, glowRadius } = useInteractionFeedback(clickFrame, "down");
+// Apply to clicked element: scale(squish) and GlowBloom behind it
+```
+
+**No raw screenshots**
+UI elements MUST use ReconstructedAppShell (when UI_SCHEMA present) or AppShell/TaskDetailPanel/ModalOverlay components. Never `<img>` tags in cursor scenes.
+
+---
+
 ## Quality Checklist
 - [ ] Hand cursor SVG (realistic pointing finger with knuckle crease), NOT arrow
 - [ ] TRAVEL = 22 frames, `stiffness: 160, damping: 12` (magnetic snap with overshoot)
 - [ ] `cubicBezier()` arc interpolation (not linear)
+- [ ] **usePreFocusCamera** active — camera leads cursor by 15f to each target
 - [ ] **Approach phase**: target element brightens as cursor decelerates into it (`approachPhase` 0→1)
-- [ ] **Hover pre-state**: focus ring / glow / scale-up appears when cursor arrives (`isHovering`, `hoverProgress`)
+- [ ] **Hover pre-state**: focus ring / glow / scale-up appears when cursor arrives (`isHovering`, `hoverProgress`) — minimum 10f before click
+- [ ] **useInteractionFeedback** on every click (squish + GlowBloom)
 - [ ] **Click squish**: element scales to 0.94 during `isClicking`, springs back
 - [ ] Intent pill visible during travel, fades as cursor decelerates into target
 - [ ] Intent pill only shows for travel distance > 200px
@@ -518,3 +578,4 @@ const focusRingOpacity = isHovering && inputTargeted ? hoverProgress : 0;
 - [ ] Click-zoom: screenshot scales 1.0→1.06, origin at click coordinates, eases back out
 - [ ] Cursor rendered OUTSIDE any zoom/camera wrapper (stays at z=100)
 - [ ] Step timing accounts for TRAVEL(22) + HOVER(17) + CLICK(4) + hold — minimum 43f per step (use 60f+ for readability)
+- [ ] No raw `<img>` tags — UI in AppShell/ReconstructedAppShell components

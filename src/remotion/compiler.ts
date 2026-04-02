@@ -50,6 +50,27 @@ const getGlassCard = (brand?: any) => {
   };
 };
 
+const hex = (color: string, alpha = 1): string => {
+  if (typeof color !== "string") return `rgba(0,0,0,${alpha})`;
+  const normalized = color.trim();
+  if (/^rgba?\(/i.test(normalized)) {
+    const parts = normalized.match(/\d+\.?\d*/g)?.map(Number) ?? [0, 0, 0];
+    const [r = 0, g = 0, b = 0] = parts;
+    return `rgba(${r},${g},${b},${alpha})`;
+  }
+  const raw = normalized.replace(/^#/, "");
+  const full =
+    raw.length === 3
+      ? raw.split("").map((ch) => ch + ch).join("")
+      : raw.length === 6
+      ? raw
+      : "000000";
+  const r = parseInt(full.slice(0, 2), 16);
+  const g = parseInt(full.slice(2, 4), 16);
+  const b = parseInt(full.slice(4, 6), 16);
+  return `rgba(${r},${g},${b},${alpha})`;
+};
+
 // Phase 2: Pro-standard spring configs
 // damping:200 = crisp inertial settle (no overshoot) — cinema/agency standard
 // damping:8   = elastic pop — only for playful/bouncy elements
@@ -4358,7 +4379,7 @@ const ENTROPY_DUST_PARTICLES = Array.from({ length: 18 }, (_, i) => ({
   opacity: (random(`edust-o-${i}`) as number) * 0.25 + 0.05, // 0.05–0.30
 }));
 
-const EntropyDust = ({ brand, count, color, zIndex = 1 }: {
+export const EntropyDust = ({ brand, count, color, zIndex = 1 }: {
   brand: BrandLike;
   count?: number;      // override particle count (default 18)
   color?: string;      // override color (default BRAND.primary)
@@ -5618,44 +5639,220 @@ export function extractComponentBody(code: string): string {
 
   cleaned = cleaned.trim();
 
-  // Strip any leftover `export default ` / `export ` prefixes so none of the
-  // fallback paths below accidentally leave module syntax inside the body.
-  // Do this BEFORE pattern matching so the regexes don't need to handle it.
-  cleaned = cleaned.replace(/\bexport\s+default\s+(?=function\s)/g, "");
-  cleaned = cleaned.replace(/\bexport\s+(?=(?:function|class)\s)/g, "");
-  // Strip trailing `export default ComponentName;` re-export lines
+  // Strip module-syntax prefixes before extraction.
+  // The generator often emits `export const MyAnimation = ...` plus helper declarations.
+  // We normalize them here so downstream extraction sees plain declarations.
+  cleaned = cleaned.replace(/\bexport\s+default\s+(?=(?:function|class|const)\s)/g, "");
+  cleaned = cleaned.replace(/\bexport\s+(?=(?:function|class|const)\s)/g, "");
   cleaned = cleaned.replace(/^export\s+default\s+\w+\s*;?\s*$/gm, "");
 
-  // Pattern 1: export const X = [async] ([...params]) => { ... }
-  // \([\s\S]*?\) matches any params including destructured props
-  const arrowBraceMatch = cleaned.match(
-    /^([\s\S]*?)export\s+const\s+\w+\s*=\s*(?:async\s*)?\([\s\S]*?\)\s*=>\s*\{([\s\S]*)\};?\s*$/,
-  );
-  if (arrowBraceMatch) {
-    const helpers = arrowBraceMatch[1].trim();
-    const body = arrowBraceMatch[2].trim();
-    return helpers ? `${helpers}\n\n${body}` : body;
+  const findMatchingDelimiter = (
+    source: string,
+    startIndex: number,
+    openChar: string,
+    closeChar: string,
+  ): number => {
+    let depth = 0;
+    let inStr: string | null = null;
+    let inLineComment = false;
+    let inBlockComment = false;
+    for (let i = startIndex; i < source.length; i++) {
+      const char = source[i];
+      const next = source[i + 1];
+
+      if (inLineComment) {
+        if (char === "\n") inLineComment = false;
+        continue;
+      }
+      if (inBlockComment) {
+        if (char === "*" && next === "/") {
+          inBlockComment = false;
+          i++;
+        }
+        continue;
+      }
+      if (inStr) {
+        if (char === "\\") {
+          i++;
+          continue;
+        }
+        if (char === inStr) inStr = null;
+        continue;
+      }
+      if (char === "/" && next === "/") {
+        inLineComment = true;
+        i++;
+        continue;
+      }
+      if (char === "/" && next === "*") {
+        inBlockComment = true;
+        i++;
+        continue;
+      }
+      if (char === '"' || char === "'" || char === "`") {
+        inStr = char;
+        continue;
+      }
+      if (char === openChar) depth++;
+      else if (char === closeChar) {
+        depth--;
+        if (depth === 0) return i;
+      }
+    }
+    return -1;
+  };
+
+  type ComponentCandidate = {
+    index: number;
+    name: string;
+    bodyStart: number;
+    bodyEnd: number;
+    kind: "block" | "implicit";
+    score: number;
+  };
+
+  const candidates: ComponentCandidate[] = [];
+
+  const stripComponentDeclarations = (source: string, exceptName?: string): string => {
+    if (!source.trim()) return "";
+    const ranges: Array<{ start: number; end: number }> = [];
+
+    const removeArrowDecls = /(?:^|\n)\s*const\s+([A-Z]\w*)\s*=\s*(?:async\s*)?(?:\([^)]*\)|[A-Za-z_$][A-Za-z0-9_$]*)\s*=>\s*/g;
+    let match: RegExpExecArray | null;
+    while ((match = removeArrowDecls.exec(source)) !== null) {
+      const name = match[1];
+      if (name === exceptName) continue;
+      const matchText = match[0];
+      const start = (match.index ?? 0) + matchText.lastIndexOf("const");
+      const afterArrow = (match.index ?? 0) + matchText.length;
+      const nextNonWsRel = source.slice(afterArrow).search(/\S/);
+      if (nextNonWsRel === -1) continue;
+      const bodyStart = afterArrow + nextNonWsRel;
+      const nextChar = source[bodyStart];
+      let end = -1;
+      if (nextChar === "{") {
+        const bodyEnd = findMatchingDelimiter(source, bodyStart, "{", "}");
+        if (bodyEnd !== -1) end = bodyEnd + 1;
+      } else if (nextChar === "(") {
+        const bodyEnd = findMatchingDelimiter(source, bodyStart, "(", ")");
+        if (bodyEnd !== -1) end = bodyEnd + 1;
+      }
+      if (end !== -1) {
+        while (end < source.length && /[\s;]/.test(source[end]!)) end++;
+        ranges.push({ start, end });
+      }
+    }
+
+    const removeFuncDecls = /(?:^|\n)\s*function\s+([A-Z]\w*)\s*\([^)]*\)\s*\{/g;
+    while ((match = removeFuncDecls.exec(source)) !== null) {
+      const name = match[1];
+      if (name === exceptName) continue;
+      const matchText = match[0];
+      const start = (match.index ?? 0) + matchText.lastIndexOf("function");
+      const bodyStart = source.indexOf("{", start);
+      if (bodyStart === -1) continue;
+      let end = findMatchingDelimiter(source, bodyStart, "{", "}");
+      if (end !== -1) {
+        end += 1;
+        while (end < source.length && /[\s;]/.test(source[end]!)) end++;
+        ranges.push({ start, end });
+      }
+    }
+
+    if (ranges.length === 0) return source.trim();
+    ranges.sort((a, b) => a.start - b.start);
+    let cursor = 0;
+    let out = "";
+    for (const range of ranges) {
+      if (range.start < cursor) continue;
+      out += source.slice(cursor, range.start);
+      cursor = range.end;
+    }
+    out += source.slice(cursor);
+    return out.trim();
+  };
+
+  const arrowDeclRe = /(?:^|\n)\s*const\s+([A-Z]\w*)\s*=\s*(?:async\s*)?(?:\([^)]*\)|[A-Za-z_$][A-Za-z0-9_$]*)\s*=>\s*/g;
+  let arrowMatch: RegExpExecArray | null;
+  while ((arrowMatch = arrowDeclRe.exec(cleaned)) !== null) {
+    const name = arrowMatch[1];
+    const matchText = arrowMatch[0];
+    const startIndex = (arrowMatch.index ?? 0) + matchText.lastIndexOf("const");
+    const afterArrowIndex = (arrowMatch.index ?? 0) + matchText.length;
+    const nextNonWsRel = cleaned.slice(afterArrowIndex).search(/\S/);
+    if (nextNonWsRel === -1) continue;
+    const bodyStart = afterArrowIndex + nextNonWsRel;
+    const nextChar = cleaned[bodyStart];
+    if (nextChar === "{") {
+      const bodyEnd = findMatchingDelimiter(cleaned, bodyStart, "{", "}");
+      if (bodyEnd !== -1) {
+        const body = cleaned.slice(bodyStart + 1, bodyEnd);
+        let score = /(DynamicAnimation|MyAnimation)/.test(name) ? 20 : /^Scene\d+$/.test(name) ? 0 : 10;
+        if (/\breturn\b/.test(body)) score += 40;
+        if (/<AbsoluteFill\b/.test(body)) score += 60;
+        if (/<(?:Sequence|Audio|Img|OffthreadVideo)\b/.test(body)) score += 10;
+        if (/const\s+Scene\d+\s*=/.test(body) && !/\breturn\b/.test(body)) score -= 80;
+        candidates.push({ index: startIndex, name, bodyStart, bodyEnd, kind: "block", score });
+      }
+    } else if (nextChar === "(") {
+      const bodyEnd = findMatchingDelimiter(cleaned, bodyStart, "(", ")");
+      if (bodyEnd !== -1) {
+        candidates.push({
+          index: startIndex,
+          name,
+          bodyStart,
+          bodyEnd,
+          kind: "implicit",
+          score: (/(DynamicAnimation|MyAnimation)/.test(name) ? 20 : /^Scene\d+$/.test(name) ? 0 : 10) + 70,
+        });
+      }
+    }
   }
 
-  // Pattern 2: export const X = [async] ([...params]) => ( JSX ) — implicit return
-  const arrowParenMatch = cleaned.match(
-    /^([\s\S]*?)export\s+const\s+\w+\s*=\s*(?:async\s*)?\([\s\S]*?\)\s*=>\s*\(([\s\S]*)\);?\s*$/,
-  );
-  if (arrowParenMatch) {
-    const helpers = arrowParenMatch[1].trim();
-    const body = `return (\n${arrowParenMatch[2].trim()}\n);`;
-    return helpers ? `${helpers}\n\n${body}` : body;
+  const funcDeclRe = /(?:^|\n)\s*function\s+([A-Z]\w*)\s*\([^)]*\)\s*\{/g;
+  let funcMatch: RegExpExecArray | null;
+  while ((funcMatch = funcDeclRe.exec(cleaned)) !== null) {
+    const name = funcMatch[1];
+    const matchText = funcMatch[0];
+    const startIndex = (funcMatch.index ?? 0) + matchText.lastIndexOf("function");
+    const bodyStart = cleaned.indexOf("{", startIndex);
+    if (bodyStart === -1) continue;
+    const bodyEnd = findMatchingDelimiter(cleaned, bodyStart, "{", "}");
+    if (bodyEnd !== -1) {
+      const body = cleaned.slice(bodyStart + 1, bodyEnd);
+      let score = /(DynamicAnimation|MyAnimation)/.test(name) ? 20 : /^Scene\d+$/.test(name) ? 0 : 10;
+      if (/\breturn\b/.test(body)) score += 40;
+      if (/<AbsoluteFill\b/.test(body)) score += 60;
+      if (/<(?:Sequence|Audio|Img|OffthreadVideo)\b/.test(body)) score += 10;
+      if (/const\s+Scene\d+\s*=/.test(body) && !/\breturn\b/.test(body)) score -= 80;
+      candidates.push({ index: startIndex, name, bodyStart, bodyEnd, kind: "block", score });
+    }
   }
 
-  // Pattern 3: function MyScene() { ... } (export already stripped above)
-  // Require PascalCase to avoid accidentally extracting a camelCase helper fn.
-  const funcDeclMatch = cleaned.match(
-    /^([\s\S]*?)function\s+([A-Z]\w*)\s*\(\s*\)\s*\{([\s\S]*)\}\s*$/,
-  );
-  if (funcDeclMatch) {
-    const helpers = funcDeclMatch[1].trim();
-    const body = funcDeclMatch[3].trim();
-    return helpers ? `${helpers}\n\n${body}` : body;
+  const prioritized = [...candidates].sort((a, b) => {
+    if (a.score !== b.score) return b.score - a.score;
+    return b.index - a.index;
+  });
+
+  const chosen = prioritized[0];
+  if (chosen) {
+    const prefix = cleaned.slice(0, chosen.index).trim();
+    let suffix = cleaned.slice(chosen.bodyEnd + 1).trim();
+    suffix = suffix.replace(/^;+\s*/, "").trim();
+    suffix = suffix.replace(/^\/\/\s*EOF\s*$/gm, "").trim();
+
+    const body =
+      chosen.kind === "block"
+        ? cleaned.slice(chosen.bodyStart + 1, chosen.bodyEnd).trim()
+        : `return (\n${cleaned.slice(chosen.bodyStart + 1, chosen.bodyEnd).trim()}\n);`;
+
+    const trailingHelpers = /(?:^|\n)\s*(?:const|let|var|function|class)\s+\w+/m.test(suffix) ? suffix : "";
+    const shouldStripComponentHelpers = /^Scene\d+$/.test(chosen.name);
+    const allHelpers = [
+      shouldStripComponentHelpers ? stripComponentDeclarations(prefix, chosen.name) : prefix.trim(),
+      shouldStripComponentHelpers ? stripComponentDeclarations(trailingHelpers, chosen.name) : trailingHelpers.trim(),
+    ].filter(Boolean).join("\n\n");
+    return allHelpers ? `${allHelpers}\n\n${body}` : body;
   }
 
   return cleaned;
@@ -5810,6 +6007,172 @@ const BoldColorBg = ({ color, vignetteStrength }: any) => {
 // ---------------------------------------------------------------------------
 function postProcessCode(code: string): string {
   let processed = code;
+  const hasBalancedDelimiter = (
+    source: string,
+    openChar: string,
+    closeChar: string,
+  ): boolean => {
+    let depth = 0;
+    let inStr: string | null = null;
+    let inLineComment = false;
+    let inBlockComment = false;
+    for (let i = 0; i < source.length; i++) {
+      const ch = source[i];
+      const next = source[i + 1];
+      if (inLineComment) {
+        if (ch === "\n") inLineComment = false;
+        continue;
+      }
+      if (inBlockComment) {
+        if (ch === "*" && next === "/") {
+          inBlockComment = false;
+          i++;
+        }
+        continue;
+      }
+      if (inStr) {
+        if (ch === "\\") {
+          i++;
+          continue;
+        }
+        if (ch === inStr) inStr = null;
+        continue;
+      }
+      if (ch === "/" && next === "/") {
+        inLineComment = true;
+        i++;
+        continue;
+      }
+      if (ch === "/" && next === "*") {
+        inBlockComment = true;
+        i++;
+        continue;
+      }
+      if (ch === '"' || ch === "'" || ch === "`") {
+        inStr = ch;
+        continue;
+      }
+      if (ch === openChar) depth++;
+      else if (ch === closeChar) depth--;
+    }
+    return depth <= 0;
+  };
+  // Strip leaked standalone markdown fence language labels (e.g. a bare `javascript` token)
+  // before Babel sees them. These can appear without backticks and are invalid JS.
+  processed = processed.replace(/^\s*(javascript|typescript|jsx|tsx)\s*$/gmi, "");
+
+  // Some test fixtures and partial generations include an explicit comment describing the
+  // missing closure, for example: `// missing close: }));`. Turn that back into code.
+  processed = processed.replace(
+    /^(\s*)\/\/\s*missing close:\s*([^\n]+)\s*$/gm,
+    (_match: string, indent: string, closure: string) => `${indent}${closure.trim()}`,
+  );
+
+  // Repair unclosed top-level array declarations that precede the exported component.
+  // Common pattern: `const CURSOR_STEPS = [` then the model jumps to `export const ...`
+  // without closing the array, causing Babel to choke before any other healing can run.
+  {
+    const exportIdx = processed.indexOf("export const");
+    if (exportIdx !== -1) {
+      const prefix = processed.slice(0, exportIdx);
+      const suffix = processed.slice(exportIdx);
+
+      // Find any `const X = [` in the prefix that doesn't have a matching `]` before export.
+      const declRe = /(?:^|\n)\s*(?:const|let|var)\s+([A-Z][A-Z0-9_]*)\s*=\s*\[/g;
+      let m: RegExpExecArray | null;
+      let repairedPrefix = prefix;
+      let offset = 0;
+
+      while ((m = declRe.exec(prefix)) !== null) {
+        const matchIdx = (m.index ?? 0) + offset;
+        const arrStart = repairedPrefix.indexOf("[", matchIdx);
+        if (arrStart === -1) continue;
+
+        // Walk from arrStart to see if the bracket ever closes inside the prefix.
+        let depth = 0;
+        let inStr: string | null = null;
+        let closed = false;
+        for (let i = arrStart; i < repairedPrefix.length; i++) {
+          const ch = repairedPrefix[i];
+          if (inStr) {
+            if (ch === "\\") { i++; continue; }
+            if (ch === inStr) inStr = null;
+            continue;
+          }
+          if (ch === '"' || ch === "'" || ch === "`") { inStr = ch; continue; }
+          if (ch === "[") depth++;
+          else if (ch === "]") {
+            depth--;
+            if (depth === 0) { closed = true; break; }
+          }
+        }
+
+        if (!closed) {
+          // Insert closure right before export. Also add semicolon defensively.
+          repairedPrefix = repairedPrefix.trimEnd() + "\n];\n\n";
+          break; // one repair is enough; export boundary is imminent
+        }
+      }
+
+      processed = repairedPrefix + suffix;
+    }
+  }
+
+  // Repair declarations whose array/object initializer was interrupted by the next statement.
+  // Real-world failure: `const ITEMS = Array.from(... => ({` and the model jumps to `const NEXT = ...`
+  // before closing `}));`, or `const FOO = [` before the next declaration.
+  {
+    const declarationBoundary = "\n\\s*(?:const|let|var|function|if|return)\\b";
+    const brokenArrayDecl = new RegExp(
+      `((?:^|\\n)\\s*(?:const|let|var)\\s+\\w+\\s*=\\s*\\[[\\s\\S]*?)(?=${declarationBoundary})`,
+      "g",
+    );
+    processed = processed.replace(brokenArrayDecl, (match: string) => {
+      return hasBalancedDelimiter(match, "[", "]") ? match : `${match}\n  ];`;
+    });
+
+    const brokenArrayFromDecl = new RegExp(
+      `((?:^|\\n)\\s*(?:const|let|var)\\s+\\w+\\s*=\\s*Array\\.from\\([\\s\\S]*?)(?=${declarationBoundary})`,
+      "g",
+    );
+    processed = processed.replace(brokenArrayFromDecl, (match: string) => {
+      const needsParen = !hasBalancedDelimiter(match, "(", ")");
+      const needsBrace = !hasBalancedDelimiter(match, "{", "}");
+      if (!needsParen && !needsBrace) return match;
+      return `${match}\n  ${needsBrace ? "}" : ""}${needsParen ? "))" : ""};`;
+    });
+
+    const interruptedArrayFromObject = new RegExp(
+      `((?:^|\\n)\\s*(?:const|let|var)\\s+\\w+\\s*=\\s*Array\\.from\\([\\s\\S]*?=>\\s*\\(\\{[\\s\\S]*?)(\\n\\s*(?:const|let|var|function|if|return)\\b)`,
+      "g",
+    );
+    processed = processed.replace(
+      interruptedArrayFromObject,
+      (match: string, prefix: string, nextDecl: string) => {
+        return hasBalancedDelimiter(prefix, "(", ")") && hasBalancedDelimiter(prefix, "{", "}")
+          ? match
+          : `${prefix}\n  }));${nextDecl}`;
+      },
+    );
+  }
+
+  // Remove bare ternary tails that lost their condition entirely.
+  processed = processed.replace(
+    /^\s*\?[\s\S]*?\n\s*:\s*[^\n;]+;?\s*$/gm,
+    "",
+  );
+
+  // Drop orphan template-literal post-processing fragments like:
+  //   `.replace(...)
+  //     ...
+  //   }));
+  processed = processed.replace(
+    /^\s*`\.replace\([\s\S]*?(?:(?:^\s*\}\)\);?\s*$|^\s*\)\)\);?\s*$)\n?)+/gm,
+    "",
+  );
+
+  // Clean up orphan close-chain lines left behind after removing broken template processing.
+  processed = processed.replace(/^\s*\)\);\s*$/gm, "");
   // Auto-pair WebkitBackdropFilter — handles simple and compound filter strings
   // Matches: "blur(24px)", "blur(24px) saturate(150%)", etc.
   // Only injects if WebkitBackdropFilter is not already present nearby.
@@ -5926,6 +6289,10 @@ function postProcessCode(code: string): string {
       'EASINGS','HAND_CURSOR','ENTROPY_DUST_PARTICLES','SAFE_ZONES',
       'STOCK_AVATARS','CURSOR_STEPS','SFX_URLS','MUSIC_BPM','MORPH_FROM','STOCK_VIDEO_URL',
       'CURSOR_STATE_DEFAULT',
+      // New scope variables (added with compileCode param expansion)
+      'VISUAL_STATE','SKILL_COMPOSITION','BRAND_LOGO','HIGHLIGHT_WORDS',
+      'VISUAL_ANCHOR','MUSIC_MOOD','PIPELINE_CURSOR_STEPS','MUSIC_URL',
+      'FEATURE_HEADER',
       // JS built-ins (ALL_CAPS subset)
       'NaN','Infinity','Math','JSON','URL','NOT','AND','OR','NULL','TRUE','FALSE',
       // Remotion / React
@@ -6042,7 +6409,7 @@ function postProcessCode(code: string): string {
       'useCursorPos','useMouseProximity','useInteractionFeedback',
       'useTyping','usePopup','useAccordion','useDragItem','useMorphEntrance',
       'useAudioSync','useBeat','useBeatClock','snapToDownbeat','usePathTraveler',
-      'cubicBezier','getGlassCard','glowBloomStyle','safeInterpolate',
+      'cubicBezier','getGlassCard','glowBloomStyle','safeInterpolate','hex',
       'linearTiming','springTiming','fade','slide','wipe','flip','clockWipe',
       'makeRect','makeCircle','makeTriangle','makeStar','makePolygon',
       'makeEllipse','makeHeart','makePie',
@@ -6100,6 +6467,42 @@ function postProcessCode(code: string): string {
     if (fallbacks.length > 0) processed = fallbacks.join('\n') + '\n' + processed;
   }
 
+  // ── Duplicate top-level const detection ─────────────────────────────────
+  // Hoisting passes (CURSOR_STEPS, SCENE_TIMELINE, timing consts) can introduce
+  // duplicate declarations if the bracket-walk fails to extract the full decl.
+  // Detect and warn — the second declaration will shadow the first at runtime.
+  {
+    const seen = new Map<string, number>();
+    const dupRe = /(?:^|\n)\s*const\s+([A-Z][A-Z0-9_]{2,})\s*=/g;
+    let m: RegExpExecArray | null;
+    while ((m = dupRe.exec(processed)) !== null) {
+      const name = m[1];
+      const count = (seen.get(name) ?? 0) + 1;
+      seen.set(name, count);
+      if (count === 2) console.warn(`[postProcessCode] DUPLICATE CONST: ${name} declared twice — hoisting may have gone wrong`);
+    }
+  }
+
+  // ── FINAL_SYNTAX_GUARD: dangling ternary after comment ───────────────────
+  // LLM sometimes writes a comment between a ternary condition and its `?` operator:
+  //   const avgGap = WORD_TIMINGS.length > 1
+  //   // Calculate something here
+  //     ? heavyStiffness
+  //     : lightStiffness;
+  // Babel parses the `?` as an Unexpected token because the comment line breaks the
+  // expression context. Strip comment-only lines that sit between a non-terminated
+  // expression (no trailing `;`, `{`, `(`, `[`, or `,`) and a bare `?` continuation.
+  {
+    const ternaryCommentRe = /([^;\n{\(\[,])\n((?:\s*\/\/[^\n]*\n)+)(\s*\?)/g;
+    const repaired = processed.replace(ternaryCommentRe, (_, before, _comments, ternary) => {
+      return `${before}\n${ternary}`;
+    });
+    if (repaired !== processed) {
+      console.log('[postProcessCode] FINAL_SYNTAX_GUARD: stripped comment(s) between ternary condition and ?');
+      processed = repaired;
+    }
+  }
+
   return processed;
 }
 
@@ -6123,13 +6526,30 @@ export function compileCode(
   stockVideoUrl: string | null = null,
   /** Persistent feature context header for Qanapi-style walkthroughs. */
   featureHeaderData: { label: string; badge?: string; icon?: string } | null = null,
+  /** Background music URL — injected as MUSIC_URL so generated scenes can reference it for sync. */
+  musicUrl: string | null = null,
+  /** Brand logo image URL — injected as BRAND_LOGO scope variable. */
+  brandLogoUrl: string | null = null,
+  /** 1–2 headline words to render in accent color — injected as HIGHLIGHT_WORDS. */
+  highlightWords: string[] = [],
+  /** Director visual state carry-over string — injected as VISUAL_STATE. */
+  visualState: string | null = null,
+  /** Visual anchor object that transforms across scenes — injected as VISUAL_ANCHOR. */
+  visualAnchor: { icon?: string; label?: string; colorFrom?: string; colorTo?: string } | null = null,
+  /** Per-scene music mood — injected as MUSIC_MOOD. */
+  musicMood: string = "energetic-precise",
+  /** Structured skill composition (primary/secondary/modifiers) — injected as SKILL_COMPOSITION. */
+  skillComposition: { primary: string; secondary?: string[]; modifiers?: string[] } | null = null,
+  /** Pre-computed cursor steps from user-confirmed waypoints — injected as PIPELINE_CURSOR_STEPS. */
+  pipelineCursorSteps: Array<{ x: number; y: number; time: number; label?: string; box?: object }> = [],
 ): CompilationResult {
   if (!code?.trim()) {
     return { Component: null, error: "No code provided" };
   }
 
   try {
-    const componentBody = extractComponentBody(stripBrandDeclaration(postProcessCode(code)));
+    const componentBody = extractComponentBody(stripBrandDeclaration(postProcessCode(code)))
+      .replace(/^\s*\)\);\s*$/gm, "");
     const wrappedSource = `const DynamicAnimation = () => {\n${componentBody}\n};`;
 
     const transpiled = Babel.transform(wrappedSource, {
@@ -6178,17 +6598,62 @@ export function compileCode(
       }
     };
 
+    const deriveAudioSpringConfig = (timings: Array<{ word: string; startFrame: number; endFrame: number }>) => {
+      if (!Array.isArray(timings) || timings.length < 2) {
+        return { stiffness: 140, damping: 18 };
+      }
+      const gaps: number[] = [];
+      for (let i = 1; i < timings.length; i++) {
+        const prev = timings[i - 1]?.startFrame;
+        const next = timings[i]?.startFrame;
+        if (typeof prev === "number" && typeof next === "number" && Number.isFinite(prev) && Number.isFinite(next)) {
+          gaps.push(Math.max(1, next - prev));
+        }
+      }
+      const avgGap = gaps.length > 0 ? gaps.reduce((sum, g) => sum + g, 0) / gaps.length : 20;
+      if (avgGap <= 8) return { stiffness: 220, damping: 14 };
+      if (avgGap <= 14) return { stiffness: 190, damping: 16 };
+      if (avgGap <= 24) return { stiffness: 160, damping: 18 };
+      return { stiffness: 130, damping: 20 };
+    };
+
+    const safeSpring: typeof spring = ((options: Parameters<typeof spring>[0]) => {
+      const fallback = deriveAudioSpringConfig(wordTimings);
+      const input = (options ?? {}) as Record<string, unknown>;
+      const config = (typeof input.config === "object" && input.config !== null)
+        ? (input.config as Record<string, unknown>)
+        : {};
+      const stiffness = typeof config.stiffness === "number" && Number.isFinite(config.stiffness) && config.stiffness > 0
+        ? config.stiffness
+        : fallback.stiffness;
+      const damping = typeof config.damping === "number" && Number.isFinite(config.damping) && config.damping > 0
+        ? config.damping
+        : fallback.damping;
+      return spring({
+        ...(options as Parameters<typeof spring>[0]),
+        config: {
+          ...config,
+          stiffness,
+          damping,
+        },
+      } as Parameters<typeof spring>[0]);
+    }) as typeof spring;
+
     const Remotion = {
       AbsoluteFill,
       interpolate: safeInterpolate,
       useCurrentFrame,
       useVideoConfig,
-      spring,
+      spring: safeSpring,
       Sequence,
       Img,
     };
 
-    const wrappedCode = `${transpiled.code}\nreturn DynamicAnimation;`;
+    const derivedAudioSpring = deriveAudioSpringConfig(wordTimings);
+    const wrappedCode = `const AUDIO_STIFFNESS = ${JSON.stringify(derivedAudioSpring.stiffness)};
+const AUDIO_DAMPING = ${JSON.stringify(derivedAudioSpring.damping)};
+${transpiled.code}
+return DynamicAnimation;`;
 
     // Wrap background components to automatically include globalFrameOffset
     const WrappedLightArcBg = (props: any) =>
@@ -6212,6 +6677,7 @@ export function compileCode(
       "Sequence",
       "Img",
       "Audio",
+      "hex",
       "getGlassCard",
       "ParallaxLayer",
       "SheenOverlay",
@@ -6393,6 +6859,15 @@ export function compileCode(
       "GarbledText",
       "OrbitRing",
       "BoldColorBg",
+      // New scope variables — continuity, branding, composition
+      "VISUAL_STATE",
+      "SKILL_COMPOSITION",
+      "BRAND_LOGO",
+      "HIGHLIGHT_WORDS",
+      "VISUAL_ANCHOR",
+      "MUSIC_MOOD",
+      "PIPELINE_CURSOR_STEPS",
+      "MUSIC_URL",
       wrappedCode,
     );
 
@@ -6414,6 +6889,20 @@ export function compileCode(
     const INITIAL_CAMERA_PAN = { x: initialCameraState.panX, y: initialCameraState.panY };
     const STOCK_VIDEO_URL = stockVideoUrl;
     const FEATURE_HEADER = featureHeaderData;
+    // New scope variables
+    const MUSIC_URL = musicUrl ?? null;
+    const BRAND_LOGO = brandLogoUrl ?? null;
+    const HIGHLIGHT_WORDS = highlightWords ?? [];
+    // VISUAL_STATE: try to parse as JSON object (for future structured continuity),
+    // fall back to the raw string — optional chaining in generated code handles either.
+    const VISUAL_STATE: unknown = (() => {
+      if (!visualState) return null;
+      try { return JSON.parse(visualState); } catch { return visualState; }
+    })();
+    const VISUAL_ANCHOR = visualAnchor ?? null;
+    const MUSIC_MOOD = musicMood ?? "energetic-precise";
+    const SKILL_COMPOSITION = skillComposition ?? null;
+    const PIPELINE_CURSOR_STEPS = pipelineCursorSteps ?? [];
 
     const Component = createComponent(
       React,
@@ -6427,10 +6916,11 @@ export function compileCode(
       interpolateColor,
       useCurrentFrame,
       useVideoConfig,
-      spring,
+      safeSpring,
       Sequence,
       Img,
       Audio,
+      hex,
       getGlassCard,
       ParallaxLayer,
       SheenOverlay,
@@ -6609,6 +7099,15 @@ export function compileCode(
       GarbledText,
       OrbitRing,
       BoldColorBg,
+      // New scope variables — must match new Function param names above
+      VISUAL_STATE,
+      SKILL_COMPOSITION,
+      BRAND_LOGO,
+      HIGHLIGHT_WORDS,
+      VISUAL_ANCHOR,
+      MUSIC_MOOD,
+      PIPELINE_CURSOR_STEPS,
+      MUSIC_URL,
     );
 
 

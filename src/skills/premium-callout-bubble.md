@@ -327,7 +327,7 @@ const COMMENTS = [
 - Any product demo scene where the cursor interacts with a UI element and you want to show the feature's effect (e.g., adding a comment, leaving feedback, annotating a design)
 - Collaboration tool demos (Figma, Notion, Linear, Fronter)
 - When showing multi-user or async workflows — the comment card implies "someone else did this"
-- Pair with `premium-hand-cursor` or `premium-cursor-engine` — the cursor triggers the callout bubble
+- Pair with `premium-cursor-engine` — the cursor triggers the callout bubble
 - **Do NOT** use as a tooltip replacement — tooltips are small and appear on hover; callout bubbles are full cards that appear after a click action
 
 ## Positioning Relative to Reconstructed Components

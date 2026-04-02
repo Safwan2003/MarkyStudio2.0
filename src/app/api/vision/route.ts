@@ -46,6 +46,94 @@ interface UIElement {
   w: number;
   h: number;
   elementType: string;
+  /** Optional stable ID mapping (when we can infer one) */
+  id?: string;
+}
+
+function clamp01(v: number) {
+  return Math.max(0, Math.min(1, typeof v === "number" ? v : 0));
+}
+
+function normMaybe1000(v: number): number {
+  // If the model returned 0–1, keep as-is; if it returned 0–1000, normalize.
+  return v > 2 ? v / 1000 : v;
+}
+
+// Best-effort stable ID inference without UI_SCHEMA.
+// This is intentionally conservative: only emit IDs when we're confident.
+function inferStableId(el: UIElement): string | undefined {
+  const label = (el.label ?? "").toLowerCase();
+  if (!label) return undefined;
+
+  // Canonical IDs supported by resolveElementPosition() in compiler scope.
+  if (label.includes("search")) return "search-bar";
+  if (label.includes("cta") || label.includes("get started") || label.includes("start") || label.includes("request") || label.includes("quote")) {
+    return "cta-button";
+  }
+  if (label.includes("chart") || label.includes("analytics")) return "chart";
+  if (label.includes("hero") || label.includes("title")) return "hero-title";
+
+  // Sidebar/topnav heuristics are too unreliable without UI_SCHEMA; skip.
+  return undefined;
+}
+
+// Map a detected element to a canonical UI_SCHEMA ID by snapping to known layout grids.
+// This mirrors resolveElementPosition() in `src/remotion/compiler.ts` so ids and snapping agree.
+function inferStableIdFromUiSchema(
+  el: UIElement,
+  uiSchema: any,
+): string | undefined {
+  if (!uiSchema) return undefined;
+  const layout = uiSchema?.layout?.type ?? "sidebar-main";
+
+  // Mirror compiler assumptions
+  const sidebarW = layout === "sidebar-main" ? 0.18 : 0;
+  const contentX = sidebarW + (1 - sidebarW) * 0.5;
+
+  const x = el.x;
+  const y = el.y;
+  const type = (el.elementType ?? "").toLowerCase();
+
+  // Named elements (strong priors)
+  if (type === "input" && y < 0.09) return "search-bar";
+  if (type === "button" && y > 0.64) return "cta-button";
+
+  // Top nav items (y band near topbar)
+  if (layout === "topnav-main" || (y >= 0.0 && y <= 0.10 && x >= 0.12)) {
+    const n = Math.round((x - 0.18) / 0.12);
+    if (Number.isFinite(n) && n >= 0 && n <= 8) return `topnav-item-${n}`;
+  }
+
+  // Sidebar items (x in sidebar band)
+  if (layout === "sidebar-main" && x <= sidebarW + 0.03) {
+    const n = Math.round((y - 0.28) / 0.065);
+    if (Number.isFinite(n) && n >= 0 && n <= 12) return `sidebar-item-${n}`;
+  }
+
+  // Metric cards band (y around 0.32)
+  if (y >= 0.24 && y <= 0.42 && x >= sidebarW + 0.05) {
+    const cols = 3;
+    const relX = (x - sidebarW) / Math.max(0.0001, (1 - sidebarW));
+    const col = Math.max(0, Math.min(cols - 1, Math.floor(relX * cols)));
+    return `metric-card-${col}`;
+  }
+
+  // Table rows band
+  if (y >= 0.34 && y <= 0.70 && Math.abs(x - contentX) < 0.28) {
+    const n = Math.round((y - 0.38) / 0.065);
+    if (Number.isFinite(n) && n >= 0 && n <= 10) return `table-row-${n}`;
+  }
+
+  // Form fields band
+  if (type === "input" && y >= 0.26 && y <= 0.75) {
+    const n = Math.round((y - 0.35) / 0.085);
+    if (Number.isFinite(n) && n >= 0 && n <= 8) return `form-field-${n}`;
+  }
+
+  // Chart
+  if (type === "card" && y >= 0.48 && y <= 0.62) return "chart";
+
+  return undefined;
 }
 
 function parseDataUrl(dataUrl: string): { mimeType: string; data: string } | null {
@@ -55,7 +143,7 @@ function parseDataUrl(dataUrl: string): { mimeType: string; data: string } | nul
 }
 
 export async function POST(req: Request) {
-  const { image } = await req.json();
+  const { image, uiSchema } = await req.json();
 
   const apiKey = process.env.GOOGLE_GENERATIVE_AI_API_KEY;
   if (!apiKey) {
@@ -112,6 +200,7 @@ export async function POST(req: Request) {
                   w: { type: Type.NUMBER },
                   h: { type: Type.NUMBER },
                   elementType: { type: Type.STRING },
+                  id: { type: Type.STRING },
                 },
                 required: ["label", "x", "y", "w", "h", "elementType"],
               },
@@ -122,19 +211,17 @@ export async function POST(req: Request) {
       },
     });
 
-    const data = JSON.parse(result.text ?? "{}") as { elements: UIElement[] };
-    // Normalize from 0–1000 scale back to 0–1
-    // If model returned 0–1 values (all < 2), keep as-is
-    const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
+    if (!result.text) console.warn("[vision] LLM returned empty text");
+    let data: { elements: UIElement[] };
+    try { data = JSON.parse(result.text ?? "{}"); } catch (e) { console.error("[vision] JSON.parse failed. Raw:", result.text?.slice(0, 500)); throw e; }
     const elements = (data.elements ?? []).slice(0, 10).map((el) => {
-      const scale = el.x > 2 || el.y > 2 || el.w > 2 || el.h > 2 ? 1000 : 1;
-      return {
-        ...el,
-        x: clamp01(el.x / scale),
-        y: clamp01(el.y / scale),
-        w: clamp01(el.w / scale),
-        h: clamp01(el.h / scale),
-      };
+      const x = clamp01(normMaybe1000(el.x));
+      const y = clamp01(normMaybe1000(el.y));
+      const w = clamp01(normMaybe1000(el.w));
+      const h = clamp01(normMaybe1000(el.h));
+      const base: UIElement = { ...el, x, y, w, h };
+      const id = el.id ?? inferStableIdFromUiSchema(base, uiSchema) ?? inferStableId(base);
+      return id ? { ...base, id } : base;
     });
 
     console.log(`Vision detected ${elements.length} UI elements (0-1000 scale normalized)`);

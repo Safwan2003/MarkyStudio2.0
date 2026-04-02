@@ -65,7 +65,7 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
     const interval = setInterval(clearAllMarkers, 100);
 
     return () => clearInterval(interval);
-  }, [isStreaming, code]);
+  }, [isStreaming]);
 
   const handleEditorMount = (
     editorInstance: editor.IStandaloneCodeEditor,

@@ -1,14 +1,7 @@
 import { examples } from "@/examples/code";
 
 // Import markdown files at build time
-import threeDSkill from "./3d.md";
-import chartsSkill from "./charts.md";
-import messagingSkill from "./messaging.md";
 import sequencingSkill from "./sequencing.md";
-import socialMediaSkill from "./social-media.md";
-import springPhysicsSkill from "./spring-physics.md";
-import transitionsSkill from "./transitions.md";
-import typographySkill from "./typography.md";
 // Premium template-derived skills
 import premiumSaasHookSkill from "./premium-saas-hook.md";
 import premiumSaasShowcaseSkill from "./premium-saas-showcase.md";
@@ -35,7 +28,6 @@ import premiumDataFlowAbstractSkill from "./premium-data-flow-abstract.md";
 import premium3dIsometricExplodeSkill from "./premium-3d-isometric-explode.md";
 import premiumAmbientEnvironmentSkill from "./premium-ambient-environment.md";
 import premiumShapeMorphTransitionSkill from "./premium-shape-morph-transition.md";
-import premiumHandCursorSkill from "./premium-hand-cursor.md";
 import premiumCalloutBubbleSkill from "./premium-callout-bubble.md";
 import premiumResponsiveViewportSkill from "./premium-responsive-viewport.md";
 import premiumDotMatrixBgSkill from "./premium-dot-matrix-bg.md";
@@ -80,17 +72,13 @@ import premiumFloatingIconChaosSkill from "./premium-floating-icon-chaos.md";
 import premiumNotificationScatterSkill from "./premium-notification-scatter.md";
 import premiumInAppChatSkill from "./premium-in-app-chat.md";
 import premiumMultiViewWalkthroughSkill from "./premium-multi-view-walkthrough.md";
+import premiumIsometricSpaceSkill from "./premium-isometric-space.md";
+import premiumSingleShotMorphingSkill from "./premium-single-shot-morphing.md";
+import premiumInteractionSfxSkill from "./premium-interaction-sfx.md";
 
 // Guidance skills (markdown files with patterns/rules)
 const GUIDANCE_SKILLS = [
-  "charts",
-  "typography",
-  "social-media",
-  "messaging",
-  "3d",
-  "transitions",
   "sequencing",
-  "spring-physics",
   // Premium template-derived skills
   "premium-saas-hook",
   "premium-saas-showcase",
@@ -117,7 +105,6 @@ const GUIDANCE_SKILLS = [
   "premium-3d-isometric-explode",
   "premium-ambient-environment",
   "premium-shape-morph-transition",
-  "premium-hand-cursor",
   "premium-callout-bubble",
   "premium-responsive-viewport",
   "premium-dot-matrix-bg",
@@ -162,6 +149,9 @@ const GUIDANCE_SKILLS = [
   "premium-notification-scatter",
   "premium-in-app-chat",
   "premium-multi-view-walkthrough",
+  "premium-isometric-space",
+  "premium-single-shot-morphing",
+  "premium-interaction-sfx",
 ] as const;
 
 // Example skills (complete working code references)
@@ -183,14 +173,7 @@ export type SkillName = (typeof SKILL_NAMES)[number];
 
 // Map guidance skill names to imported content
 const guidanceSkillContent: Record<(typeof GUIDANCE_SKILLS)[number], string> = {
-  charts: chartsSkill,
-  typography: typographySkill,
-  "social-media": socialMediaSkill,
-  messaging: messagingSkill,
-  "3d": threeDSkill,
-  transitions: transitionsSkill,
   sequencing: sequencingSkill,
-  "spring-physics": springPhysicsSkill,
   // Premium template-derived skills
   "premium-saas-hook": premiumSaasHookSkill,
   "premium-saas-showcase": premiumSaasShowcaseSkill,
@@ -217,7 +200,6 @@ const guidanceSkillContent: Record<(typeof GUIDANCE_SKILLS)[number], string> = {
   "premium-3d-isometric-explode": premium3dIsometricExplodeSkill,
   "premium-ambient-environment": premiumAmbientEnvironmentSkill,
   "premium-shape-morph-transition": premiumShapeMorphTransitionSkill,
-  "premium-hand-cursor": premiumHandCursorSkill,
   "premium-callout-bubble": premiumCalloutBubbleSkill,
   "premium-responsive-viewport": premiumResponsiveViewportSkill,
   "premium-dot-matrix-bg": premiumDotMatrixBgSkill,
@@ -262,6 +244,9 @@ const guidanceSkillContent: Record<(typeof GUIDANCE_SKILLS)[number], string> = {
   "premium-notification-scatter": premiumNotificationScatterSkill,
   "premium-in-app-chat": premiumInAppChatSkill,
   "premium-multi-view-walkthrough": premiumMultiViewWalkthroughSkill,
+  "premium-isometric-space": premiumIsometricSpaceSkill,
+  "premium-single-shot-morphing": premiumSingleShotMorphingSkill,
+  "premium-interaction-sfx": premiumInteractionSfxSkill,
 };
 
 // Map example skill names to example IDs
@@ -323,7 +308,7 @@ Guidance categories (patterns and rules):
 Premium SaaS / Agency-quality template skills:
 - premium-saas-hook: SaaS product intro, brand reveal, floating brand/app icons orbiting a hero device, laptop mockup with screen inset, chat bubble overlays, dark hero background
 - premium-saas-showcase: product dashboard demo, browser window with OS chrome (traffic lights + URL bar), slide-up entrance, kanban board, stat cards, SaaS dashboard, product screenshot showcase
-- premium-cursor-engine: cursor walkthrough, clicking UI elements, mouse pointer animation, interaction demo, "watch me use the app", click ripple, cursor spring movement between targets
+- premium-cursor-engine: cursor walkthrough, clicking UI elements, mouse pointer animation, interaction demo, "watch me use the app", click ripple, cursor spring movement between targets, cartoon hand pointer, pointing finger cursor, explainer video cursor, hand cursor, flat hand icon, click hand animation, friendly cursor, tutorial cursor
 - premium-team-orbit: floating team avatars with role badges, "meet the team", collaboration scene, problem scene with chaotic team, orbiting people/personas around a product
 - premium-camera-zoom: hero zoom into laptop/device screen, cinematic push-in reveal, slow continuous camera pan, device mockup to fullscreen transition, "zoom into product"
 - premium-social-proof: trust scene, glass notification cards, integration logos orbiting, "task completed" badges, collaborator count, social proof testimonials, stacked avatars
@@ -347,7 +332,6 @@ Premium SaaS / Agency-quality template skills:
 - premium-3d-isometric-explode: isometric, 3d layers, explode view, screenshot layers, 3d depth, css 3d, perspective reveal, architecture reveal, layer separation, panels floating, isometric explode, 3d screenshot, floating panels, depth reveal
 - premium-ambient-environment: breathing background, ambient particles, floating particles, mesh gradient, orbiting orbs, particle system, aurora background, bokeh background, living background, atmospheric depth, ambient glow, dynamic background
 - premium-shape-morph-transition: color flood fill, shape morph, clip path expand, button click transition, scene transition, color wipe, explosive transition, circle expand, morph cut, fluid transition, shape expand, color reveal
-- premium-hand-cursor: cartoon hand pointer, pointing finger cursor, explainer video cursor, hand cursor, flat hand icon, click hand animation, friendly cursor, tutorial cursor
 - premium-callout-bubble: floating comment card, annotation bubble, collaboration popup, comment overlay, feedback card, review annotation, mention card, typing annotation, slide-in panel, comments panel
 - premium-responsive-viewport: responsive demo, device switcher, viewport toggle, mobile preview, tablet view, responsive layout, browser toolbar, device icons, responsive product demo, viewport width
 - premium-dot-matrix-bg: dot grid background, halftone texture, dot matrix, light background, clean background, polka dot texture, minimal texture, floating accent dots, dash marks, light theme background, airy background
@@ -358,6 +342,7 @@ Premium SaaS / Agency-quality template skills:
 - premium-icon-arc-reveal: icon arc, SVG arc draw, circular arc, brand icon hook, dark intro, neon icon, arc animation, strokeDashoffset circle, concentric rings, icon reveal, heartbeat icon, dark hook, cinematic intro, shape mask reveal, neon glow
 - premium-floating-path-nodes: floating nodes, outline circles, dark nodes, ghost circles, nebula background, aurora background, dotted path, traveling dot, scattered circles, dark problem scene, data silos, disconnected systems, node graph dark
 - premium-confetti-celebration: confetti, celebration, falling particles, product screenshot party, launch scene, deal closed, success scene, colorful particles, confetti rain, festive, achievement
+- premium-live-action-composite: live action composite, cinematic video background, real video background, overlay on footage, cinematic composite, floating over video, real world footage
 - premium-real-photo-device: real photo background, product in context, device in environment, tablet mockup photo, phone mockup realistic, office photo device, social proof product, real world product, dealership tablet, environment mockup
 - premium-icon-bubble-row: icon bubbles, colored circles, category icons, tech stack, feature categories, use cases, large circles with icons, bubble row, arc accent, spring pop circles, customer experience categories, AI NLP circles
 - premium-integration-wall: integration cards, app logos, data sources, scattered cards, app wall, integration showcase, zapier zendesk cards, tool cards, scattered app icons, integration explosion, data sources wall, colored background cards

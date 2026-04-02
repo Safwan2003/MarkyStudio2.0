@@ -24,11 +24,17 @@ function codeHash(code: string): string {
 // into /api/generate as an errorCorrection context for up to 3 iterations.
 // ---------------------------------------------------------------------------
 
-const AUDIT_CODE_PROMPT = `You are a senior motion graphics art director auditing AI-generated Remotion animation code.
+const AUDIT_CODE_PROMPT = `You are a senior motion graphics art director and creative director auditing AI-generated Remotion animation code.
 
-Your job is to review the code BEFORE it renders and catch visual quality issues that would make the output look amateur or broken.
+Your job is to review the code and catch both visual quality issues AND strategic narrative failures.
 
-## VISUAL RUBRIC — check each item:
+## 1. NARRATIVE & STRATEGY AUDIT (Director Layer)
+- **Core Transformation**: Does the voiceoverText and headline move the needle toward the "Core Transformation" defined in the brief?
+- **Visual Metaphor**: If this is a hook/problem scene, does it use the abstract/chaos visual metaphor requested? (Raw UI in a hook = -20 points).
+- **Visual Anchor**: Is the VISUAL_ANCHOR (icon/label/color) present and in the correct state (colorFrom for pain, colorTo for resolution)?
+- **Visual State**: Does the code respect the VISUAL_STATE carry-over instructions (e.g. keeping sidebar mounted, matching zoom level)?
+
+## 2. VISUAL RUBRIC — catch amateur/broken patterns:
 
 ### Layout & Composition
 - Does AbsoluteFill have a background color set from frame 0? (missing = flickering black flash)
@@ -99,6 +105,8 @@ interface AuditRequest {
   code: string;
   prompt: string;
   brand?: Record<string, string>;
+  creativeBrief?: import("@/types/generation").CreativeBrief;
+  backbone?: import("@/types/generation").NarrativeBackbone;
   /** Optional base64 data URL of a rendered mid-scene frame for visual evaluation. */
   frameImage?: string;
 }
@@ -117,7 +125,29 @@ function parseDataUrl(dataUrl: string): { mimeType: string; data: string } | nul
 }
 
 export async function POST(req: Request) {
-  const { code, prompt, brand, frameImage }: AuditRequest = await req.json();
+  const body = await req.json();
+
+  // Fast path: prewarm cache for scenes that passed fastQualityCheck
+  if (body._prewarm && body.code?.trim()) {
+    const syntheticResult: AuditResult = {
+      passed: true,
+      score: body.score ?? 80,
+      issues: [],
+      fixes: [],
+    };
+    const key = codeHash(body.code);
+    if (auditCache.size >= MAX_AUDIT_CACHE) {
+      const firstKey = auditCache.keys().next().value;
+      if (firstKey) auditCache.delete(firstKey);
+    }
+    auditCache.set(key, { result: syntheticResult, ts: Date.now() });
+    return new Response(JSON.stringify(syntheticResult), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+
+  const { code, prompt, brand, frameImage, creativeBrief, backbone }: AuditRequest = body;
 
   // ── Code audit cache check (skip for visual audits — frame changes each time) ──
   const isVisualAuditRequest = !!frameImage;
@@ -154,13 +184,17 @@ export async function POST(req: Request) {
     ? `\n\nBRAND TOKENS:\n${Object.entries(brand).map(([k, v]) => `- ${k}: ${v}`).join("\n")}`
     : "";
 
+  const strategyBlock = creativeBrief || backbone
+    ? `\n\nSTRATEGIC CONTEXT:\n${creativeBrief ? `Creative Brief: ${JSON.stringify(creativeBrief)}\n` : ""}${backbone ? `Narrative Backbone: ${JSON.stringify(backbone)}\n` : ""}`
+    : "";
+
   // If a rendered frame is provided, do VISUAL audit (more accurate than code review)
   const parsedFrame = frameImage ? parseDataUrl(frameImage) : null;
   const isVisualAudit = !!parsedFrame;
 
   const reviewText = isVisualAudit
-    ? `## SCENE PROMPT:\n${prompt}${brandBlock}\n\nEvaluate this rendered animation frame for visual quality.`
-    : `## SCENE PROMPT:\n${prompt}${brandBlock}\n\n## GENERATED CODE:\n\`\`\`tsx\n${code}\n\`\`\`\n\nAudit this code against the visual quality rubric.`;
+    ? `## SCENE PROMPT:\n${prompt}${brandBlock}${strategyBlock}\n\nEvaluate this rendered animation frame for visual quality.`
+    : `## SCENE PROMPT:\n${prompt}${brandBlock}${strategyBlock}\n\n## GENERATED CODE:\n\`\`\`tsx\n${code}\n\`\`\`\n\nAudit this code against the rubric.`;
 
   const parts: Array<{ text: string } | { inlineData: { mimeType: string; data: string } }> = [
     { text: reviewText },
@@ -189,7 +223,9 @@ export async function POST(req: Request) {
       },
     });
 
-    const audit = JSON.parse(result.text ?? "{}") as AuditResult;
+    if (!result.text) console.warn("[audit] LLM returned empty text");
+    let audit: AuditResult;
+    try { audit = JSON.parse(result.text ?? "{}"); } catch (e) { console.error("[audit] JSON.parse failed. Raw:", result.text?.slice(0, 500)); throw e; }
     console.log(`Audit: score=${audit.score}, passed=${audit.passed}, issues=${audit.issues.length}`);
 
     // Store in cache for code audits only

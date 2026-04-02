@@ -34,17 +34,51 @@ export async function POST(req: Request) {
     return Response.json({ error: "GOOGLE_GENERATIVE_AI_API_KEY is not set." }, { status: 400 });
   }
 
-  let body: { code: string; prompt: string };
+  let body: {
+    code: string;
+    prompt: string;
+    issues?: string[];
+    intent?: string;
+    skills?: string[];
+  };
   try {
     body = await req.json();
   } catch {
     return Response.json({ error: "Invalid JSON body" }, { status: 400 });
   }
 
-  const { code, prompt } = body;
+  const { code, prompt, issues } = body;
 
   if (!code?.trim() || !prompt?.trim()) {
     return Response.json({ error: "code and prompt are required" }, { status: 400 });
+  }
+
+  // Fast-path: if the client already identified concrete issues (fastQualityCheck),
+  // return a targeted fix prompt without spending an LLM call.
+  if (Array.isArray(issues) && issues.length > 0) {
+    const FIX_MAP: Record<string, string> = {
+      "missing-headline-animation":
+        "Wrap ALL scene headlines in <MaskedReveal startFrame={20}> with spring-driven motion — never use plain opacity fade on headlines",
+      "flat-ui-no-depth":
+        "Wrap the primary UI element in <TiltWrapper tiltX={-1.5} tiltY={2}> or <DepthStack ...> — flat cards without perspective are a quality fail",
+      "static-background":
+        `Add background layer as FIRST child of AbsoluteFill: for light themes use <LightArcBg brand={BRAND} />, for dark themes use <MeshGradientBg /> or a branded gradient layer`,
+      "small-font":
+        "Hook scene headline must be ≥ 96px fontSize — increase the hero text size",
+      "missing-cursor-steps":
+        "Feature scenes require cursor interaction — define CURSOR_STEPS array with at least 3 waypoints targeting actual UI elements",
+    };
+
+    const fixLines = issues.map((issue: string) => {
+      // Exact match first, then prefix fallback
+      const knownKey = FIX_MAP[issue] !== undefined
+        ? issue
+        : Object.keys(FIX_MAP).find((k) => issue.toLowerCase().startsWith(k.split("-")[0]));
+      return knownKey ? FIX_MAP[knownKey] : `Fix: ${issue}`;
+    });
+
+    const fixPrompt = `## MANDATORY FIXES — apply ALL of these:\n\n${fixLines.map((f, i) => `${i + 1}. ${f}`).join("\n\n")}`;
+    return Response.json({ hasIssues: true, fixPrompt }, { status: 200 });
   }
 
   const ai = new GoogleGenAI({ apiKey });
@@ -77,10 +111,9 @@ export async function POST(req: Request) {
       },
     });
 
-    const parsed = JSON.parse(result.text ?? "{}") as {
-      hasIssues: boolean;
-      fixPrompt: string;
-    };
+    if (!result.text) console.warn("[critique] LLM returned empty text");
+    let parsed: { hasIssues: boolean; fixPrompt: string };
+    try { parsed = JSON.parse(result.text ?? "{}"); } catch (e) { console.error("[critique] JSON.parse failed. Raw:", result.text?.slice(0, 500)); throw e; }
 
     console.log(`Critique: hasIssues=${parsed.hasIssues}${parsed.hasIssues ? `, fix="${(parsed.fixPrompt ?? "").slice(0, 80)}..."` : ""}`);
     return Response.json(
@@ -92,7 +125,7 @@ export async function POST(req: Request) {
     );
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
-    const isRateLimit = msg.includes("429") || msg.includes("RESOURCE_EXHAUSTED");
+    const isRateLimit = msg.includes("429") || msg.includes("RESOURCE_EXHAUSTED") || msg.includes("503") || msg.includes("UNAVAILABLE");
     // Always return 200 so the generation hook doesn't treat this as a fatal error.
     // On rate-limit: silently pass (don't waste a retry slot on a quota issue).
     console.warn(`Critique ${isRateLimit ? "rate-limited (skipping)" : "error"} (non-fatal):`, msg.slice(0, 120));

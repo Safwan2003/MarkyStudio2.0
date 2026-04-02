@@ -16,6 +16,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 interface CursorWaypointEditorProps {
     image: string;
     waypoints: CursorWaypoint[];
+    suggestedLabels?: string[];
     onChange: (waypoints: CursorWaypoint[]) => void;
     onClose: () => void;
 }
@@ -51,6 +52,7 @@ function getNormalized(
 export function CursorWaypointEditor({
     image,
     waypoints,
+    suggestedLabels = [],
     onChange,
     onClose,
 }: CursorWaypointEditorProps) {
@@ -180,6 +182,12 @@ export function CursorWaypointEditor({
         if (editingLabelIdx === null) return;
         updateField(editingLabelIdx, "label", editingLabelVal.trim() || local[editingLabelIdx].label);
         setEditingLabelIdx(null);
+    };
+
+    const applySuggestedLabel = (index: number, label: string) => {
+        if (!local[index]) return;
+        updateField(index, "label", label);
+        setSelectedIndex(index);
     };
 
     // ── Reorder drag ──────────────────────────────────────────────────────────
@@ -415,6 +423,41 @@ export function CursorWaypointEditor({
                                         </button>
                                     )}
                                 </div>
+
+                                {suggestedLabels.length > 0 && (
+                                    <div>
+                                        <label className="text-[10px] text-white/40 block mb-1">Narrative Suggestions</label>
+                                        <div className="space-y-1.5">
+                                            {suggestedLabels.map((label, idx) => (
+                                                <div
+                                                    key={`${idx}-${label}`}
+                                                    className={`rounded border px-2 py-1.5 ${idx === selectedIndex
+                                                        ? "border-indigo-500/40 bg-indigo-500/10"
+                                                        : "border-white/10 bg-white/5"
+                                                        }`}
+                                                >
+                                                    <div className="flex items-start justify-between gap-2">
+                                                        <div className="min-w-0">
+                                                            <div className="text-[9px] text-white/30">Step {idx + 1}</div>
+                                                            <div className="text-[10px] text-white/80 leading-relaxed">{label}</div>
+                                                        </div>
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => applySuggestedLabel(idx, label)}
+                                                            disabled={!local[idx]}
+                                                            className="shrink-0 rounded border border-indigo-500/30 px-2 py-1 text-[9px] text-indigo-300 hover:bg-indigo-500/10 disabled:cursor-not-allowed disabled:opacity-40"
+                                                        >
+                                                            Apply
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                        <p className="mt-1 text-[9px] text-white/25">
+                                            Suggestions map by order: Step 1 applies to waypoint 1, Step 2 to waypoint 2, and so on.
+                                        </p>
+                                    </div>
+                                )}
 
                                 {/* Action type */}
                                 <div>

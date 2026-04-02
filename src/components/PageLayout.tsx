@@ -19,7 +19,9 @@ export function PageLayout({
         <Header asLink={showLogoAsLink} />
         {rightContent}
       </header>
-      {children}
+      <div className="flex-1 flex flex-col min-h-0 overflow-y-auto">
+        {children}
+      </div>
     </div>
   );
 }

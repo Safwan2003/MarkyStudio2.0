@@ -4,6 +4,7 @@ import { Loader2 } from "lucide-react";
 import type { NextPage } from "next";
 import { useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useEffect, useRef, useState } from "react";
+import { ErrorBoundary } from "../../components/ErrorBoundary";
 import { AnimationPlayer } from "../../components/AnimationPlayer";
 import { DEFAULT_VOICE_ID } from "../../components/AnimationPlayer/SettingsModal";
 import { ChatSidebar, type ChatSidebarRef } from "../../components/ChatSidebar";
@@ -117,6 +118,19 @@ function GeneratePageContent() {
   });
   const initialImageUserDescriptionsRef = useRef<string[]>(imageUserDescriptions);
 
+  // Logo image uploaded on landing page (base64 data URL)
+  const initialLogoImage = useState<string | null>(() => {
+    if (typeof window === "undefined") return null;
+    try {
+      const stored = sessionStorage.getItem("initialLogoImage");
+      if (stored) {
+        sessionStorage.removeItem("initialLogoImage");
+        return stored;
+      }
+    } catch {}
+    return null;
+  })[0];
+
   // Stable ref so the auto-start effect (empty deps) can read the initial images
   const initialImagesRef = useRef<string[]>(attachedImages);
 
@@ -156,7 +170,16 @@ function GeneratePageContent() {
     regeneratingSceneIndex,
     reset: resetFullVideo,
     pendingBrandRef,
+    setLogoImage,
+    revisePlan,
+    isRevising,
   } = useFullVideoGeneration();
+
+  // Wire uploaded logo into brand before first generation
+  useEffect(() => {
+    if (initialLogoImage) setLogoImage(initialLogoImage);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const isFullVideoBusy = isPlanning || isPrefetchingAudio || isFullVideoGenerating;
 
@@ -285,10 +308,11 @@ function GeneratePageContent() {
     if (totalDuration > 0) setDurationInFrames(totalDuration);
   }, [totalDuration]);
 
-  // Clear cursorSceneIndex if scenes are reset
+  // Clear cursorSceneIndex if scenes are reset or shrink past the selected index
   useEffect(() => {
     if (fullVideoScenes.length === 0) setCursorSceneIndex(null);
-  }, [fullVideoScenes.length]);
+    else if (cursorSceneIndex !== null && cursorSceneIndex >= fullVideoScenes.length) setCursorSceneIndex(null);
+  }, [fullVideoScenes.length, cursorSceneIndex]);
 
   // -------------------------------------------------------------------------
   // Handlers
@@ -355,7 +379,7 @@ function GeneratePageContent() {
         fullVideoScenes[cursorSceneIndex!]?.durationInFrames ?? durationInFrames
       }
       fps={fps}
-      preloadedImage={attachedImages[fullVideoScenes[cursorSceneIndex!]?.imageIndex ?? 0]}
+      preloadedImage={(() => { const idx = fullVideoScenes[cursorSceneIndex!]?.imageIndex ?? 0; return idx < attachedImages.length ? attachedImages[idx] : attachedImages[0]; })()}
     />
   ) : undefined;
 
@@ -379,6 +403,7 @@ function GeneratePageContent() {
 
         {/* Main area */}
         <div className="flex-1 flex flex-col min-w-0 pr-12 pb-8 overflow-hidden">
+          <ErrorBoundary>
           <TabPanel
             codeContent={
               <CodeEditor
@@ -517,11 +542,14 @@ function GeneratePageContent() {
                     setAttachedImages((prev) => prev.filter((_, i) => i !== idx));
                     setImageUserDescriptions((prev) => prev.filter((_, i) => i !== idx));
                   }}
+                  onRevise={revisePlan}
+                  isRevising={isRevising}
                 />
               ) : undefined
             }
             cursorContent={cursorEditorContent}
           />
+          </ErrorBoundary>
         </div>
       </div>
     </PageLayout>

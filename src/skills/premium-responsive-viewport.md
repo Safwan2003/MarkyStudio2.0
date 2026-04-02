@@ -334,6 +334,6 @@ export const ResponsiveViewportScene = () => {
 
 - Any product demo where **responsiveness** or **cross-device compatibility** is a key selling point
 - Web design tools (Figma, Webflow), website builders, e-commerce platforms, CMS products
-- Combine with `premium-hand-cursor` for the cursor clicking device icons
+- Combine with `premium-cursor-engine` for the cursor clicking device icons
 - Combine with `premium-callout-bubble` to annotate a specific element after switching viewport
 - **Do NOT** use for native mobile or desktop apps — only makes sense for web products

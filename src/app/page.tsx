@@ -16,6 +16,7 @@ const Home: NextPage = () => {
     model: ModelId,
     attachedImages?: string[],
     imageUserDescriptions?: string[],
+    logoImage?: string,
   ) => {
     setIsNavigating(true);
     // Store images in sessionStorage (too large for URL params)
@@ -28,6 +29,11 @@ const Home: NextPage = () => {
       sessionStorage.setItem("initialImageUserDescriptions", JSON.stringify(imageUserDescriptions));
     } else {
       sessionStorage.removeItem("initialImageUserDescriptions");
+    }
+    if (logoImage) {
+      sessionStorage.setItem("initialLogoImage", logoImage);
+    } else {
+      sessionStorage.removeItem("initialLogoImage");
     }
     const params = new URLSearchParams({ prompt, model });
     router.push(`/generate?${params.toString()}`);

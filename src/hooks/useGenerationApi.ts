@@ -15,6 +15,14 @@ import type {
 } from "@/types/generation";
 import { useCallback, useState } from "react";
 
+type SseEvent =
+  | { type: "metadata"; skills?: string[] }
+  | { type: "reasoning-start" }
+  | { type: "text-start" }
+  | { type: "text-delta"; delta: string }
+  | { type: "error"; error: string }
+  | { type: string; [key: string]: unknown };
+
 interface FailedEditInfo {
   description: string;
   old_string: string;
@@ -168,50 +176,80 @@ export function useGenerationApi(): UseGenerationApiReturn {
         let buffer = "";
         let streamMetadata: AssistantMetadata = {};
 
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
+        // Stream timeout: if no data arrives for 90s, fail fast instead of hanging forever.
+        let lastChunkAt = Date.now();
+        const STREAM_STALL_MS = 90_000;
 
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split("\n");
-          buffer = lines.pop() || "";
+        const readLoop = async () => {
+          while (true) {
+            // Check for stall before each read
+            if (Date.now() - lastChunkAt > STREAM_STALL_MS) {
+              reader.cancel().catch(() => {});
+              throw new Error("Generation timed out — no data received for 90 seconds. Please retry.");
+            }
 
-          for (const line of lines) {
-            if (!line.startsWith("data: ")) continue;
-            const data = line.slice(6);
-            if (data === "[DONE]") continue;
+            const { done, value } = await reader.read();
+            if (done) break;
+            lastChunkAt = Date.now();
 
-            try {
-              const event = JSON.parse(data);
-              if (event.type === "metadata") {
-                streamMetadata = {
-                  ...streamMetadata,
-                  skills: event.skills,
-                };
-                onPendingMessage?.(event.skills);
-              } else if (event.type === "reasoning-start") {
-                onStreamPhaseChange?.("reasoning");
-              } else if (event.type === "text-start") {
-                onStreamPhaseChange?.("generating");
-              } else if (event.type === "text-delta") {
-                accumulatedText += event.delta;
-                const codeToShow = stripMarkdownFences(accumulatedText);
-                onCodeGenerated?.(codeToShow);
-              } else if (event.type === "error") {
-                throw new Error(event.error);
-              }
-            } catch (parseError) {
-              if (
-                parseError instanceof Error &&
-                parseError.message !== "Unexpected token"
-              ) {
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split("\n");
+            buffer = lines.pop() || "";
+
+            for (const line of lines) {
+              if (!line.startsWith("data: ")) continue;
+              const data = line.slice(6);
+              if (data === "[DONE]") continue;
+
+              try {
+                const event = JSON.parse(data) as SseEvent;
+                if (event.type === "metadata") {
+                  const skills =
+                    Array.isArray((event as any).skills)
+                      ? (event as any).skills.filter((s: unknown) => typeof s === "string")
+                      : undefined;
+                  streamMetadata = {
+                    ...streamMetadata,
+                    skills,
+                  };
+                  onPendingMessage?.(skills);
+                } else if (event.type === "reasoning-start") {
+                  onStreamPhaseChange?.("reasoning");
+                } else if (event.type === "text-start") {
+                  onStreamPhaseChange?.("generating");
+                } else if (event.type === "text-delta") {
+                  accumulatedText += event.delta;
+                  const codeToShow = stripMarkdownFences(accumulatedText);
+                  onCodeGenerated?.(codeToShow);
+                } else if (event.type === "error") {
+                  const msg =
+                    typeof (event as any).error === "string"
+                      ? (event as any).error
+                      : "Streaming error";
+                  throw new Error(msg);
+                }
+              } catch (parseError) {
+                // Streaming chunks can produce partial/non-JSON lines (e.g. "Unexpected end of JSON input").
+                // Treat JSON parse failures as non-fatal and keep reading; only explicit {type:"error"} should fail.
+                if (parseError instanceof Error && parseError.name === "SyntaxError") {
+                  continue;
+                }
                 throw parseError;
               }
             }
           }
-        }
+        };
+
+        await readLoop();
 
         let finalCode = stripMarkdownFences(accumulatedText);
+
+        // EOF validation: if the model was cut off mid-generation, the // EOF sentinel
+        // will be missing. Warn rather than silently accepting truncated code.
+        if (accumulatedText.length > 200 && !accumulatedText.includes("// EOF")) {
+          console.warn("[stream] Missing // EOF — generation may be truncated. Proceeding but quality may be reduced.");
+        }
+
         finalCode = extractComponentCode(finalCode);
         onCodeGenerated?.(finalCode);
         onClearPendingMessage?.();

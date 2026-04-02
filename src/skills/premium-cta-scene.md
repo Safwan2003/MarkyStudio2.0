@@ -611,12 +611,32 @@ config: { damping: 22, stiffness: 100 }  // Heavier than hook (damping:12). Slow
 
 ---
 
+## AGENCY UPGRADE MANDATES (added 2026-03)
+
+**Elastic button entrance (MANDATORY)**
+Use `{ damping: 8, stiffness: 200 }` for the button entrance — elastic bounce gives CTA physical weight and urgency. This is different from headline config (which uses damping:22 for authority).
+
+**Background NEVER plain color**
+CTA backgrounds MUST have motion:
+- Dark brands: 18 entropy dust particles (ENTROPY_DUST_PARTICLES from scope) + drifting mesh gradient blobs
+- Light brands: LightArcBg component or corner gradient blobs (premium-multi-corner-gradient)
+
+**useVitality button pulse (replaces Math.sin pulse)**
+```tsx
+const vButton = useVitality("breathe", 0);
+// Apply: scale: 1 + vButton * 0.015
+```
+
+---
+
 ## Quality Checklist
 
 - [ ] Scene wrapped in `settleScale: interpolate(frame, [0,90], [1.05, 1.0])` zoom-out
 - [ ] Headline spring uses `{ damping: 22, stiffness: 100 }` (authoritative, not bouncy)
-- [ ] Button spring uses `{ damping: 14, stiffness: 160 }` (snappy entrance)
-- [ ] Button pulse uses `Math.sin((frame-60)*0.05)` → `interpolate → [1, 1.03]` (starts post-settle)
+- [ ] **Button spring uses `{ damping: 8, stiffness: 200 }` (elastic bounce entrance)**
+- [ ] **Button hold-phase pulse uses `useVitality("breathe", 0)`** (not raw Math.sin)
 - [ ] Button boxShadow includes `inset` highlight: `0 0 0 1px rgba(255,255,255,0.2) inset`
 - [ ] Shine sweep loops via `frame % 100` (not one-shot)
 - [ ] Logo spring includes slight rotation (`rotate(${(1-logoSpring)*-15}deg)`) for character
+- [ ] **Background has motion** — entropy dust + gradient (never plain flat color)
+- [ ] URL uses typewriter reveal (1 char per 2–3 frames) if BRAND.url is available

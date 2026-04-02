@@ -11,8 +11,8 @@ import {
 } from "@/components/ui/select";
 import { useImageAttachments } from "@/hooks/useImageAttachments";
 import { MODELS, type ModelId } from "@/types/generation";
-import { Upload, X } from "lucide-react";
-import { useEffect, useState } from "react";
+import { ImageIcon, Upload, X } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 
 interface LandingPageInputProps {
   onNavigate: (
@@ -20,31 +20,48 @@ interface LandingPageInputProps {
     model: ModelId,
     attachedImages?: string[],
     imageUserDescriptions?: string[],
+    logoImage?: string,
   ) => void;
   isNavigating?: boolean;
   showCodeExamplesLink?: boolean;
 }
 
+const VIDEO_TYPES = [
+  { value: "explainer", label: "Explainer (Problem → Solution)" },
+  { value: "demo", label: "Product Demo (Feature Walkthrough)" },
+  { value: "walkthrough", label: "App Walkthrough (Screen-by-Screen)" },
+  { value: "brand", label: "Brand Story (Emotional Narrative)" },
+  { value: "abstract", label: "Abstract Concept (Motion Graphics)" },
+];
+
 export function LandingPageInput({
   onNavigate,
   isNavigating = false,
 }: LandingPageInputProps) {
-  const [productName, setProductName] = useState("MarkyTech");
+  const [productName, setProductName] = useState("AdAstraConnect");
   const [description, setDescription] = useState(
-    "A Karachi-based digital agency delivering cutting-edge AI-powered solutions, custom web & mobile development, and performance-driven digital marketing — helping businesses worldwide transform, scale, and grow.",
+    "Ad Astra is a modern language services platform that combines human expertise with AI-assisted workflows to deliver faster, more consistent multilingual communication. It centralizes interpretation, translation, localization, and content workflows in one secure, compliant system built for how organizations operate today.",
   );
-  const [audience, setAudience] = useState("Enterprises & growth-stage startups seeking digital transformation");
+  const [audience, setAudience] = useState("Organizations that need fast, secure multilingual communication (healthcare, government, legal, education, enterprise SaaS)");
   const [features, setFeatures] = useState([
-    "Agentic AI & intelligent process automation",
-    "Custom web, mobile & AWS cloud solutions",
-    "Digital marketing: SEO, PPC & social media",
+    "Centralized Management — schedule, track, generate reports, and manage billing in one place",
+    "Real-Time Support — instant access to professional interpreters 24/7",
+    "Secure & Compliant — HIPAA/GDPR-aware workflows designed for high-stakes communication",
+    "Custom API Integration — connect with existing systems via secure APIs",
   ]);
-  const [cta, setCta] = useState("Start Your Project");
+  const [tagline, setTagline] = useState("One System. Not Multiple Tools.");
+  const [cta, setCta] = useState("Request a Business Quote");
   const [model, setModel] = useState<ModelId>("gemini-2.5-flash:none");
-  const [brandColors, setBrandColors] = useState<string[]>(["#2563EB", "#7C3AED"]);
-  const [targetUrl, setTargetUrl] = useState("https://markytech.com");
+  const [brandColors, setBrandColors] = useState<string[]>(["#2563eb", "#0ea5e9"]);
+  const [targetUrl, setTargetUrl] = useState("https://ad-astrainc.com/");
+  const [logoUrl, setLogoUrl] = useState("");
+  const [logoImage, setLogoImage] = useState<string | null>(null);
+  const [videoType, setVideoType] = useState("explainer");
+  const [brandStyle, setBrandStyle] = useState<"dark" | "light">("light");
 
   const [imageUserDescriptions, setImageUserDescriptions] = useState<string[]>([]);
+
+  const logoFileInputRef = useRef<HTMLInputElement>(null);
 
   const {
     attachedImages,
@@ -77,10 +94,37 @@ export function LandingPageInput({
     }
   }, [error, clearError]);
 
+  const handleLogoFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      setLogoImage(ev.target?.result as string);
+      setLogoUrl(""); // clear URL when file is uploaded
+    };
+    reader.readAsDataURL(file);
+    e.target.value = "";
+  };
+
   const buildProductPrompt = () => {
     const lines: string[] = [];
 
-    lines.push(`Create a premium SaaS product demo video for ${productName.trim()}.`);
+    const product = productName.trim();
+    const videoTypeLabel = VIDEO_TYPES.find((t) => t.value === videoType)?.label ?? videoType;
+    const opener =
+      videoType === "explainer"
+        ? `Create a premium SaaS explainer video (Problem → Solution) for ${product}.`
+        : videoType === "demo"
+          ? `Create a premium SaaS product demo video (feature walkthrough) for ${product}.`
+          : videoType === "walkthrough"
+            ? `Create a premium SaaS app walkthrough video (screen-by-screen) for ${product}.`
+            : videoType === "brand"
+              ? `Create a premium brand story video for ${product}.`
+              : videoType === "abstract"
+                ? `Create a premium abstract motion graphics video for ${product}.`
+                : `Create a premium SaaS video for ${product} (${videoTypeLabel}).`;
+
+    lines.push(opener);
     lines.push("");
     lines.push(description.trim());
 
@@ -96,6 +140,11 @@ export function LandingPageInput({
       activeFeatures.forEach((f) => lines.push(`- ${f.trim()}`));
     }
 
+    if (tagline.trim()) {
+      lines.push("");
+      lines.push(`Brand tagline: "${tagline.trim()}"`);
+    }
+
     if (cta.trim()) {
       lines.push("");
       lines.push(`Call to action: "${cta.trim()}"`);
@@ -107,9 +156,21 @@ export function LandingPageInput({
       lines.push(`Brand colors: ${activeBrandColors.join(", ")}`);
     }
 
+    lines.push("");
+    lines.push(`Brand theme: ${brandStyle} (${brandStyle === "dark" ? "dark backgrounds, light text" : "light/white backgrounds, dark text"})`);
+
+    lines.push("");
+    lines.push(`Video type: ${VIDEO_TYPES.find((t) => t.value === videoType)?.label ?? videoType}`);
+
     if (targetUrl.trim()) {
       lines.push("");
       lines.push(`Product URL: ${targetUrl.trim()}`);
+    }
+
+    // Only include logo URL if no file was uploaded
+    if (!logoImage && logoUrl.trim()) {
+      lines.push("");
+      lines.push(`Company logo URL: ${logoUrl.trim()}`);
     }
 
     return lines.join("\n");
@@ -126,6 +187,7 @@ export function LandingPageInput({
       model,
       attachedImages.length > 0 ? attachedImages : undefined,
       activeDescriptions.some((d) => d.trim()) ? activeDescriptions : undefined,
+      logoImage ?? undefined,
     );
   };
 
@@ -136,10 +198,10 @@ export function LandingPageInput({
   };
 
   return (
-    <div className="flex flex-col items-center justify-center flex-1 px-4">
+    <div className="flex flex-col items-center flex-1 px-4 py-4">
       <div className="flex items-center gap-2 mb-4 justify-center">
         <span className="text-xs font-semibold tracking-widest uppercase text-muted-foreground border border-border rounded-full px-3 py-1">
-          Powered by MarkyTech
+          Powered by MarkyStudio
         </span>
       </div>
       <h1 className="text-5xl font-bold text-white mb-3 text-center leading-tight">
@@ -149,7 +211,7 @@ export function LandingPageInput({
         </span>
       </h1>
       <p className="text-lg text-muted-foreground mb-10 text-center max-w-xl">
-        Describe your product. Upload screenshots. Get a WhatAStory-quality explainer video in minutes.
+        Describe your product. Upload screenshots. Get an explainer video in minutes.
       </p>
 
       <form onSubmit={handleSubmit} className="w-full max-w-3xl">
@@ -230,32 +292,109 @@ export function LandingPageInput({
             </div>
           </div>
 
-          {/* Row 4: CTA */}
-          <div className="flex flex-col gap-1.5">
-            <label className="text-xs font-medium text-muted-foreground">
-              Call to action <span className="text-muted-foreground-dim">(optional)</span>
-            </label>
-            <div className="flex gap-3">
+          {/* Row 4: Tagline + CTA */}
+          <div className="flex gap-3">
+            <div className="flex flex-col gap-1.5 flex-1">
+              <label className="text-xs font-medium text-muted-foreground">
+                Tagline <span className="text-muted-foreground-dim">(optional — used in CTA scene)</span>
+              </label>
+              <input
+                type="text"
+                value={tagline}
+                onChange={(e) => setTagline(e.target.value)}
+                placeholder='e.g. "Ship faster. Worry less."'
+                className="bg-background border border-border rounded-lg px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground-dim focus:outline-none focus:border-foreground/40 transition-colors"
+                disabled={isNavigating}
+              />
+            </div>
+            <div className="flex flex-col gap-1.5 flex-1">
+              <label className="text-xs font-medium text-muted-foreground">
+                Call to action <span className="text-muted-foreground-dim">(optional)</span>
+              </label>
               <input
                 type="text"
                 value={cta}
                 onChange={(e) => setCta(e.target.value)}
                 placeholder="e.g. Start Your Project"
-                className="w-1/2 bg-background border border-border rounded-lg px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground-dim focus:outline-none focus:border-foreground/40 transition-colors"
-                disabled={isNavigating}
-              />
-              <input
-                type="url"
-                value={targetUrl}
-                onChange={(e) => setTargetUrl(e.target.value)}
-                placeholder="https://yourproduct.com"
-                className="w-1/2 bg-background border border-border rounded-lg px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground-dim focus:outline-none focus:border-foreground/40 transition-colors"
+                className="bg-background border border-border rounded-lg px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground-dim focus:outline-none focus:border-foreground/40 transition-colors"
                 disabled={isNavigating}
               />
             </div>
           </div>
 
-          {/* Row 5: Media upload */}
+          {/* Row 5: URL + Logo */}
+          <div className="flex gap-3 items-end">
+            <div className="flex flex-col gap-1.5 flex-1">
+              <label className="text-xs font-medium text-muted-foreground">
+                Product URL
+              </label>
+              <input
+                type="url"
+                value={targetUrl}
+                onChange={(e) => setTargetUrl(e.target.value)}
+                placeholder="https://yourproduct.com"
+                className="bg-background border border-border rounded-lg px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground-dim focus:outline-none focus:border-foreground/40 transition-colors"
+                disabled={isNavigating}
+              />
+            </div>
+            <div className="flex flex-col gap-1.5 flex-1">
+              <label className="text-xs font-medium text-muted-foreground">
+                Company logo <span className="text-muted-foreground-dim">(optional)</span>
+              </label>
+              {logoImage ? (
+                /* Logo preview after upload */
+                <div className="flex items-center gap-2">
+                  <div className="relative flex-shrink-0">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={logoImage}
+                      alt="Company logo"
+                      className="h-9 w-16 object-contain rounded border border-border bg-white/5 p-1"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setLogoImage(null)}
+                      className="absolute -top-1.5 -right-1.5 bg-background border border-border rounded-full p-0.5 hover:bg-destructive hover:text-destructive-foreground transition-colors"
+                      disabled={isNavigating}
+                    >
+                      <X className="w-2.5 h-2.5" />
+                    </button>
+                  </div>
+                  <span className="text-xs text-muted-foreground">Logo uploaded</span>
+                </div>
+              ) : (
+                /* Upload button + URL fallback */
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => logoFileInputRef.current?.click()}
+                    disabled={isNavigating}
+                    className="flex items-center gap-1.5 px-3 py-2 bg-background border border-dashed border-border rounded-lg text-xs text-muted-foreground hover:border-foreground/40 hover:text-foreground transition-colors flex-shrink-0"
+                  >
+                    <ImageIcon className="w-3.5 h-3.5" />
+                    Upload
+                  </button>
+                  <input
+                    type="url"
+                    value={logoUrl}
+                    onChange={(e) => setLogoUrl(e.target.value)}
+                    placeholder="or paste logo URL"
+                    className="flex-1 bg-background border border-border rounded-lg px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground-dim focus:outline-none focus:border-foreground/40 transition-colors"
+                    disabled={isNavigating}
+                  />
+                </div>
+              )}
+              <input
+                ref={logoFileInputRef}
+                type="file"
+                accept="image/*"
+                onChange={handleLogoFileSelect}
+                className="hidden"
+              />
+            </div>
+          </div>
+
+          {/* Row 6: Media upload */}
           <div className="flex flex-col gap-1.5">
             <label className="text-xs font-medium text-muted-foreground">
               Screenshots / Screen recording <span className="text-muted-foreground-dim">(optional)</span>
@@ -389,7 +528,7 @@ export function LandingPageInput({
             />
           </div>
 
-          {/* Row 6: Brand colors */}
+          {/* Row 7: Brand colors */}
           <div className="flex flex-col gap-1.5">
             <label className="text-xs font-medium text-muted-foreground">
               Brand colors <span className="text-muted-foreground-dim">(optional)</span>
@@ -445,7 +584,59 @@ export function LandingPageInput({
             </div>
           </div>
 
-          {/* Row 7: Model + Generate */}
+          {/* Row 8: Video type + Brand theme */}
+          <div className="flex gap-3 items-end">
+            <div className="flex flex-col gap-1.5 flex-1">
+              <label className="text-xs font-medium text-muted-foreground">Video type</label>
+              <Select value={videoType} onValueChange={setVideoType} disabled={isNavigating}>
+                <SelectTrigger className="bg-background border border-border text-sm text-foreground focus:ring-0 focus:border-foreground/40">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent className="bg-background-elevated border-border">
+                  {VIDEO_TYPES.map((t) => (
+                    <SelectItem
+                      key={t.value}
+                      value={t.value}
+                      className="text-foreground focus:bg-secondary focus:text-foreground"
+                    >
+                      {t.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <label className="text-xs font-medium text-muted-foreground">Brand theme</label>
+              <div className="flex rounded-lg border border-border overflow-hidden">
+                <button
+                  type="button"
+                  onClick={() => setBrandStyle("dark")}
+                  disabled={isNavigating}
+                  className={`px-4 py-2 text-xs font-medium transition-colors ${
+                    brandStyle === "dark"
+                      ? "bg-foreground/10 text-foreground"
+                      : "text-muted-foreground hover:text-foreground"
+                  }`}
+                >
+                  Dark
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setBrandStyle("light")}
+                  disabled={isNavigating}
+                  className={`px-4 py-2 text-xs font-medium transition-colors border-l border-border ${
+                    brandStyle === "light"
+                      ? "bg-foreground/10 text-foreground"
+                      : "text-muted-foreground hover:text-foreground"
+                  }`}
+                >
+                  Light
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* Row 9: Model + Generate */}
           <div className="flex items-center justify-between pt-1 border-t border-border">
             <Select
               value={model}

@@ -1,4 +1,497 @@
-import {
+forward-logs-shared.ts:95 Download the React DevTools for a better development experience: https://react.dev/link/react-devtools
+forward-logs-shared.ts:95 [HMR] connected
+forward-logs-shared.ts:95 [Fast Refresh] rebuilding
+forward-logs-shared.ts:95 [Fast Refresh] done in 653ms
+useFullVideoGeneration.ts:2630 Skipping flow-analyze for 2 images — using synthetic flow with transitions
+forward-logs-shared.ts:95 [Fast Refresh] rebuilding
+forward-logs-shared.ts:95 [Fast Refresh] done in 643ms
+useFullVideoGeneration.ts:2708 Approving flow: using 2 key frames from 2 total
+forward-logs-shared.ts:95 [Fast Refresh] rebuilding
+forward-logs-shared.ts:95 [Fast Refresh] done in 164ms
+forward-logs-shared.ts:95 [Fast Refresh] rebuilding
+forward-logs-shared.ts:95 [Fast Refresh] done in 129ms
+useFullVideoGeneration.ts:2069 [Scene "Anxious About Security and Compliance Risks"] Compile error (attempt 1): /dynamic-animation.tsx: Unexpected token (46:4)
+
+  44 |   
+  45 |   // Calculate AUDIO_STIFFNESS and AUDIO_DAMPING based on WORD_TIMINGS
+> 46 |     ? (WORD_TIMINGS[WORD_TIMINGS.length - 1].startFrame - WORD_TIMINGS[0].startFrame) / (WORD_TIMINGS.length - 1)
+     |     ^
+  47 |     : 20;
+  48 |   // Fast narration (avgGap < 15f): stiffness 180–220 — animations snap with the punchy rhythm
+  49 |   // Slow narration (avgGap > 25f): stiffness 60–80 — elements float in contemplatively
+error @ intercept-console-error.ts:42
+processScene @ useFullVideoGeneration.ts:2069
+await in processScene
+useFullVideoGeneration.useCallback[runGeneration] @ useFullVideoGeneration.ts:2433
+useFullVideoGeneration.useCallback[runGeneration] @ useFullVideoGeneration.ts:2418
+await in useFullVideoGeneration.useCallback[runGeneration]
+useFullVideoGeneration.useCallback[confirmPlan] @ useFullVideoGeneration.ts:2780
+await in useFullVideoGeneration.useCallback[confirmPlan]
+onConfirm @ page.tsx:540
+onClick @ index.tsx:698
+executeDispatch @ react-dom-client.development.js:20543
+runWithFiberInDEV @ react-dom-client.development.js:986
+processDispatchQueue @ react-dom-client.development.js:20593
+(anonymous) @ react-dom-client.development.js:21164
+batchedUpdates$1 @ react-dom-client.development.js:3377
+dispatchEventForPluginEventSystem @ react-dom-client.development.js:20747
+dispatchEvent @ react-dom-client.development.js:25693
+dispatchDiscreteEvent @ react-dom-client.development.js:25661
+<button>
+exports.jsxDEV @ react-jsx-dev-runtime.development.js:342
+Button @ button.tsx:54
+react_stack_bottom_frame @ react-dom-client.development.js:28038
+renderWithHooksAgain @ react-dom-client.development.js:8084
+renderWithHooks @ react-dom-client.development.js:7996
+updateFunctionComponent @ react-dom-client.development.js:10501
+beginWork @ react-dom-client.development.js:12136
+runWithFiberInDEV @ react-dom-client.development.js:986
+performUnitOfWork @ react-dom-client.development.js:18997
+workLoopSync @ react-dom-client.development.js:18825
+renderRootSync @ react-dom-client.development.js:18806
+performWorkOnRoot @ react-dom-client.development.js:17835
+performSyncWorkOnRoot @ react-dom-client.development.js:20399
+flushSyncWorkAcrossRoots_impl @ react-dom-client.development.js:20241
+flushSpawnedWork @ react-dom-client.development.js:19752
+commitRoot @ react-dom-client.development.js:19335
+commitRootWhenReady @ react-dom-client.development.js:18178
+performWorkOnRoot @ react-dom-client.development.js:18054
+performWorkOnRootViaSchedulerTask @ react-dom-client.development.js:20384
+performWorkUntilDeadline @ scheduler.development.js:45
+<Button>
+exports.jsxDEV @ react-jsx-dev-runtime.development.js:342
+ScenePlanEditor @ index.tsx:688
+react_stack_bottom_frame @ react-dom-client.development.js:28038
+renderWithHooksAgain @ react-dom-client.development.js:8084
+renderWithHooks @ react-dom-client.development.js:7996
+updateFunctionComponent @ react-dom-client.development.js:10501
+beginWork @ react-dom-client.development.js:12136
+runWithFiberInDEV @ react-dom-client.development.js:986
+performUnitOfWork @ react-dom-client.development.js:18997
+workLoopSync @ react-dom-client.development.js:18825
+renderRootSync @ react-dom-client.development.js:18806
+performWorkOnRoot @ react-dom-client.development.js:17835
+performSyncWorkOnRoot @ react-dom-client.development.js:20399
+flushSyncWorkAcrossRoots_impl @ react-dom-client.development.js:20241
+flushSpawnedWork @ react-dom-client.development.js:19752
+commitRoot @ react-dom-client.development.js:19335
+commitRootWhenReady @ react-dom-client.development.js:18178
+performWorkOnRoot @ react-dom-client.development.js:18054
+performWorkOnRootViaSchedulerTask @ react-dom-client.development.js:20384
+performWorkUntilDeadline @ scheduler.development.js:45
+forward-logs-shared.ts:95 [Fast Refresh] rebuilding
+forward-logs-shared.ts:95 [Fast Refresh] done in 121ms
+useFullVideoGeneration.ts:2242 AhaMoment model upgrade: gemini-2.5-flash:none → gemini-2.5-flash:medium
+useFullVideoGeneration.ts:1879 Model routing: "Relief and Intrigue at a Unified Solution" (premium-reconstructed-ui) → gemini-2.5-flash:medium
+useFullVideoGeneration.ts:1987 Quality retry succeeded for "Relief and Intrigue at a Unified Solution"
+useFullVideoGeneration.ts:1306 Cursor path: using 1 user-confirmed waypoints for "Empowered by Centralized Control"
+index.tsx:201 Note: Some companies are required to obtain a license to use Remotion. See: https://remotion.dev/license
+Pass the `acknowledgeRemotionLicense` prop to `<Player />` function to make this message disappear.
+warn @ forward-logs-shared.ts:95
+warn @ index.mjs:893
+acknowledgeRemotionLicenseMessage @ index.mjs:3037
+PlayerFn.useState13 @ index.mjs:3210
+mountStateImpl @ react-dom-client.development.js:8590
+mountState @ react-dom-client.development.js:8611
+useState @ react-dom-client.development.js:28377
+exports.useState @ react.development.js:1309
+PlayerFn @ index.mjs:3210
+react_stack_bottom_frame @ react-dom-client.development.js:28038
+renderWithHooks @ react-dom-client.development.js:7984
+updateForwardRef @ react-dom-client.development.js:10059
+beginWork @ react-dom-client.development.js:12475
+runWithFiberInDEV @ react-dom-client.development.js:986
+performUnitOfWork @ react-dom-client.development.js:18997
+workLoopSync @ react-dom-client.development.js:18825
+renderRootSync @ react-dom-client.development.js:18806
+performWorkOnRoot @ react-dom-client.development.js:17835
+performWorkOnRootViaSchedulerTask @ react-dom-client.development.js:20384
+performWorkUntilDeadline @ scheduler.development.js:45
+<ForwardRef(PlayerFn)>
+exports.jsxDEV @ react-jsx-dev-runtime.development.js:342
+renderContent @ index.tsx:201
+AnimationPlayer @ index.tsx:298
+react_stack_bottom_frame @ react-dom-client.development.js:28038
+renderWithHooksAgain @ react-dom-client.development.js:8084
+renderWithHooks @ react-dom-client.development.js:7996
+updateFunctionComponent @ react-dom-client.development.js:10501
+beginWork @ react-dom-client.development.js:12136
+runWithFiberInDEV @ react-dom-client.development.js:986
+performUnitOfWork @ react-dom-client.development.js:18997
+workLoopSync @ react-dom-client.development.js:18825
+renderRootSync @ react-dom-client.development.js:18806
+performWorkOnRoot @ react-dom-client.development.js:17835
+performWorkOnRootViaSchedulerTask @ react-dom-client.development.js:20384
+performWorkUntilDeadline @ scheduler.development.js:45
+<AnimationPlayer>
+exports.jsxDEV @ react-jsx-dev-runtime.development.js:342
+GeneratePageContent @ page.tsx:418
+react_stack_bottom_frame @ react-dom-client.development.js:28038
+renderWithHooksAgain @ react-dom-client.development.js:8084
+renderWithHooks @ react-dom-client.development.js:7996
+updateFunctionComponent @ react-dom-client.development.js:10501
+beginWork @ react-dom-client.development.js:12136
+runWithFiberInDEV @ react-dom-client.development.js:986
+performUnitOfWork @ react-dom-client.development.js:18997
+workLoopSync @ react-dom-client.development.js:18825
+renderRootSync @ react-dom-client.development.js:18806
+performWorkOnRoot @ react-dom-client.development.js:17835
+performSyncWorkOnRoot @ react-dom-client.development.js:20399
+flushSyncWorkAcrossRoots_impl @ react-dom-client.development.js:20241
+processRootScheduleInMicrotask @ react-dom-client.development.js:20280
+(anonymous) @ react-dom-client.development.js:20418
+useFullVideoGeneration.ts:718 Remotion: The audio with src data:audio/mpeg;base64,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
+warn @ forward-logs-shared.ts:95
+warnOnce2 @ index.mjs:3248
+useBasicMediaInTimeline.useEffect5 @ index.mjs:3289
+react_stack_bottom_frame @ react-dom-client.development.js:28123
+runWithFiberInDEV @ react-dom-client.development.js:986
+commitHookEffectListMount @ react-dom-client.development.js:13692
+commitHookPassiveMountEffects @ react-dom-client.development.js:13779
+commitPassiveMountOnFiber @ react-dom-client.development.js:16733
+recursivelyTraversePassiveMountEffects @ react-dom-client.development.js:16678
+commitPassiveMountOnFiber @ react-dom-client.development.js:16725
+recursivelyTraversePassiveMountEffects @ react-dom-client.development.js:16678
+commitPassiveMountOnFiber @ react-dom-client.development.js:17010
+recursivelyTraversePassiveMountEffects @ react-dom-client.development.js:16678
+commitPassiveMountOnFiber @ react-dom-client.development.js:16725
+recursivelyTraversePassiveMountEffects @ react-dom-client.development.js:16678
+commitPassiveMountOnFiber @ react-dom-client.development.js:16725
+recursivelyTraversePassiveMountEffects @ react-dom-client.development.js:16678
+commitPassiveMountOnFiber @ react-dom-client.development.js:17010
+recursivelyTraversePassiveMountEffects @ react-dom-client.development.js:16678
+commitPassiveMountOnFiber @ react-dom-client.development.js:16753
+recursivelyTraversePassiveMountEffects @ react-dom-client.development.js:16678
+commitPassiveMountOnFiber @ react-dom-client.development.js:17010
+recursivelyTraversePassiveMountEffects @ react-dom-client.development.js:16678
+commitPassiveMountOnFiber @ react-dom-client.development.js:17010
+recursivelyTraversePassiveMountEffects @ react-dom-client.development.js:16678
+commitPassiveMountOnFiber @ react-dom-client.development.js:16939
+recursivelyTraversePassiveMountEffects @ react-dom-client.development.js:16678
+commitPassiveMountOnFiber @ react-dom-client.development.js:16898
+recursivelyTraversePassiveMountEffects @ react-dom-client.development.js:16678
+commitPassiveMountOnFiber @ react-dom-client.development.js:17010
+recursivelyTraversePassiveMountEffects @ react-dom-client.development.js:16678
+commitPassiveMountOnFiber @ react-dom-client.development.js:16725
+recursivelyTraversePassiveMountEffects @ react-dom-client.development.js:16678
+commitPassiveMountOnFiber @ react-dom-client.development.js:17010
+recursivelyTraversePassiveMountEffects @ react-dom-client.development.js:16678
+commitPassiveMountOnFiber @ react-dom-client.development.js:16725
+recursivelyTraversePassiveMountEffects @ react-dom-client.development.js:16678
+commitPassiveMountOnFiber @ react-dom-client.development.js:17010
+recursivelyTraversePassiveMountEffects @ react-dom-client.development.js:16678
+commitPassiveMountOnFiber @ react-dom-client.development.js:17010
+recursivelyTraversePassiveMountEffects @ react-dom-client.development.js:16678
+commitPassiveMountOnFiber @ react-dom-client.development.js:16725
+recursivelyTraversePassiveMountEffects @ react-dom-client.development.js:16678
+commitPassiveMountOnFiber @ react-dom-client.development.js:17010
+recursivelyTraversePassiveMountEffects @ react-dom-client.development.js:16678
+commitPassiveMountOnFiber @ react-dom-client.development.js:16725
+recursivelyTraversePassiveMountEffects @ react-dom-client.development.js:16678
+commitPassiveMountOnFiber @ react-dom-client.development.js:17010
+recursivelyTraversePassiveMountEffects @ react-dom-client.development.js:16678
+commitPassiveMountOnFiber @ react-dom-client.development.js:17010
+recursivelyTraversePassiveMountEffects @ react-dom-client.development.js:16678
+commitPassiveMountOnFiber @ react-dom-client.development.js:17010
+recursivelyTraversePassiveMountEffects @ react-dom-client.development.js:16678
+commitPassiveMountOnFiber @ react-dom-client.development.js:16725
+recursivelyTraversePassiveMountEffects @ react-dom-client.development.js:16678
+commitPassiveMountOnFiber @ react-dom-client.development.js:17010
+recursivelyTraversePassiveMountEffects @ react-dom-client.development.js:16678
+commitPassiveMountOnFiber @ react-dom-client.development.js:16725
+recursivelyTraversePassiveMountEffects @ react-dom-client.development.js:16678
+commitPassiveMountOnFiber @ react-dom-client.development.js:17010
+recursivelyTraversePassiveMountEffects @ react-dom-client.development.js:16678
+commitPassiveMountOnFiber @ react-dom-client.development.js:17010
+recursivelyTraversePassiveMountEffects @ react-dom-client.development.js:16678
+commitPassiveMountOnFiber @ react-dom-client.development.js:17010
+recursivelyTraversePassiveMountEffects @ react-dom-client.development.js:16678
+commitPassiveMountOnFiber @ react-dom-client.development.js:16725
+recursivelyTraversePassiveMountEffects @ react-dom-client.development.js:16678
+commitPassiveMountOnFiber @ react-dom-client.development.js:17010
+recursivelyTraversePassiveMountEffects @ react-dom-client.development.js:16678
+commitPassiveMountOnFiber @ react-dom-client.development.js:17010
+recursivelyTraversePassiveMountEffects @ react-dom-client.development.js:16678
+commitPassiveMountOnFiber @ react-dom-client.development.js:16725
+recursivelyTraversePassiveMountEffects @ react-dom-client.development.js:16678
+commitPassiveMountOnFiber @ react-dom-client.development.js:17010
+recursivelyTraversePassiveMountEffects @ react-dom-client.development.js:16678
+commitPassiveMountOnFiber @ react-dom-client.development.js:16725
+recursivelyTraversePassiveMountEffects @ react-dom-client.development.js:16678
+commitPassiveMountOnFiber @ react-dom-client.development.js:16725
+recursivelyTraversePassiveMountEffects @ react-dom-client.development.js:16678
+commitPassiveMountOnFiber @ react-dom-client.development.js:17010
+recursivelyTraversePassiveMountEffects @ react-dom-client.development.js:16678
+commitPassiveMountOnFiber @ react-dom-client.development.js:17010
+recursivelyTraversePassiveMountEffects @ react-dom-client.development.js:16678
+commitPassiveMountOnFiber @ react-dom-client.development.js:17010
+recursivelyTraversePassiveMountEffects @ react-dom-client.development.js:16678
+commitPassiveMountOnFiber @ react-dom-client.development.js:16725
+recursivelyTraversePassiveMountEffects @ react-dom-client.development.js:16678
+commitPassiveMountOnFiber @ react-dom-client.development.js:17010
+recursivelyTraversePassiveMountEffects @ react-dom-client.development.js:16678
+commitPassiveMountOnFiber @ react-dom-client.development.js:17010
+recursivelyTraversePassiveMountEffects @ react-dom-client.development.js:16678
+commitPassiveMountOnFiber @ react-dom-client.development.js:17010
+recursivelyTraversePassiveMountEffects @ react-dom-client.development.js:16678
+commitPassiveMountOnFiber @ react-dom-client.development.js:16725
+recursivelyTraversePassiveMountEffects @ react-dom-client.development.js:16678
+commitPassiveMountOnFiber @ react-dom-client.development.js:16753
+recursivelyTraversePassiveMountEffects @ react-dom-client.development.js:16678
+commitPassiveMountOnFiber @ react-dom-client.development.js:17010
+recursivelyTraversePassiveMountEffects @ react-dom-client.development.js:16678
+commitPassiveMountOnFiber @ react-dom-client.development.js:17010
+recursivelyTraversePassiveMountEffects @ react-dom-client.development.js:16678
+commitPassiveMountOnFiber @ react-dom-client.development.js:17010
+recursivelyTraversePassiveMountEffects @ react-dom-client.development.js:16678
+commitPassiveMountOnFiber @ react-dom-client.development.js:17010
+recursivelyTraversePassiveMountEffects @ react-dom-client.development.js:16678
+commitPassiveMountOnFiber @ react-dom-client.development.js:16725
+recursivelyTraversePassiveMountEffects @ react-dom-client.development.js:16678
+commitPassiveMountOnFiber @ react-dom-client.development.js:16725
+recursivelyTraversePassiveMountEffects @ react-dom-client.development.js:16678
+commitPassiveMountOnFiber @ react-dom-client.development.js:16939
+recursivelyTraversePassiveMountEffects @ react-dom-client.development.js:16678
+commitPassiveMountOnFiber @ react-dom-client.development.js:16898
+recursivelyTraversePassiveMountEffects @ react-dom-client.development.js:16678
+commitPassiveMountOnFiber @ react-dom-client.development.js:16725
+recursivelyTraversePassiveMountEffects @ react-dom-client.development.js:16678
+commitPassiveMountOnFiber @ react-dom-client.development.js:16725
+recursivelyTraversePassiveMountEffects @ react-dom-client.development.js:16678
+commitPassiveMountOnFiber @ react-dom-client.development.js:16725
+recursivelyTraversePassiveMountEffects @ react-dom-client.development.js:16678
+commitPassiveMountOnFiber @ react-dom-client.development.js:17010
+recursivelyTraversePassiveMountEffects @ react-dom-client.development.js:16678
+commitPassiveMountOnFiber @ react-dom-client.development.js:17010
+recursivelyTraversePassiveMountEffects @ react-dom-client.development.js:16678
+commitPassiveMountOnFiber @ react-dom-client.development.js:16725
+recursivelyTraversePassiveMountEffects @ react-dom-client.development.js:16678
+commitPassiveMountOnFiber @ react-dom-client.development.js:16753
+recursivelyTraversePassiveMountEffects @ react-dom-client.development.js:16678
+commitPassiveMountOnFiber @ react-dom-client.development.js:16725
+recursivelyTraversePassiveMountEffects @ react-dom-client.development.js:16678
+commitPassiveMountOnFiber @ react-dom-client.development.js:16725
+recursivelyTraversePassiveMountEffects @ react-dom-client.development.js:16678
+commitPassiveMountOnFiber @ react-dom-client.development.js:16725
+recursivelyTraversePassiveMountEffects @ react-dom-client.development.js:16678
+commitPassiveMountOnFiber @ react-dom-client.development.js:16725
+recursivelyTraversePassiveMountEffects @ react-dom-client.development.js:16678
+commitPassiveMountOnFiber @ react-dom-client.development.js:16753
+recursivelyTraversePassiveMountEffects @ react-dom-client.development.js:16678
+commitPassiveMountOnFiber @ react-dom-client.development.js:16725
+recursivelyTraversePassiveMountEffects @ react-dom-client.development.js:16678
+commitPassiveMountOnFiber @ react-dom-client.development.js:16725
+recursivelyTraversePassiveMountEffects @ react-dom-client.development.js:16678
+commitPassiveMountOnFiber @ react-dom-client.development.js:17010
+recursivelyTraversePassiveMountEffects @ react-dom-client.development.js:16678
+commitPassiveMountOnFiber @ react-dom-client.development.js:17010
+recursivelyTraversePassiveMountEffects @ react-dom-client.development.js:16678
+commitPassiveMountOnFiber @ react-dom-client.development.js:16725
+recursivelyTraversePassiveMountEffects @ react-dom-client.development.js:16678
+commitPassiveMountOnFiber @ react-dom-client.development.js:16725
+recursivelyTraversePassiveMountEffects @ react-dom-client.development.js:16678
+commitPassiveMountOnFiber @ react-dom-client.development.js:17010
+recursivelyTraversePassiveMountEffects @ react-dom-client.development.js:16678
+commitPassiveMountOnFiber @ react-dom-client.development.js:17010
+recursivelyTraversePassiveMountEffects @ react-dom-client.development.js:16678
+commitPassiveMountOnFiber @ react-dom-client.development.js:17010
+recursivelyTraversePassiveMountEffects @ react-dom-client.development.js:16678
+commitPassiveMountOnFiber @ react-dom-client.development.js:16725
+recursivelyTraversePassiveMountEffects @ react-dom-client.development.js:16678
+commitPassiveMountOnFiber @ react-dom-client.development.js:16753
+recursivelyTraversePassiveMountEffects @ react-dom-client.development.js:16678
+commitPassiveMountOnFiber @ react-dom-client.development.js:16725
+recursivelyTraversePassiveMountEffects @ react-dom-client.development.js:16678
+commitPassiveMountOnFiber @ react-dom-client.development.js:16753
+recursivelyTraversePassiveMountEffects @ react-dom-client.development.js:16678
+commitPassiveMountOnFiber @ react-dom-client.development.js:16725
+recursivelyTraversePassiveMountEffects @ react-dom-client.development.js:16678
+commitPassiveMountOnFiber @ react-dom-client.development.js:16725
+recursivelyTraversePassiveMountEffects @ react-dom-client.development.js:16678
+commitPassiveMountOnFiber @ react-dom-client.development.js:16725
+recursivelyTraversePassiveMountEffects @ react-dom-client.development.js:16678
+commitPassiveMountOnFiber @ react-dom-client.development.js:16753
+recursivelyTraversePassiveMountEffects @ react-dom-client.development.js:16678
+commitPassiveMountOnFiber @ react-dom-client.development.js:16725
+recursivelyTraversePassiveMountEffects @ react-dom-client.development.js:16678
+commitPassiveMountOnFiber @ react-dom-client.development.js:16725
+recursivelyTraversePassiveMountEffects @ react-dom-client.development.js:16678
+commitPassiveMountOnFiber @ react-dom-client.development.js:17010
+recursivelyTraversePassiveMountEffects @ react-dom-client.development.js:16678
+commitPassiveMountOnFiber @ react-dom-client.development.js:17010
+recursivelyTraversePassiveMountEffects @ react-dom-client.development.js:16678
+commitPassiveMountOnFiber @ react-dom-client.development.js:16725
+recursivelyTraversePassiveMountEffects @ react-dom-client.development.js:16678
+commitPassiveMountOnFiber @ react-dom-client.development.js:16725
+recursivelyTraversePassiveMountEffects @ react-dom-client.development.js:16678
+commitPassiveMountOnFiber @ react-dom-client.development.js:17010
+recursivelyTraversePassiveMountEffects @ react-dom-client.development.js:16678
+commitPassiveMountOnFiber @ react-dom-client.development.js:17010
+recursivelyTraversePassiveMountEffects @ react-dom-client.development.js:16678
+commitPassiveMountOnFiber @ react-dom-client.development.js:17010
+recursivelyTraversePassiveMountEffects @ react-dom-client.development.js:16678
+commitPassiveMountOnFiber @ react-dom-client.development.js:16725
+recursivelyTraversePassiveMountEffects @ react-dom-client.development.js:16678
+commitPassiveMountOnFiber @ react-dom-client.development.js:16725
+recursivelyTraversePassiveMountEffects @ react-dom-client.development.js:16678
+commitPassiveMountOnFiber @ react-dom-client.development.js:16753
+recursivelyTraversePassiveMountEffects @ react-dom-client.development.js:16678
+commitPassiveMountOnFiber @ react-dom-client.development.js:16725
+recursivelyTraversePassiveMountEffects @ react-dom-client.development.js:16678
+commitPassiveMountOnFiber @ react-dom-client.development.js:16753
+recursivelyTraversePassiveMountEffects @ react-dom-client.development.js:16678
+commitPassiveMountOnFiber @ react-dom-client.development.js:16725
+<ForwardRef(AudioForDevelopmentForwardRefFunction)>
+exports.jsx @ react-jsx-runtime.development.js:342
+AudioRefForwardingFunction @ index.mjs:4802
+react_stack_bottom_frame @ react-dom-client.development.js:28038
+renderWithHooksAgain @ react-dom-client.development.js:8084
+renderWithHooks @ react-dom-client.development.js:7996
+updateForwardRef @ react-dom-client.development.js:10059
+beginWork @ react-dom-client.development.js:12475
+runWithFiberInDEV @ react-dom-client.development.js:986
+performUnitOfWork @ react-dom-client.development.js:18997
+workLoopSync @ react-dom-client.development.js:18825
+renderRootSync @ react-dom-client.development.js:18806
+performWorkOnRoot @ react-dom-client.development.js:17835
+performWorkOnRootViaSchedulerTask @ react-dom-client.development.js:20384
+performWorkUntilDeadline @ scheduler.development.js:45
+<ForwardRef(AudioRefForwardingFunction)>
+exports.createElement @ react.development.js:1137
+MasterVideo @ useFullVideoGeneration.ts:718
+react_stack_bottom_frame @ react-dom-client.development.js:28038
+renderWithHooksAgain @ react-dom-client.development.js:8084
+renderWithHooks @ react-dom-client.development.js:7996
+updateFunctionComponent @ react-dom-client.development.js:10501
+beginWork @ react-dom-client.development.js:12136
+runWithFiberInDEV @ react-dom-client.development.js:986
+performUnitOfWork @ react-dom-client.development.js:18997
+workLoopSync @ react-dom-client.development.js:18825
+renderRootSync @ react-dom-client.development.js:18806
+performWorkOnRoot @ react-dom-client.development.js:17835
+performWorkOnRootViaSchedulerTask @ react-dom-client.development.js:20384
+performWorkUntilDeadline @ scheduler.development.js:45
+<MasterVideo>
+exports.jsx @ react-jsx-runtime.development.js:342
+PlayerUI @ index.mjs:2791
+react_stack_bottom_frame @ react-dom-client.development.js:28038
+renderWithHooksAgain @ react-dom-client.development.js:8084
+renderWithHooks @ react-dom-client.development.js:7996
+updateForwardRef @ react-dom-client.development.js:10059
+beginWork @ react-dom-client.development.js:12475
+runWithFiberInDEV @ react-dom-client.development.js:986
+performUnitOfWork @ react-dom-client.development.js:18997
+workLoopSync @ react-dom-client.development.js:18825
+renderRootSync @ react-dom-client.development.js:18806
+performWorkOnRoot @ react-dom-client.development.js:17835
+performWorkOnRootViaSchedulerTask @ react-dom-client.development.js:20384
+performWorkUntilDeadline @ scheduler.development.js:45
+<ForwardRef(PlayerUI)>
+exports.jsx @ react-jsx-runtime.development.js:342
+PlayerFn @ index.mjs:3334
+react_stack_bottom_frame @ react-dom-client.development.js:28038
+renderWithHooksAgain @ react-dom-client.development.js:8084
+renderWithHooks @ react-dom-client.development.js:7996
+updateForwardRef @ react-dom-client.development.js:10059
+beginWork @ react-dom-client.development.js:12475
+runWithFiberInDEV @ react-dom-client.development.js:986
+performUnitOfWork @ react-dom-client.development.js:18997
+workLoopSync @ react-dom-client.development.js:18825
+renderRootSync @ react-dom-client.development.js:18806
+performWorkOnRoot @ react-dom-client.development.js:17835
+performWorkOnRootViaSchedulerTask @ react-dom-client.development.js:20384
+performWorkUntilDeadline @ scheduler.development.js:45
+<ForwardRef(PlayerFn)>
+exports.jsxDEV @ react-jsx-dev-runtime.development.js:342
+renderContent @ index.tsx:201
+AnimationPlayer @ index.tsx:298
+react_stack_bottom_frame @ react-dom-client.development.js:28038
+renderWithHooksAgain @ react-dom-client.development.js:8084
+renderWithHooks @ react-dom-client.development.js:7996
+updateFunctionComponent @ react-dom-client.development.js:10501
+beginWork @ react-dom-client.development.js:12136
+runWithFiberInDEV @ react-dom-client.development.js:986
+performUnitOfWork @ react-dom-client.development.js:18997
+workLoopSync @ react-dom-client.development.js:18825
+renderRootSync @ react-dom-client.development.js:18806
+performWorkOnRoot @ react-dom-client.development.js:17835
+performWorkOnRootViaSchedulerTask @ react-dom-client.development.js:20384
+performWorkUntilDeadline @ scheduler.development.js:45
+forward-logs-shared.ts:95 [Fast Refresh] rebuilding
+forward-logs-shared.ts:95 [Fast Refresh] done in 4188ms
+forward-logs-shared.ts:95 [Fast Refresh] rebuilding
+forward-logs-shared.ts:95 [Fast Refresh] done in 3783ms
+forward-logs-shared.ts:95 [Fast Refresh] rebuilding
+forward-logs-shared.ts:95 [Fast Refresh] done in 3318ms
+forward-logs-shared.ts:95 [Fast Refresh] rebuilding
+forward-logs-shared.ts:95 [Fast Refresh] done in 3115ms
+forward-logs-shared.ts:95 [Fast Refresh] rebuilding
+forward-logs-shared.ts:95 [Fast Refresh] done in 1093ms
+index.module.js:44 Uncaught TypeError: Cannot read properties of null (reading 'getVersionId')
+    at index.module.js:44:84
+(anonymous) @ index.module.js:44
+requestAnimationFrame
+disposeMessage @ index.module.js:42
+index.module.js:44 Uncaught TypeError: Cannot read properties of null (reading 'getVersionId')
+    at index.module.js:44:84
+(anonymous) @ index.module.js:44
+requestAnimationFrame
+disposeMessage @ index.module.js:42
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+route.tsx import {
   getCombinedSkillContent,
   SKILL_DETECTION_PROMPT,
   SKILL_NAMES,
@@ -39,33 +532,6 @@ INVALID prompts include:
 Return true if the prompt is valid for motion graphics generation, false otherwise.`;
 
 const SYSTEM_PROMPT = `
-## YOUR ROLE
-
-You are an expert React/Remotion animation engineer generating a **single self-contained scene component** for a premium SaaS video pipeline.
-
-## PRIORITY ORDER (NON-NEGOTIABLE)
-
-If any instructions conflict, obey this order:
-1. Valid JavaScript/JSX that compiles
-2. Use only names that are actually in scope
-3. Match the scene's required narrative and brand
-4. Add premium styling and motion
-
-If a premium effect risks syntax errors or undefined names, choose the simpler safe version.
-Never use a component/helper name unless it is explicitly listed as already in scope.
-
-**OUTPUT CONTRACT (memorise this — it overrides everything else):**
-- Pure JavaScript JSX only. No TypeScript. No markdown. No explanations.
-- Use only variables already in scope (BRAND, spring, interpolate, useCurrentFrame, AbsoluteFill, …). No imports.
-- Every bracket \`[\`, \`{\`, \`(\` opened must be closed before the next \`const\`/\`let\`/\`var\`.
-- Ternary condition and \`?\` must be on adjacent lines — NEVER put a comment between them.
-- Last line of output: \`// EOF\` — required by the compiler to detect complete generation.
-- Exactly ONE main component export is allowed: \`export const MyAnimation = () => { ... }\` OR \`export const DynamicAnimation = () => { ... }\`.
-- If you define helper scene components like \`const Scene0 = () => { ... }\`, they MUST be top-level helpers declared BEFORE the single main export.
-- NEVER declare \`export const MyAnimation\`, \`export const DynamicAnimation\`, or any other exported component inside another component body.
-
----
-
 ## CONTINUITY MANDATE (HARD CONSTRAINT)
 
 1. **VISUAL_STATE IS BINDING**: You MUST read the provided \`VISUAL_STATE\` scope variable. It contains explicit instructions from the Director on what must persist from the previous scene.
@@ -89,15 +555,15 @@ You are provided with a \`SKILL_COMPOSITION\` object (primary, secondary, modifi
    - \`emotional-tension\`: useTightEntropy(0.5) on cards, desaturated colors, staggered 8f entry delays.
    - \`emotional-relief\`: GlowBloom(primary), expansive spacing (160px+), spring(config: snap).
    - \`emotional-excitement\`: SPRING_CONFIGS.pop (elastic bounce), bright primary accents.
-   - \`high-depth\`: TiltWrapper or DepthStack.
+   - \`high-depth\`: IsometricWrapper(lift: 12) or DepthStack.
 
 ## HEADLINE ANIMATION: Never use plain opacity fade...
 
-2. BACKGROUND: Use BRAND.bg as the base plate only when needed inside scene content. Animated background layer: Light theme → LightArcBg. Dark theme → MeshGradientBg or subtle branded gradients. If STOCK_VIDEO_URL exists → OffthreadVideo as the animated layer. Never leave the scene as a plain solid color alone.
-3. DEPTH: All UI elements on showcase scenes must have perspective. Use TiltWrapper, DepthStack, or explicit CSS perspective/rotateY. Never flat cards without rotation.
+2. BACKGROUND: Never plain solid fill. Light theme -> LightArcBg. Dark theme -> AbstractMotionBg(mode: hook/cta="gradient-flow", problem="grid-pulse", solution="light-leak", feature/proof="particle-field"). If STOCK_VIDEO_URL exists -> OffthreadVideo base plate.
+3. DEPTH: All UI elements on showcase scenes must have perspective. Use IsometricWrapper, TiltWrapper, or DepthStack. Never flat cards without rotation.
 4. FONT SIZE: Hook/CTA headlines >= 96px. Solution headlines >= 80px. Never render a hero headline smaller than 72px.
-5. CURSOR: Only define CURSOR_STEPS and render HAND_CURSOR/useHumanizedCursor when the scene involves a user interaction demo. Problem/hook/CTA scenes do NOT need a cursor.
-6. STAGGER: Never enter more than 3 elements in the same frame. Stagger gap should scale with scene duration: short scenes (<90f) → 6f gap, normal scenes (90–180f) → 10f gap, long scenes (>180f) → 15f gap.
+5. CURSOR: Feature scenes MUST define CURSOR_STEPS and render AnimatedCursor. No exceptions.
+6. STAGGER: Never enter more than 3 elements in the same frame. Minimum 8-frame gap between sibling entrances.
 7. HOOKS: Always call useVideoConfig() and useCurrentFrame() at the TOP of the component function body, before any const that uses fps or durationInFrames.
 8. OBJECTS: Never leave an unclosed object literal. Double-check all style={{ }} objects are properly closed before the component return.
 
@@ -108,35 +574,13 @@ Your output must look like it was made by a premium motion graphics studio.
 
 ## COMPONENT STRUCTURE
 
-1. DO NOT write any import statements
-2. Export exactly one main component as: \`export const MyAnimation = () => { ... };\`
-3. Optional helper scene components are allowed only at top level:
-   \`\`\`js
-   const Scene0 = () => { return <AbsoluteFill>...</AbsoluteFill>; };
-   const Scene1 = () => { return <AbsoluteFill>...</AbsoluteFill>; };
-
-   export const MyAnimation = () => {
-     return (
-       <AbsoluteFill>
-         <Scene0 />
-         <Scene1 />
-       </AbsoluteFill>
-     );
-   };
-   // EOF
-   \`\`\`
-4. INVALID structure example — NEVER do this:
-   \`\`\`js
-   const Scene1 = () => {
-     export const MyAnimation = () => { ... }; // invalid
-   };
-   \`\`\`
-5. Component body order:
+1. Start with ES6 imports
+2. Export as: export const MyAnimation = () => { ... };
+3. Component body order:
    - Hooks (useCurrentFrame, useVideoConfig)
    - Constants (COLORS, TEXT, TIMING, LAYOUT) — UPPER_SNAKE_CASE, defined INSIDE the component
    - Calculations and derived values
    - Return JSX
-
 
 ## BRAND DESIGN SYSTEM (CRITICAL — read first)
 
@@ -333,12 +777,11 @@ MANDATORY RULES (violations = broken video):
 ## DEFAULT 3D STAGING (MANDATORY for all UI showcases)
 
 Any scene that contains product UI (UI_SCHEMA, device mockup, screenshot-based showcase) must be staged in perspective depth.
-**Default is TiltWrapper or DepthStack** — do NOT invent wrappers that are not in scope.
+**Default is NOT TiltWrapper** — default is "IsometricWrapper".
 
 Rule:
-- Wrap the primary UI layer in one of:
-  \`<TiltWrapper tiltX={-1.5} tiltY={2} glossy>\`
-  or \`<DepthStack cameraRotateY={-12} cameraRotateX={2}>\`
+- Wrap the primary UI layer in:
+  \`<IsometricWrapper lift={12} shadowOpacity={0.35}>\`
 - Cursor layers MUST stay OUTSIDE (CursorRenderer / CursorAnnotationPill).
 
 Canonical pattern:
@@ -347,9 +790,9 @@ Canonical pattern:
   <LightArcBg brand={BRAND} variant={GLOBAL_BG || "arcs"} />
 
   <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
-    <TiltWrapper tiltX={-1.5} tiltY={2} glossy>
+    <IsometricWrapper lift={12} shadowOpacity={0.35}>
       <ReconstructedAppShell uiSchema={UI_SCHEMA} brand={BRAND} />
-    </TiltWrapper>
+    </IsometricWrapper>
   </div>
 
   {/* Cursor OUTSIDE */}
@@ -385,7 +828,7 @@ If you are NOT using UI_SCHEMA and you build UI from scratch, it should still fe
 Any product showcase that feels flat is an automatic quality fail. For UI-heavy scenes, you MUST add depth using at least one:
 - \`<TiltWrapper tiltX={-1.5} tiltY={2}>\`
 - \`<DepthStack cameraRotateY={-10} cameraRotateX={2}>\`
-- Preferred: \`<TiltWrapper tiltX={-1.5} tiltY={2} glossy>\` or \`<DepthStack cameraRotateY={-12} cameraRotateX={2}>\`
+- **Preferred**: \`<IsometricWrapper lift={12} shadowOpacity={0.35}>\` to place the UI on an isometric plane
 
 Rules:
 - Cursor layers must be OUTSIDE these wrappers (cursor should not tilt/scale with the camera plane)
@@ -1007,7 +1450,7 @@ boilerplate and guarantees consistency:
   const CARD_ENTER = snapToDownbeat(45); // snaps 45 → nearest downbeat frame
   \`\`\`
 - **MUSIC_BPM** — Current track BPM (number, in scope). Derived from brand.musicStyle: corporate=90, energetic=128, cinematic=80, calm=68, playful=110. useBeat()/useBeatClock() auto-read this — only pass explicit BPM to override.
-- **MUSIC_MOOD** — Per-scene emotional music mood (string, in scope). Values: "tense" | "sparse-somber" | "uplifting-swell" | "energetic-precise" | "warm-ambient" | "driving-pulse" | "euphoric". Use it to influence pacing, glow intensity, and background energy. Never hardcode a mood — always read from MUSIC_MOOD.
+- **MUSIC_MOOD** — Per-scene emotional music mood (string, in scope). Values: "tense" | "sparse-somber" | "uplifting-swell" | "energetic-precise" | "warm-ambient" | "driving-pulse" | "euphoric". Use it to select AbstractMotionBg mode, beat density, and SFX flavor. Never hardcode a mood — always read from MUSIC_MOOD. Example: mode={MUSIC_MOOD === "tense" ? "grid-pulse" : MUSIC_MOOD === "uplifting-swell" ? "particle-field" : "gradient-flow"}. Skip useBeat() pulse on "sparse-somber" scenes.
 
 - **useSpectrum(band, src?)** — Returns 0–1 real-time audio energy for 'bass', 'mid', or 'treble' at the current frame. Uses actual audio frequency analysis via useAudioData. MUSIC_URL is automatically in scope — no need to pass src explicitly. Returns 0 while audio loads (no first-frame flash).
   \`\`\`tsx
@@ -1091,13 +1534,12 @@ If WORD_TIMINGS is empty (no voiceover), fall back to staggered spring reveals (
 
 ## AUDIO-SPRING SYNC RULE (MANDATORY when WORD_TIMINGS is present)
 
-**CRITICAL**: Every \`spring()\` call must use a SAFE POSITIVE config.
+**CRITICAL**: You MUST use the pre-computed scope constants **AUDIO_STIFFNESS** and **AUDIO_DAMPING** for EVERY \`spring()\` call in the component.
 
-- Prefer the injected presets from \`SPRING_CONFIGS\`: \`SPRING_CONFIGS.entrance\`, \`SPRING_CONFIGS.snap\`, \`SPRING_CONFIGS.pop\`, \`SPRING_CONFIGS.cinematic\`
-- If you need an inline config, all values must be explicit positive numbers.
-- **NEVER** attempt to calculate stiffness/damping from \`WORD_TIMINGS\`.
+- **NEVER** attempt to calculate \`avgGap\` or manually derive stiffness/damping from \`WORD_TIMINGS\`.
 - **NEVER** write code like \`(WORD_TIMINGS[WORD_TIMINGS.length - 1].startFrame - WORD_TIMINGS[0].startFrame) / ...\`
-- Safe usage: \`spring({ frame: frame - startFrame, fps, config: SPRING_CONFIGS.entrance })\`
+- These constants are ALREADY injected into your global scope by the compiler.
+- Usage: \`spring({ frame: frame - startFrame, fps, config: { stiffness: AUDIO_STIFFNESS, damping: AUDIO_DAMPING } })\`
 
 The animations must DANCE to the voiceover rhythm. Synchronize element entrances exactly with \`WORD_TIMINGS[i].startFrame\`.
 
@@ -1168,6 +1610,13 @@ The animations must DANCE to the voiceover rhythm. Synchronize element entrances
   // Cursor-reactive (cursor scenes) — tiltX/Y from useMagnetic():
   const { rotateX, rotateY } = useMagnetic(cursorPos.x, cursorPos.y, cardCX, cardCY, 0.6);
   <TiltWrapper tiltX={rotateX} tiltY={rotateY} glossy={true}><YourCard /></TiltWrapper>
+  \`\`\`
+- **IsometricWrapper** — Preferred isometric plane wrapper for “floating UI in space” staging.
+  \`\`\`tsx
+  // Keep cursor OUTSIDE this wrapper
+  <IsometricWrapper lift={12} shadowOpacity={0.35}>
+    <ReconstructedAppShell uiSchema={UI_SCHEMA} brand={BRAND} />
+  </IsometricWrapper>
   \`\`\`
 - **ActionCamera** — Reactive macro-focus camera that snap-zooms to click targets. Replaces CinematicCamera for cursor-demo scenes.
   \`\`\`tsx
@@ -1542,13 +1991,14 @@ const { translateY, rotateZ } = useVitality(i * 10);
 \`\`\`
 
 ### 4. THE SPRING-SYNC ENGINE
-Every entrance MUST use \`SPRING_CONFIGS\` or explicit safe positive numeric spring configs. NEVER attempt to calculate spring constants from \`WORD_TIMINGS\`.
+Every entrance MUST use the predefined \`AUDIO_STIFFNESS\` and \`AUDIO_DAMPING\` constants from the global scope. NEVER attempt to calculate these constants manually.
 \`\`\`tsx
-// Preferred:
+// Use AUDIO_STIFFNESS as the stiffness for every spring() call in the scene.
+// Pre-computed based on narration density — do not recalculate.
 const entrance = spring({
   frame: frame - appearanceFrame,
   fps,
-  config: SPRING_CONFIGS.entrance
+  config: { stiffness: AUDIO_STIFFNESS, damping: AUDIO_DAMPING }
 });
 \`\`\`
 
@@ -1609,7 +2059,7 @@ When STOCK_VIDEO_URL is available in scope (non-null), it IS the scene — build
     <div style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.22)', zIndex: 1 }} />
   </>
 ) : (
-  <MeshGradientBg />
+  <AbstractMotionBg mode="gradient-flow" brand={BRAND} />
 )}
 
 // Floating UI elements MUST use useTrackedParallax for depth:
@@ -1647,41 +2097,61 @@ MUSIC_BPM is in scope (derived from brand.musicStyle). useBeatClock()/snapToDown
 
 ### 8. Tier 3 Abstract Backgrounds (MANDATORY — never use flat dark color)
 When STOCK_VIDEO_URL is null AND brand.style is not "light":
-- ALWAYS use MeshGradientBg, LightArcBg, ContextualBgPulse, or layered branded gradients as the base background layer
-- Match emotional intent with styling:
-  - hook, cta: energetic gradients + GlowBloom accents
-  - problem: darker mesh gradient + tighter spacing
-  - solution, relief: softer gradients + warm bloom
-  - feature, proof: cleaner mesh gradient + subtle particles/entropy dust
+- ALWAYS use AbstractMotionBg as the base background layer
+- Match mode to scene emotional intent:
+  - hook, cta: "gradient-flow" — Notion-style drifting gradients, energetic
+  - problem, agitate: "grid-pulse" — perspective grid floor, oppressive tension
+  - solution, relief: "light-leak" — soft overlapping beams, warmth emerging
+  - feature, proof: "particle-field" — 60 drifting particles, data-driven feel
+- Place at z:0, wrapped in AbsoluteFill: <AbstractMotionBg mode="gradient-flow" brand={BRAND} />
 - NEVER use a plain solid fill as the ONLY background element
 - Light themes: always <LightArcBg brand={BRAND} variant={GLOBAL_BG || "grid"} />
 
 Examples:
 \`\`\`tsx
-<MeshGradientBg />                                         // dark animated background
-<LightArcBg brand={BRAND} variant={GLOBAL_BG || "grid"} /> // light animated background
-<ContextualBgPulse triggerFrame={30} color={BRAND.primary} /> // event pulse
+<AbstractMotionBg mode="gradient-flow" brand={BRAND} />   // Notion-style drifting gradients
+<AbstractMotionBg mode="particle-field" brand={BRAND} />  // tech/devtools — 60 drifting particles
+<AbstractMotionBg mode="light-leak" brand={BRAND} />      // creative/warm — soft overlapping beams
+<AbstractMotionBg mode="grid-pulse" brand={BRAND} />      // futuristic/AI — perspective grid floor
 \`\`\`
 
-## HEADLINE SLAM PATTERN (use for hook/cta/solution headlines — never plain fade)
+## KINETICTEXT SLAM PATTERN (use for hook/cta/solution headlines — never plain fade)
 
-Use MaskedReveal + spring/interpolate for any scene with emotionalIntent URGENCY, EXCITEMENT, or CONFIDENCE:
+KineticText is in scope. Use it for any scene with emotionalIntent URGENCY, EXCITEMENT, or CONFIDENCE:
 \`\`\`tsx
-const HEADLINE_IN = spring({ frame: frame - 20, fps, config: SPRING_CONFIGS.snap });
-<MaskedReveal startFrame={20} config={SPRING_CONFIGS.snap}>
-  <div style={{
-    fontSize: 96,
-    fontWeight: 900,
-    lineHeight: 1.02,
-    letterSpacing: "-0.05em",
-    color: BRAND.text,
-    transform: \`translateY(\${interpolate(HEADLINE_IN, [0, 1], [28, 0])}px) scale(\${interpolate(HEADLINE_IN, [0, 1], [0.96, 1])})\`,
-  }}>
-    Done in 30 seconds.
-  </div>
-</MaskedReveal>
+// Slam variant — letters drop from above with scaleY bounce:
+<KineticText
+  text="Done in 30 seconds."
+  variant="slam"
+  fontSize={96}
+  fontWeight={900}
+  color={BRAND.text}
+  accentColor={BRAND.primary}
+  highlightWords={HIGHLIGHT_WORDS}
+  delay={10}
+/>
+
+// Reveal variant — mask wipe left to right (solution/AHA scenes):
+<KineticText
+  text="Your report. Automatically."
+  variant="reveal"
+  fontSize={88}
+  color={BRAND.text}
+  accentColor={BRAND.primary}
+  highlightWords={HIGHLIGHT_WORDS}
+/>
+
+// Float-up variant — words float up with stagger (calm/relief scenes):
+<KineticText
+  text="Your team can breathe again."
+  variant="float-up"
+  fontSize={72}
+  color={BRAND.text}
+  highlightWords={HIGHLIGHT_WORDS}
+/>
 \`\`\`
-RULE: On hook/cta scenes use stronger snap motion. On solution/AHA scenes combine MaskedReveal with GlowBloom or SheenOverlay. Always use HIGHLIGHT_WORDS if provided.
+RULE: On hook/cta scenes — use "slam". On solution/AHA scenes — use "reveal". On relief/proof — use "float-up".
+RULE: Always pass highlightWords matching the scene's highlightWords from scope (HIGHLIGHT_WORDS).
 
 ## VIOLATIONS — automatic failures, NEVER produce these
 
@@ -1756,83 +2226,17 @@ Every major visual event (a headline appearing, a card sliding in, a click happe
    - Notification toast entries
 A video where things move "randomly" without rhythmic intent is NOT agency-quality.
 
-## HARD SYNTAX BANS (quick reference — full examples in CRITICAL OUTPUT RULES below)
+## SKILL COMPOSITION ENGINE (STRATEGIC MAPPING)
+If a \`SKILL_COMPOSITION\` object is provided, you MUST respect its modifiers:
+- \`emotional-tension\`: tighten composition, use heavy stiffness (80-120).
+- \`emotional-relief\`: expand layout, add glows, use smooth settle springs (160-220).
+- \`high-depth\`: enforce 3D tilt and Z-layering.
 
-Every rule here maps to a real blank-screen crash in production:
+## OUTPUT FORMAT (CRITICAL)
 
-- **NO TypeScript**: no \`const x: string\`, no \`(): void =>\`, no \`as SomeType\`, no \`interface\`, no \`declare\`
-- **CLOSE ALL BRACKETS**: every \`[\`, \`{\`, \`(\` must close before the next \`const\`/\`let\`/\`var\`
-- **TERNARY ADJACENCY**: condition and \`?\` on adjacent lines — NEVER a comment or blank line between them
-- **JSX TAG CLOSURE**: every \`<Tag>\` needs \`</Tag>\` or \`/>\`. Every \`.map(\` callback ends with \`)}\`
-- **NO SCOPE SHADOWING**: never redefine \`spring\`, \`interpolate\`, \`BRAND\`, \`random\`, or any reserved name
-- **\`// EOF\` LAST LINE**: required — compiler detects truncated output by its absence
-
----
-
-## OUTPUT FORMAT — FINAL CHECKLIST BEFORE YOU WRITE
-
-**Structure:**
-- No import lines anywhere
-- At most one exported main component
-- Helper scene components allowed only before the main export
-- Last line: \`// EOF\` (signals complete generation — required)
-- No markdown fences, no explanations, no comments outside code
-
-**Before you generate each section, confirm:**
-1. All previous \`[\`, \`{\`, \`(\` are CLOSED — count them if unsure
-2. Every ternary \`?\` has a \`:\` else-branch on the same or next line
-3. Every \`.map(\` callback ends with \`)}\`
-4. Every JSX block ends with a close tag or \`/>\`
-5. Every \`style={{\` ends with \`}}\`
-6. Zero TypeScript annotations anywhere (no \`:\`, \`as\`, \`interface\`, \`declare\`)
-
-**Quality requirements:**
-- Make ambitious creative choices — never generate minimal or generic output
-- All colors from BRAND constants — zero hardcoded hex values
-- Every animation has a narrative reason
-- End with \`// EOF\` on the final line — no exceptions
-
----
-
-## ⚠️ CRITICAL OUTPUT RULES — READ LAST, OBEY FIRST
-
-These are the #1 cause of blank scenes in production. Violating any single rule = placeholder screen.
-
-**RULE 1 — TERNARY: condition and ? must be on adjacent lines. A comment between them kills the parse.**
-\`\`\`
-// CRASH — comment breaks the ternary expression:
-const stiffness = WORD_TIMINGS.length > 1
-// Calculate based on timing gap
-  ? heavyValue
-  : lightValue;
-
-// CORRECT — condition immediately followed by ?:
-const stiffness = WORD_TIMINGS.length > 1
-  ? heavyValue   // comment AFTER operator is fine
-  : lightValue;
-\`\`\`
-
-**RULE 2 — BRACKETS: every [ { ( must close before you open a new const/let/var.**
-\`\`\`
-// CRASH: const inside unclosed array
-const items = [
-  { id: 1, label: "First"   // ← missing }, ]
-const title = "Hello";      // ← new const while items[] still open
-
-// CORRECT: fully closed before continuing
-const items = [{ id: 1, label: "First" }];
-const title = "Hello";
-\`\`\`
-
-**RULE 3 — NO TypeScript: zero type annotations, zero interfaces, zero \`as Type\` casts.**
-\`\`\`
-// CRASH: const x: string = ...  |  (): void =>  |  as React.CSSProperties
-// CORRECT: const x = ...  |  () =>  |  (no cast needed)
-\`\`\`
-
-**RULE 4 — JSX: every opening tag must close. Every .map( callback must close with ))}.**
-
-**RULE 5 — LAST LINE must be \`// EOF\` — signals complete generation, required by compiler.**
+- Output ONLY code — no explanations, no markdown fences, no questions
+- Response must start with "import" and end with "};"
+- Make ambitious, high-quality creative choices — do not produce minimal/generic output
 
 `;
 
@@ -2075,9 +2479,7 @@ export async function POST(req: Request) {
           },
         },
       });
-      const parsed = (() => { try { return JSON.parse(valResult.text ?? "{}"); } catch { console.warn("[generate/validate] JSON.parse failed. Raw:", valResult.text?.slice(0, 200)); return null; } })();
-      // If parse fails (null) or valid field is not boolean, treat as allow-through (don't block on classifier failure)
-      const valid = parsed === null ? true : parsed.valid !== false;
+      const { valid } = (() => { try { return JSON.parse(valResult.text ?? "{}"); } catch { console.warn("[generate/validate] JSON.parse failed. Raw:", valResult.text?.slice(0, 200)); return {}; } })();
       if (!valid) {
         return new Response(
           JSON.stringify({
@@ -2188,12 +2590,12 @@ export async function POST(req: Request) {
   }
   // Intent-to-output validation contract — tells the model exactly what the output must contain
   const INTENT_OUTPUT_CONTRACT: Record<string, string> = {
-    hook: '\n## OUTPUT CONTRACT (hook)\nYour first lines of component body must call useVideoConfig and useCurrentFrame. Headline MUST use MaskedReveal plus SPRING_CONFIGS.snap-style motion. Background MUST use MeshGradientBg or LightArcBg.',
-    problem: '\n## OUTPUT CONTRACT (problem)\nBackground MUST be MeshGradientBg or layered gradients. Use ChunkCard or ContentCard, not a flat layout. Apply useStagger to ALL lists. Headline uses MaskedReveal.',
-    solution: '\n## OUTPUT CONTRACT (solution)\nHeadline MUST use MaskedReveal with SPRING_CONFIGS.snap. Background: MeshGradientBg or LightArcBg. Add GlowBloom behind the hero element.',
-    feature: '\n## OUTPUT CONTRACT (feature)\nCURSOR_STEPS is REQUIRED only for true interaction scenes. Use ActionCamera or camera drift patterns, not undefined wrappers. Background: MeshGradientBg or LightArcBg.',
-    proof: '\n## OUTPUT CONTRACT (proof)\nHero metric: use AnimatedMetricCards or a large styled metric block, NOT raw tiny text. Background: MeshGradientBg or LightArcBg. MaskedReveal on headline.',
-    cta: '\n## OUTPUT CONTRACT (cta)\nHeadline MUST use MaskedReveal with strong snap motion. Apply useBeat() pulse to CTA button at hold phase. Background MUST use MeshGradientBg, LightArcBg, or BoldColorBg.',
+    hook: '\n## OUTPUT CONTRACT (hook)\nYour first 5 lines of component body must be: useVideoConfig, useCurrentFrame, then spring/interpolate calculations. Headline MUST use KineticText variant="slam". Background MUST use AbstractMotionBg mode="gradient-flow" or LightArcBg.',
+    problem: '\n## OUTPUT CONTRACT (problem)\nBackground MUST be AbstractMotionBg mode="grid-pulse". Use ChunkCard not ReconstructedAppShell. Apply useStagger to ALL lists. Headline uses MaskedReveal.',
+    solution: '\n## OUTPUT CONTRACT (solution)\nHeadline MUST use MaskedReveal with SPRING_CONFIGS.snap. Background: AbstractMotionBg mode="light-leak" OR LightArcBg. Add GlowBloom behind the hero element.',
+    feature: '\n## OUTPUT CONTRACT (feature)\nCURSOR_STEPS is REQUIRED — define it with 3+ waypoints. Use SteppedCamera (never CinematicCamera). Background: AbstractMotionBg mode="particle-field" or LightArcBg.',
+    proof: '\n## OUTPUT CONTRACT (proof)\nHero metric: use StatCounter or AnimatedMetricCards, NOT raw text. Background: AbstractMotionBg mode="particle-field". MaskedReveal on headline.',
+    cta: '\n## OUTPUT CONTRACT (cta)\nHeadline MUST use KineticText variant="slam" or MaskedReveal. Apply useBeat() pulse to CTA button at hold phase. Background MUST use AbstractMotionBg mode="gradient-flow" or BoldColorBg.',
   };
   if (sceneIntent && INTENT_OUTPUT_CONTRACT[sceneIntent]) {
     tier2 += INTENT_OUTPUT_CONTRACT[sceneIntent];
@@ -2264,69 +2666,48 @@ Analyze the request and decide: use targeted edits (type: "edit") for small chan
 
       console.log("Follow-up edit — model:", modelName, "skills:", detectedSkills.join(", ") || "general");
 
-      // Retry follow-up edits up to 3× on transient 429/503 — same pattern as initial generation.
-      let editResult;
-      let lastEditError: unknown;
-      for (let attempt = 0; attempt < 3; attempt++) {
-        try {
-          editResult = await ai.models.generateContent({
-            model: modelName,
-            contents: [{ role: "user", parts: buildParts(editPromptText, frameImages) }],
-            config: {
-              systemInstruction: FOLLOW_UP_SYSTEM_PROMPT,
-              responseMimeType: "application/json",
-              responseSchema: {
-                type: Type.OBJECT,
-                properties: {
-                  type: {
-                    type: Type.STRING,
-                    description: 'Use "edit" for small targeted changes, "full" for major restructuring',
-                  },
-                  summary: {
-                    type: Type.STRING,
-                    description: "Brief 1-sentence summary of changes made",
-                  },
-                  edits: {
-                    type: Type.ARRAY,
-                    description: "Required when type is edit",
-                    items: {
-                      type: Type.OBJECT,
-                      properties: {
-                        description: { type: Type.STRING },
-                        old_string: { type: Type.STRING, description: "Exact string to find" },
-                        new_string: { type: Type.STRING, description: "Replacement string" },
-                      },
-                      required: ["description", "old_string", "new_string"],
-                    },
-                  },
-                  code: {
-                    type: Type.STRING,
-                    description: "Required when type is full: complete replacement code",
-                  },
-                },
-                required: ["type", "summary"],
+      const editResult = await ai.models.generateContent({
+        model: modelName,
+        contents: [{ role: "user", parts: buildParts(editPromptText, frameImages) }],
+        config: {
+          systemInstruction: FOLLOW_UP_SYSTEM_PROMPT,
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              type: {
+                type: Type.STRING,
+                description: 'Use "edit" for small targeted changes, "full" for major restructuring',
               },
-              ...(thinkingBudget !== undefined && {
-                thinkingConfig: { thinkingBudget },
-              }),
+              summary: {
+                type: Type.STRING,
+                description: "Brief 1-sentence summary of changes made",
+              },
+              edits: {
+                type: Type.ARRAY,
+                description: "Required when type is edit",
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    description: { type: Type.STRING },
+                    old_string: { type: Type.STRING, description: "Exact string to find" },
+                    new_string: { type: Type.STRING, description: "Replacement string" },
+                  },
+                  required: ["description", "old_string", "new_string"],
+                },
+              },
+              code: {
+                type: Type.STRING,
+                description: "Required when type is full: complete replacement code",
+              },
             },
-          });
-          break; // success
-        } catch (err) {
-          lastEditError = err;
-          const msg = err instanceof Error ? err.message : String(err);
-          const retryMatch = msg.match(/"retryDelay"\s*:\s*"(\d+)s"/);
-          const delaySec = retryMatch ? parseInt(retryMatch[1], 10) : 5;
-          const isDailyQuota = msg.includes("PerDay") || delaySec > 60;
-          if ((msg.includes("429") || msg.includes("503")) && !isDailyQuota && attempt < 2) {
-            console.log(`[edit] Rate limit — retrying in ${delaySec}s (attempt ${attempt + 1}/3)...`);
-            await new Promise(r => setTimeout(r, delaySec * 1000));
-            continue;
-          }
-          throw err;
-        }
-      }
-      if (!editResult) throw lastEditError;
+            required: ["type", "summary"],
+          },
+          ...(thinkingBudget !== undefined && {
+            thinkingConfig: { thinkingBudget },
+          }),
+        },
+      });
 
       if (!editResult.text) console.warn("[generate/edit] LLM returned empty edit response");
       let response: { type: "edit" | "full"; summary: string; edits?: EditOperation[]; code?: string };
@@ -2519,3 +2900,58 @@ Analyze the request and decide: use targeted edits (type: "edit") for small chan
     );
   }
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+evry time i am getting the compiling error every time got the issues can u please audit

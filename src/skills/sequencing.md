@@ -492,7 +492,7 @@ Never exceed `zoomTo: 1.15` — it becomes nausea-inducing.
 Reference videos universally use a **hand cursor** (pointing finger), not the standard arrow. This is non-negotiable for scenes with the `premium-cursor-engine` or `premium-chameleon-ui` skill.
 
 **Every cursor scene must:**
-- Use `premium-hand-cursor` SVG (pointing finger with squeeze click animation)
+- Use `premium-cursor-engine` hand cursor SVG (pointing finger with squeeze click animation)
 - Have a `CursorAnnotationPill` during travel phases (not just on arrival)
 - Use 22-frame travel duration (snappier than 25)
 - Include a 10-frame dwell with micro-jitter before clicking

@@ -58,9 +58,14 @@ function clamp(v: number): number {
 }
 
 function normalizeBox(t: any) {
+  // Check if ANY value in the box is > 1.1 (allowing for slight model rounding overshoot)
+  // If so, assume 0-1000 scale and normalize.
+  const b = t.box;
+  const isLargeScale = b && (b.x > 1.1 || b.y > 1.1 || b.w > 1.1 || b.h > 1.1);
+
   const scale = (v: number, fallback: number) => {
     const n = typeof v === "number" ? v : fallback;
-    return clamp(n > 2 ? n / 1000 : n);
+    return clamp(isLargeScale ? n / 1000 : n);
   };
   return {
     x: scale(t.box?.x, 500),
@@ -331,7 +336,9 @@ REFERENCE RANGES on 0–1000 scale:
     },
   });
 
-  const p2 = JSON.parse(pass2Result.text ?? "{}");
+  if (!pass2Result.text) console.warn("[flow-analyze] pass2 LLM returned empty text");
+  let p2: Record<string, unknown>;
+  try { p2 = JSON.parse(pass2Result.text ?? "{}"); } catch (e) { console.error("[flow-analyze] pass2 JSON.parse failed. Raw:", pass2Result.text?.slice(0, 500)); throw e; }
   const screens = Array.isArray(p2.screens) ? p2.screens : [];
   const transitions = Array.isArray(p2.transitions)
     ? p2.transitions.map((t: any) => ({

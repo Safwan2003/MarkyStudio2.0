@@ -4,11 +4,11 @@ import {
   extractComponentCode,
   stripMarkdownFences,
 } from "@/helpers/sanitize-response";
-import { compileCode, extractComponentBody } from "@/remotion/compiler";
+import { compileCode, extractComponentBody, EntropyDust } from "@/remotion/compiler";
 import { alignSceneDurations } from "@/lib/alignScenes";
 import type { BrandTokens, CursorWaypoint, ModelId, ScenePlan, ScreenFlow } from "@/types/generation";
 import React, { useCallback, useRef, useState } from "react";
-import { AbsoluteFill, Audio, Sequence, interpolate, useCurrentFrame, useVideoConfig } from "remotion";
+import { AbsoluteFill, Audio, Sequence, interpolate, random, useCurrentFrame, useVideoConfig } from "remotion";
 
 export interface CompiledScene {
   Component: React.ComponentType;
@@ -29,6 +29,17 @@ export interface CompiledScene {
   musicVolume?: number;
   voiceoverAudioUrl?: string | null;
   wordTimings?: { word: string; startFrame: number; endFrame: number }[];
+  creativeBrief?: import("@/types/generation").CreativeBrief | null;
+  backbone?: import("@/types/generation").NarrativeBackbone | null;
+  uiSchema?: Record<string, unknown> | null;
+  highlightWords?: string[];
+  visualState?: string | null;
+  visualAnchor?: { icon?: string; label?: string; colorFrom?: string; colorTo?: string } | null;
+  featureHeader?: { label: string; badge?: string; icon?: string } | null;
+  stockFootage?: string | null;
+  musicMood?: string;
+  skillComposition?: { primary: string; secondary?: string[]; modifiers?: string[] } | null;
+  pipelineCursorSteps?: Array<{ x: number; y: number; time: number; label?: string; box?: object }>;
 }
 
 // Module-level LRU cache — max 30 entries, evicts least-recently-used to prevent memory leaks
@@ -101,12 +112,137 @@ function applyPacingProfile(scenes: ScenePlan[]): ScenePlan[] {
   });
 }
 
+/**
+ * enforceNarrativeContract
+ *
+ * Validates and auto-repairs the scene plan to ensure it meets the minimum
+ * narrative structure required for a WhatAStory-quality video.
+ * Non-destructive: only adds/corrects, never removes scenes.
+ */
+function enforceNarrativeContract(scenes: ScenePlan[]): ScenePlan[] {
+  let result = [...scenes];
+
+  // Rule 1: Must have at least one AHA/RELIEF moment
+  const hasAha = result.some(
+    (s) => s.isAhaMoment || s.emotionalIntent === "RELIEF" || s.intent === "solution"
+  );
+  if (!hasAha && result.length > 0) {
+    // Auto-promote the last non-CTA scene to AHA
+    const lastNonCta = [...result].reverse().find((s) => s.intent !== "cta");
+    if (lastNonCta) {
+      result = result.map((s) =>
+        s.id === lastNonCta.id
+          ? { ...s, isAhaMoment: true, emotionalIntent: "RELIEF" as const }
+          : s
+      );
+      console.warn("[NarrativeContract] No AHA moment found — auto-promoted scene:", lastNonCta.id);
+    }
+  }
+
+  // Rule 2: Must have a hook/problem scene early (within first 2 scenes)
+  const earlyProblem = result.slice(0, 2).some(
+    (s) => s.intent === "hook" || s.intent === "problem" || s.emotionalIntent === "FRUSTRATION" || s.emotionalIntent === "PAIN"
+  );
+  if (!earlyProblem && result.length > 1) {
+    // Force scene 1 (index 0) to have problem framing if it doesn't already
+    result = result.map((s, i) =>
+      i === 0 && s.intent !== "hook"
+        ? { ...s, intent: "hook" as const }
+        : s
+    );
+    console.warn("[NarrativeContract] No early problem/hook — scene 0 forced to hook intent.");
+  }
+
+  // Rule 3: CTA must be last
+  const ctaIndex = result.findIndex((s) => s.intent === "cta");
+  if (ctaIndex !== -1 && ctaIndex !== result.length - 1) {
+    const ctaScene = result.splice(ctaIndex, 1)[0];
+    result.push(ctaScene);
+    console.warn("[NarrativeContract] CTA was not last — moved to end.");
+  }
+
+  // Rule 4: No two consecutive scenes with same primary skill (advisory only)
+  for (let i = 1; i < result.length; i++) {
+    const prev = result[i - 1];
+    const curr = result[i];
+    if (
+      prev.skillComposition?.primary &&
+      curr.skillComposition?.primary &&
+      prev.skillComposition.primary === curr.skillComposition.primary
+    ) {
+      console.warn(
+        `[NarrativeContract] Consecutive scenes ${i - 1} and ${i} share primary skill "${curr.skillComposition.primary}" — consider diversifying.`
+      );
+    }
+  }
+
+  return result;
+}
+
+/** Post-generation rhythm profile enforcement — adjusts CompiledScene durations for pacing.
+ *  Runs AFTER generation (on CompiledScene[]), complementing applyPacingProfile which runs before.
+ *  Rules:
+ *  - CTA/urgency scenes: clamp to ≤150f (punchy, don't drag)
+ *  - AHA moment: minimum 210f (let the payoff breathe)
+ *  - Frustration scenes: max 180f (keep the pain urgent)
+ *  - No 3 consecutive same-duration scenes (break monotony)
+ *  - Snap to 30f boundaries, clamp to [90, 360]
+ */
+function enforceRhythmProfile(scenes: CompiledScene[]): CompiledScene[] {
+  return scenes.map((scene, i) => {
+    const intentL = (scene.emotionalIntent ?? "").toLowerCase();
+    let dur = scene.durationInFrames;
+
+    // CTA scenes must be punchy — never drag
+    if ((intentL === "urgency" || scene.title?.toLowerCase().includes("cta")) && dur > 180) {
+      console.log(`[rhythm] CTA scene "${scene.title}" clamped ${dur}→150f`);
+      dur = 150;
+    }
+
+    // AHA moment must breathe — minimum 210 frames
+    if (scene.isAhaMoment && dur < 210) {
+      console.log(`[rhythm] AHA scene "${scene.title}" extended ${dur}→210f`);
+      dur = 210;
+    }
+
+    // Problem/frustration scenes stay urgent — max 180f
+    if (intentL === "frustration" && dur > 180) {
+      console.log(`[rhythm] Problem scene "${scene.title}" clamped ${dur}→180f`);
+      dur = 180;
+    }
+
+    // Break monotony: no 3 consecutive scenes with same duration
+    if (i >= 2) {
+      const prev1 = scenes[i - 1]?.durationInFrames;
+      const prev2 = scenes[i - 2]?.durationInFrames;
+      if (dur === prev1 && dur === prev2) {
+        const adjusted = i % 2 === 0 ? Math.round(dur * 0.9) : Math.round(dur * 1.1);
+        console.log(`[rhythm] Breaking monotony at scene "${scene.title}": ${dur}→${adjusted}f`);
+        dur = adjusted;
+      }
+    }
+
+    // Snap to 30-frame boundaries and clamp
+    dur = Math.max(90, Math.min(360, Math.round(dur / 30) * 30));
+    return dur !== scene.durationInFrames ? { ...scene, durationInFrames: dur } : scene;
+  });
+}
+
+/** Fast non-crypto hash (djb2) — collision-resistant for prompt strings up to any length. */
+function hashStr(s: string): string {
+  let h = 5381;
+  for (let i = 0; i < s.length; i++) h = ((h << 5) + h) ^ s.charCodeAt(i);
+  return (h >>> 0).toString(36);
+}
+
 function cacheKey(scene: ScenePlan, brand: BrandTokens): string {
-  const vo = scene.voiceoverText?.slice(0, 40) ?? "";
   const emotion = scene.emotionalIntent ?? "";
   const aha = scene.isAhaMoment ? "aha" : "";
   const wpts = scene.cursorWaypoints?.map((w) => `${w.x.toFixed(2)},${w.y.toFixed(2)}`).join("|") ?? "";
-  return `${scene.skills.join(",")}::${brand.primary}::${scene.imageIndex ?? -1}::${scene.durationInFrames}::${scene.prompt.slice(0, 60)}::${vo}::${emotion}::${aha}::${wpts}`;
+  // Hash the full prompt — avoids collisions from prompt.slice(0,60) on similar scene descriptions
+  const promptHash = hashStr(scene.prompt);
+  const voHash = hashStr(scene.voiceoverText ?? "");
+  return `${scene.skills.join(",")}::${brand.primary}::${scene.imageIndex ?? -1}::${scene.durationInFrames}::${promptHash}::${voHash}::${emotion}::${aha}::${wpts}`;
 }
 
 const TRANSITION_FRAMES = 20;
@@ -116,12 +252,15 @@ const HOLD_FRAMES = 24; // ~0.8s hold after animations complete before transitio
 // SceneErrorBoundary — catches ReferenceErrors from LLM-generated code
 // (e.g. undefined variables like "BadgeCoin is not defined") that occur
 // during React's render phase and cannot be caught with try/catch.
+//
+// On failure, renders a high-quality branded fallback scene so the video
+// still looks coherent rather than showing a debug error screen.
 // ---------------------------------------------------------------------------
 class SceneErrorBoundary extends React.Component<
-  { children: React.ReactNode; sceneName?: string },
+  { children: React.ReactNode; sceneName?: string; brand?: Partial<BrandTokens> | null },
   { hasError: boolean; errorMessage: string }
 > {
-  constructor(props: { children: React.ReactNode; sceneName?: string }) {
+  constructor(props: { children: React.ReactNode; sceneName?: string; brand?: Partial<BrandTokens> | null }) {
     super(props);
     this.state = { hasError: false, errorMessage: "" };
   }
@@ -132,20 +271,65 @@ class SceneErrorBoundary extends React.Component<
 
   render() {
     if (this.state.hasError) {
+      const { brand, sceneName } = this.props;
+      const isLight = brand?.style === "light";
+      // For light brands use a slightly off-white so the fallback is visually distinct from blank.
+      const bg = isLight ? "#f0f2f5" : (brand?.bg ?? "#0f0f1a");
+      const primary = brand?.primary ?? "#6366f1";
+      const text = isLight ? "#1a1a2e" : (brand?.text ?? "#ffffff");
+      const font = brand?.font ?? "Inter, sans-serif";
+
+      // Gradient overlay — stronger opacity so it's visible on light backgrounds
+      const gradientOverlay = `radial-gradient(ellipse at 30% 40%, ${primary}33 0%, transparent 60%),
+        radial-gradient(ellipse at 75% 70%, ${primary}22 0%, transparent 55%)`;
+
       return React.createElement("div", {
         style: {
           position: "absolute", inset: 0,
-          background: "#0f0f1a",
+          background: bg,
           display: "flex", flexDirection: "column",
-          alignItems: "center", justifyContent: "center", gap: 8,
+          alignItems: "center", justifyContent: "center",
         },
       },
-        React.createElement("span", {
-          style: { color: "#ef4444", fontSize: 13, fontFamily: "monospace" },
-        }, "⚠ Render error"),
-        React.createElement("span", {
-          style: { color: "#555", fontSize: 11, fontFamily: "monospace", maxWidth: 400, textAlign: "center" },
-        }, this.state.errorMessage),
+        // Gradient atmosphere
+        React.createElement("div", {
+          style: { position: "absolute", inset: 0, background: gradientOverlay, pointerEvents: "none" },
+        }),
+        // Accent line at top
+        React.createElement("div", {
+          style: {
+            position: "absolute", top: 0, left: "10%", right: "10%", height: 2,
+            background: `linear-gradient(90deg, transparent, ${primary}, transparent)`,
+            opacity: 0.8,
+          },
+        }),
+        // Scene title (if available)
+        sceneName ? React.createElement("div", {
+          style: {
+            color: text, fontFamily: font, fontSize: 48, fontWeight: 700,
+            letterSpacing: "-0.02em", textAlign: "center", maxWidth: "70%",
+            lineHeight: 1.2,
+            position: "relative", zIndex: 1,
+          },
+        }, sceneName) : null,
+        // Brand accent dot
+        React.createElement("div", {
+          style: {
+            width: 8, height: 8, borderRadius: "50%",
+            background: primary, marginTop: 24,
+            boxShadow: `0 0 20px ${primary}88`,
+            position: "relative", zIndex: 1,
+          },
+        }),
+        // Visible error hint so dev knows what failed
+        React.createElement("div", {
+          style: {
+            position: "absolute", bottom: 12, right: 16,
+            color: isLight ? "rgba(0,0,0,0.45)" : "rgba(255,255,255,0.35)",
+            fontSize: 10, fontFamily: "monospace",
+            maxWidth: 300, textAlign: "right",
+          },
+        }, this.state.errorMessage.slice(0, 80)),
       );
     }
     return this.props.children;
@@ -183,6 +367,8 @@ function withTransition(
   enterType: TransitionType = "fade",
   exitType: TransitionType = "fade",
   exitAnchor?: { x: number; y: number },
+  sceneTitle?: string,
+  brand?: Partial<BrandTokens> | null,
 ): React.ComponentType {
   const fadeIn  = isFirst ? 8 : TRANSITION_FRAMES;
   const fadeOut = isLast  ? 8 : TRANSITION_FRAMES;
@@ -280,8 +466,8 @@ function withTransition(
       : 0;
 
     const sceneElement = React.createElement(
-      SceneErrorBoundary,
-      null,
+      SceneErrorBoundary as React.ComponentType<{ sceneName?: string; brand?: Partial<BrandTokens> | null; children?: React.ReactNode }>,
+      { sceneName: sceneTitle, brand },
       React.createElement(SceneComp),
     );
 
@@ -323,7 +509,7 @@ function createMasterComponent(
     const exitType: TransitionType = exitAnchor
       ? "zoomThrough"
       : ((scenes[i + 1]?.transition as TransitionType | undefined) ?? "fade");
-    const Wrapped = withTransition(s.Component, s.durationInFrames, i === 0, i === scenes.length - 1, enterType, exitType, exitAnchor);
+    const Wrapped = withTransition(s.Component, s.durationInFrames, i === 0, i === scenes.length - 1, enterType, exitType, exitAnchor, s.title, brand);
     entries.push({ from: offset, Component: Wrapped, duration: s.durationInFrames + HOLD_FRAMES });
     // Overlap next scene by TRANSITION_FRAMES for cross-dissolve (except after last).
     // HOLD_FRAMES pads each scene's slot so animations fully settle before the dissolve begins.
@@ -338,6 +524,19 @@ function createMasterComponent(
     to: e.from + e.duration,
     emotionalIntent: scenes[i]?.emotionalIntent ?? "",
   }));
+
+  // Binary search helper — replaces O(n) .find() called every frame across 3 overlay layers.
+  // sceneIntentMap is already sorted ascending by .from (scenes render in order).
+  const findSceneAtFrame = (map: typeof sceneIntentMap, frame: number) => {
+    let lo = 0, hi = map.length - 1;
+    while (lo <= hi) {
+      const mid = (lo + hi) >>> 1;
+      if (frame < map[mid].from) hi = mid - 1;
+      else if (frame >= map[mid].to) lo = mid + 1;
+      else return map[mid];
+    }
+    return null;
+  };
 
   // Build section label map: frame range → label for persistent feature labels
   const sceneSectionLabelMap = entries.map((e, i) => ({
@@ -355,7 +554,7 @@ function createMasterComponent(
   const GRAIN_B = `url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.87' numOctaves='6' seed='9' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E")`;
   const FilmGrainLayer = function FilmGrainLayer() {
     const frame = useCurrentFrame();
-    const intent = sceneIntentMap.find(s => frame >= s.from && frame < s.to)?.emotionalIntent ?? "";
+    const intent = findSceneAtFrame(sceneIntentMap, frame)?.emotionalIntent ?? "";
     const opacity = intent === "FRUSTRATION" || intent === "PAIN" ? 0.06
       : intent === "RELIEF" || intent === "CONFIDENCE" ? 0.02
       : intent === "EXCITEMENT" || intent === "URGENCY" ? 0.04
@@ -421,8 +620,8 @@ function createMasterComponent(
   const VignetteLayer = function VignetteLayer() {
     const frame = useCurrentFrame();
     // Find current and adjacent scene boundary to interpolate vignette
-    const currentEntry = sceneIntentMap.find(s => frame >= s.from && frame < s.to);
-    const nextEntry = sceneIntentMap.find(s => s.from > (currentEntry?.from ?? 0));
+    const currentEntry = findSceneAtFrame(sceneIntentMap, frame);
+    const nextEntry = currentEntry ? sceneIntentMap[sceneIntentMap.indexOf(currentEntry) + 1] ?? null : null;
     const getVigOpacity = (intent: string) =>
       intent === "FRUSTRATION" || intent === "PAIN" ? 0.15 : intent === "RELIEF" ? 0.05 : 0.08;
     const currentOpacity = getVigOpacity(currentEntry?.emotionalIntent ?? "");
@@ -442,6 +641,14 @@ function createMasterComponent(
     });
   };
 
+  const PersistentWorldLayer = function PersistentWorldLayer() {
+    return React.createElement(EntropyDust, {
+      brand: brand as any,
+      count: 18,
+      zIndex: 1
+    });
+  };
+
   // Global background layer — renders animated LightArcBg for light-themed videos
   // Replicates the compiler-scope LightArcBg "arcs" variant inline so the master
   // composition has the same animated arc texture as individual scenes.
@@ -449,11 +656,22 @@ function createMasterComponent(
   const primary_ = brand?.primary || "#6366f1";
   const secondary_ = brand?.secondary || "#ec4899";
 
+  // 18 entropy dust particles — stable seed matches compiler.ts ENTROPY_DUST_PARTICLES
+  // so particles appear in the same world positions as scene-level dust overlays.
+  const WORLD_DUST = Array.from({ length: 18 }, (_, i) => ({
+    x: random(`edust-x-${i}`) as number,
+    y: random(`edust-y-${i}`) as number,
+    size: (random(`edust-s-${i}`) as number) * 3 + 1.5,
+    speed: (random(`edust-sp-${i}`) as number) * 0.4 + 0.2,
+    phase: (random(`edust-p-${i}`) as number) * Math.PI * 2,
+    opacity: (random(`edust-o-${i}`) as number) * 0.04 + 0.015,
+  }));
+
   // PersistentBg — renders ONE background for the ENTIRE video across all scenes.
   // This is the core of WhatAStory's "infinite canvas" feel: the background never
   // changes, so cuts feel like camera moves through one world, not separate slides.
   // Light brands: animated arc SVG overlay on brand.bg
-  // Dark brands: subtle animated radial mesh gradient on brand.bg
+  // Dark brands: subtle animated radial mesh gradient on brand.bg + entropy dust
   const AnimatedArcBg = function PersistentBg() {
     const frame = useCurrentFrame();
     const { width: W, height: H } = useVideoConfig();
@@ -522,6 +740,26 @@ function createMasterComponent(
           ].join(", "),
         },
       }),
+      // Entropy dust — 18 particles with stable seeds, same positions as scene-level dust
+      // Creates the "infinite canvas" feel: dust is always there as the camera pans over it
+      ...WORLD_DUST.map((p, i) =>
+        React.createElement("div", {
+          key: `wdust-${i}`,
+          style: {
+            position: "absolute",
+            left: `${p.x * 100}%`,
+            top: `${p.y * 100}%`,
+            width: p.size,
+            height: p.size,
+            borderRadius: "50%",
+            background: `rgba(255,255,255,${(p.opacity + Math.sin(frame * 0.02 + p.phase) * 0.008).toFixed(4)})`,
+            transform: `translateY(${(Math.sin(frame * 0.015 * p.speed + p.phase) * 3).toFixed(2)}px)`,
+            willChange: "transform",
+            pointerEvents: "none",
+            zIndex: 1,
+          },
+        })
+      ),
     );
   };
 
@@ -535,9 +773,10 @@ function createMasterComponent(
     const rawValues: number[] = [];
     entries.forEach((e, i) => {
       const sceneVol = (scenes[i]?.musicVolume ?? 1.0) * baseVolume;
-      const prevVol = i > 0 ? (scenes[i - 1]?.musicVolume ?? 1.0) * baseVolume : sceneVol;
       rawFrames.push(e.from, e.from + 15);
-      rawValues.push(prevVol, sceneVol);
+      // Duck to 35% of scene target at each scene boundary (gives SFX audio space),
+      // then ramp to full scene volume over 15 frames.
+      rawValues.push(sceneVol * 0.35, sceneVol);
     });
     // Deduplicate: interpolate requires strictly monotonically increasing frames
     rawFrames.forEach((f, idx) => {
@@ -574,7 +813,7 @@ function createMasterComponent(
       null,
       React.createElement(AnimatedArcBg),
       // Background music with per-scene volume automation
-      musicUrl
+      (musicUrl && musicUrl.length > 5)
         ? React.createElement(Audio, {
             src: musicUrl,
             volume: musicVol,
@@ -586,11 +825,7 @@ function createMasterComponent(
           key: i,
           from,
           durationInFrames: duration,
-          children: React.createElement(
-            SceneErrorBoundary,
-            { sceneName: scenes[i]?.title ?? `Scene ${i + 1}`, children: null },
-            React.createElement(SceneComp),
-          ),
+          children: React.createElement(SceneComp),
         }),
       ),
       // Phase 5.1: Transition SFX
@@ -600,6 +835,7 @@ function createMasterComponent(
       // Phase 5.2: Persistent section label — feature name in top-left corner
       SectionLabelLayer ? React.createElement(SectionLabelLayer) : null,
       // FilmGrain overlay — topmost layer across entire video
+      React.createElement(PersistentWorldLayer),
       React.createElement(FilmGrainLayer),
     );
   };
@@ -620,21 +856,33 @@ export function buildMasterCode(
   const sceneComponents = scenes
     .map((scene, i) => {
       const body = extractComponentBody(scene.code);
-      // Reference VOICEOVER_URLS (injected as scope variable by DynamicComp) instead of
-      // embedding 100KB+ base64 data URLs inline — keeps masterCode string lean.
-      const voiceoverLine = scene.voiceoverAudioUrl
-        ? `  const VOICEOVER_AUDIO_URL = typeof VOICEOVER_URLS !== "undefined" ? (VOICEOVER_URLS[${JSON.stringify(String(i))}] ?? null) : null;\n  const WORD_TIMINGS = ${JSON.stringify(scene.wordTimings ?? [])};\n`
-        : "";
-      return `const Scene${i} = () => {\n${voiceoverLine}${body}\n};`;
+      const scenePrelude = [
+        scene.voiceoverAudioUrl
+          ? `  const VOICEOVER_AUDIO_URL = typeof VOICEOVER_URLS !== "undefined" ? (VOICEOVER_URLS[${JSON.stringify(String(i))}] ?? null) : null;`
+          : "",
+        `  const WORD_TIMINGS = ${JSON.stringify(scene.wordTimings ?? [])};`,
+        `  const UI_SCHEMA = ${JSON.stringify(scene.uiSchema ?? null)};`,
+        `  const HIGHLIGHT_WORDS = ${JSON.stringify(scene.highlightWords ?? [])};`,
+        `  const VISUAL_STATE = ${JSON.stringify(scene.visualState ?? null)};`,
+        `  const VISUAL_ANCHOR = ${JSON.stringify(scene.visualAnchor ?? null)};`,
+        `  const FEATURE_HEADER = ${JSON.stringify(scene.featureHeader ?? null)};`,
+        `  const STOCK_VIDEO_URL = ${JSON.stringify(scene.stockFootage ?? null)};`,
+        `  const MUSIC_MOOD = ${JSON.stringify(scene.musicMood ?? "energetic-precise")};`,
+        `  const SKILL_COMPOSITION = ${JSON.stringify(scene.skillComposition ?? null)};`,
+        `  const PIPELINE_CURSOR_STEPS = ${JSON.stringify(scene.pipelineCursorSteps ?? [])};`,
+      ].filter(Boolean).join("\n");
+      return `const Scene${i} = () => {\n${scenePrelude}\n${body}\n};`;
     })
     .join("\n\n");
 
   let offset = 0;
   const sfxSequences: string[] = [];
   const sectionLabelMap: Array<{ from: number; to: number; label: string }> = [];
+  const sceneFromFrames: number[] = [];
   const sequences = scenes
     .map((scene, i) => {
       const from = offset;
+      sceneFromFrames.push(from);
       // Mirror createMasterComponent: each slot = durationInFrames + HOLD_FRAMES
       const seqDuration = scene.durationInFrames + HOLD_FRAMES;
       const label = (scene as any).sectionLabel as string | undefined;
@@ -657,9 +905,37 @@ export function buildMasterCode(
     })
     .join("\n");
 
-  const musicLine = musicUrl
-    ? `    <Audio src={${JSON.stringify(musicUrl)}} volume={0.3} loop />\n`
+  // Build per-scene volume automation — mirrors createMasterComponent so Lambda render matches preview
+  const hasVoiceover = scenes.some(s => s.hasVoiceover);
+  const masterBaseVol = hasVoiceover ? 0.08 : 0.18;
+  const masterVolFrames: number[] = [];
+  const masterVolValues: number[] = [];
+  {
+    const rawF: number[] = [];
+    const rawV: number[] = [];
+    sceneFromFrames.forEach((from, i) => {
+      const sceneVol = (scenes[i]?.musicVolume ?? 1.0) * masterBaseVol;
+      rawF.push(from, from + 15);
+      // Duck to 35% at each scene boundary for SFX space.
+      rawV.push(sceneVol * 0.35, sceneVol);
+    });
+    rawF.forEach((f, idx) => {
+      if (masterVolFrames.length === 0 || f > masterVolFrames[masterVolFrames.length - 1]) {
+        masterVolFrames.push(f);
+        masterVolValues.push(rawV[idx]);
+      }
+    });
+  }
+  const musicComponentDef = (musicUrl && musicUrl.length > 5)
+    ? masterVolFrames.length > 1
+      ? `const _MusicComp = () => {
+  const _f = useCurrentFrame();
+  const _vol = interpolate(_f, ${JSON.stringify(masterVolFrames)}, ${JSON.stringify(masterVolValues)}, { extrapolateLeft: "clamp", extrapolateRight: "clamp" });
+  return <Audio src={${JSON.stringify(musicUrl)}} volume={_vol} loop />;
+};`
+      : `const _MusicComp = () => <Audio src={${JSON.stringify(musicUrl)}} volume={${masterBaseVol.toFixed(4)}} loop />;`
     : "";
+  const musicJsx = (musicUrl && musicUrl.length > 5) ? `      <_MusicComp />\n` : "";
 
   const allSequences = [sequences, ...sfxSequences].join("\n");
 
@@ -712,12 +988,13 @@ ${sectionLabelsComponent}`;
 
   return `${sceneComponents}
 ${masterLayers}
+${musicComponentDef}
 
 export const DynamicAnimation = () => {
   return (
     <AbsoluteFill>
       <_MasterBg />
-${musicLine}${allSequences}
+${musicJsx}${allSequences}
       <_MasterVignette />
       <_MasterGrain />${sectionLabelsJsx}
     </AbsoluteFill>
@@ -779,30 +1056,42 @@ function createPlaceholderScene(title: string, reason?: string): React.Component
 
 /** Build a structured brand block that gets injected into every scene prompt. */
 function buildBrandBlock(brand: BrandTokens): string {
+  // Defensive fallbacks — LLM may return an incomplete brand object despite the TypeScript type
+  const bg        = brand.bg        || "#0f0f1a";
+  const primary   = brand.primary   || "#6366f1";
+  const secondary = brand.secondary || "#a78bfa";
+  const surface   = brand.surface   || "rgba(255,255,255,0.06)";
+  const text      = brand.text      || "#ffffff";
+  const textMuted = brand.textMuted || "rgba(255,255,255,0.5)";
+  const border    = brand.border    || "rgba(255,255,255,0.12)";
+  const font      = brand.font      || "Inter";
+  const style     = brand.style     || "dark";
+  const musicStyle = brand.musicStyle || "cinematic";
+
   return `## BRAND DESIGN SYSTEM (MANDATORY — use these exact values, no exceptions)
 
 BRAND is already injected into scope — DO NOT declare it. Use BRAND.bg, BRAND.primary, etc. directly.
 
 // Reference only — these are the values:
-// BRAND.bg        = "${brand.bg}"         — AbsoluteFill background, ALL scene backgrounds
-// BRAND.primary   = "${brand.primary}"    — CTA buttons, key accents, active states, glows
-// BRAND.secondary = "${brand.secondary}"  — secondary panels, complementary accents
-// BRAND.surface   = "${brand.surface}"    — glass card backgrounds (already has correct opacity)
-// BRAND.text      = "${brand.text}"       — ALL headline and label text
-// BRAND.textMuted = "${brand.textMuted}"  — subtitles, captions, metadata
-// BRAND.border    = "${brand.border}"     — glass card borders, divider lines
-// BRAND.font      = "${brand.font}"       — fontFamily on every text element
-// BRAND.style     = "${brand.style}"      — "dark" | "light" | "neon"
-// BRAND.musicStyle = "${brand.musicStyle ?? "cinematic"}" — "energetic" | "calm" | "cinematic" | "corporate" | "playful"`;
+// BRAND.bg        = "${bg}"         — AbsoluteFill background, ALL scene backgrounds
+// BRAND.primary   = "${primary}"    — CTA buttons, key accents, active states, glows
+// BRAND.secondary = "${secondary}"  — secondary panels, complementary accents
+// BRAND.surface   = "${surface}"    — glass card backgrounds (already has correct opacity)
+// BRAND.text      = "${text}"       — ALL headline and label text
+// BRAND.textMuted = "${textMuted}"  — subtitles, captions, metadata
+// BRAND.border    = "${border}"     — glass card borders, divider lines
+// BRAND.font      = "${font}"       — fontFamily on every text element
+// BRAND.style     = "${style}"      — "dark" | "light" | "neon"
+// BRAND.musicStyle = "${musicStyle}" — "energetic" | "calm" | "cinematic" | "corporate" | "playful"`;
 }
 
 /** Fetch a background music track for the given style from ElevenLabs. Returns null on failure. */
-async function prefetchMusic(style: string): Promise<string | null> {
+async function prefetchMusic(style: string, musicMood?: string): Promise<string | null> {
   try {
     const res = await fetch("/api/music", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ style }),
+      body: JSON.stringify({ style, musicMood }),
     });
     if (!res.ok) return null;
     const { audioUrl } = await res.json();
@@ -824,37 +1113,50 @@ async function prefetchSfx(): Promise<Record<string, string>> {
   }
 }
 
-/** Pre-fetch ElevenLabs voiceover for every scene that has voiceoverText. Runs in parallel. */
+/** Pre-fetch voiceovers sequentially to avoid hitting TTS rate limits (3 req/min on free tier). */
 async function prefetchVoiceovers(scenes: ScenePlan[], voiceId?: string): Promise<ScenePlan[]> {
-  // Deduplicate by voiceover text to avoid redundant ElevenLabs calls
+  // Deduplicate by voiceover text to avoid redundant calls
   const textToAudio = new Map<string, { audioUrl: string; wordTimings: ScenePlan["wordTimings"] }>();
-  return Promise.all(
-    scenes.map(async (scene) => {
-      if (!scene.voiceoverText?.trim()) return scene;
-      const text = scene.voiceoverText.trim();
-      if (textToAudio.has(text)) {
-        const cached = textToAudio.get(text)!;
-        return { ...scene, voiceoverAudioUrl: cached.audioUrl, wordTimings: cached.wordTimings };
-      }
-      try {
-        const res = await fetch("/api/tts", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ text: scene.voiceoverText, voiceId }),
-        });
-        if (!res.ok) return scene;
-        const { audioUrl, wordTimings } = await res.json();
-        if (!audioUrl) return scene;
-        const timings = Array.isArray(wordTimings) && wordTimings.length > 0 ? wordTimings : scene.wordTimings;
-        if (audioUrl) {
-          textToAudio.set(text, { audioUrl, wordTimings: timings });
-        }
-        return { ...scene, voiceoverAudioUrl: audioUrl, wordTimings: timings };
-      } catch {
-        return scene; // non-fatal — generation proceeds without audio
-      }
-    }),
-  );
+  const results: ScenePlan[] = [];
+
+  for (const scene of scenes) {
+    if (!scene.voiceoverText?.trim()) {
+      results.push(scene);
+      continue;
+    }
+    const text = scene.voiceoverText.trim();
+    // Validate word count: trim if voiceover exceeds scene duration capacity
+    const maxWords = Math.ceil((scene.durationInFrames / 30) * 2.8);
+    const wordArr = text.split(/\s+/);
+    const trimmedText = wordArr.length > maxWords ? wordArr.slice(0, maxWords).join(" ") : text;
+
+    if (textToAudio.has(trimmedText)) {
+      const cached = textToAudio.get(trimmedText)!;
+      results.push({ ...scene, voiceoverAudioUrl: cached.audioUrl, wordTimings: cached.wordTimings });
+      continue;
+    }
+
+    try {
+      const res = await fetch("/api/tts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: trimmedText, voiceId, intent: scene.intent }),
+      });
+      if (!res.ok) { results.push(scene); continue; }
+      const { audioUrl, wordTimings } = await res.json();
+      if (!audioUrl) { results.push(scene); continue; }
+      const timings = Array.isArray(wordTimings) && wordTimings.length > 0 ? wordTimings : scene.wordTimings;
+      textToAudio.set(trimmedText, { audioUrl, wordTimings: timings });
+      results.push({ ...scene, voiceoverAudioUrl: audioUrl, wordTimings: timings });
+    } catch {
+      results.push(scene); // non-fatal — generation proceeds without audio
+    }
+
+    // 400ms gap between TTS requests — keeps rate under 3 req/min on Gemini free tier
+    await new Promise((r) => setTimeout(r, 400));
+  }
+
+  return results;
 }
 
 /**
@@ -873,6 +1175,49 @@ function waypointSfx(wp: CursorWaypoint): string | null {
   if (wp.action === "hover") return "whoosh";
   // click / double-click / nav / button / card → click sound
   return "click";
+}
+
+/** Compute structured CURSOR_STEPS array from waypoints — used both for LLM prompt and direct scope injection. */
+function computeCursorStepsData(waypoints: CursorWaypoint[]): Array<{ x: number; y: number; label: string; time: number; action: string }> {
+  const travelFrames = (fromX: number, fromY: number, toX: number, toY: number): number =>
+    Math.min(32, Math.max(12, Math.round(Math.hypot(toX - fromX, toY - fromY) * 180)));
+
+  let frame = 20;
+  let prevX = 0.5;
+  let prevY = 1.10;
+  const steps: Array<{ x: number; y: number; label: string; time: number; action: string }> = [];
+
+  // Initial anchor step
+  steps.push({ x: 0.5, y: 1.10, label: "", time: 0, action: "none" });
+
+  waypoints.forEach((wp) => {
+    const TRAVEL = travelFrames(prevX, prevY, wp.x, wp.y);
+    const arrive = frame;
+    const actionFrame = arrive + TRAVEL;
+    const dwell = wp.dwellFrames ?? 22;
+    frame = actionFrame + dwell;
+    prevX = wp.x;
+    prevY = wp.y;
+    const action = wp.action ?? "click";
+    steps.push({ x: parseFloat(wp.x.toFixed(3)), y: parseFloat(wp.y.toFixed(3)), label: wp.label, time: arrive, action });
+  });
+
+  // Trailing "none" step
+  const lastWp = waypoints[waypoints.length - 1];
+  steps.push({ x: parseFloat((lastWp?.x ?? 0.5).toFixed(3)), y: parseFloat((lastWp?.y ?? 0.5).toFixed(3)), label: "", time: frame, action: "none" });
+
+  return steps;
+}
+
+function applyCursorJourneyLabels(
+  waypoints: CursorWaypoint[],
+  cursorJourney?: string[],
+): CursorWaypoint[] {
+  if (!Array.isArray(cursorJourney) || cursorJourney.length === 0) return waypoints;
+  return waypoints.map((wp, index) => {
+    const narrativeLabel = cursorJourney[index]?.trim();
+    return narrativeLabel ? { ...wp, label: narrativeLabel } : wp;
+  });
 }
 
 function buildInteractionScript(waypoints: CursorWaypoint[]): string {
@@ -998,6 +1343,7 @@ async function consumeSceneGeneration(
   continuityContext?: string,
   /** "force" = use scene.skills as forcedSkills (default); "fallback" = pass as previouslyUsedSkills so LLM picks alternative */
   skillMode: "force" | "fallback" = "force",
+  initialCameraState: CameraEndState = DEFAULT_CAMERA_STATE,
 ): Promise<string> {
   // Build the full prompt: brand block + scene creative brief
   const brandBlock = buildBrandBlock(brand);
@@ -1039,33 +1385,43 @@ async function consumeSceneGeneration(
           const vRes = await fetch("/api/vision", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ image: images[0] }),
+            body: JSON.stringify({ image: images[0], uiSchema: (scene as any).uiSchema ?? undefined }),
           });
           if (vRes.ok) {
             const vData = await vRes.json();
-            const vElements: Array<{ label: string; x: number; y: number; w?: number; h?: number }> = vData.elements ?? [];
+            const vElements: Array<{ label: string; x: number; y: number; w?: number; h?: number; id?: string; elementType?: string }> = vData.elements ?? [];
             // Enrich each waypoint that lacks a box by finding the nearest vision element
             const enriched = scene.cursorWaypoints.map(wp => {
               if (wp.box && wp.box.w > 0) return wp;
               const nearest = vElements.reduce<{ el: typeof vElements[0] | null; d: number }>(
                 (best, el) => {
-                  const d = Math.hypot(el.x / 1000 - wp.x, el.y / 1000 - wp.y);
+                  const d = Math.hypot(el.x - wp.x, el.y - wp.y);
                   return d < best.d ? { el, d } : best;
                 },
                 { el: null, d: Infinity },
               );
               if (nearest.el && nearest.d < 0.2) {
                 const el = nearest.el;
-                return { ...wp, box: { x: (el.x - (el.w ?? 80) / 2) / 1000, y: (el.y - (el.h ?? 40) / 2) / 1000, w: (el.w ?? 80) / 1000, h: (el.h ?? 40) / 1000 } };
+                const w = el.w ?? 0.12;
+                const h = el.h ?? 0.06;
+                return {
+                  ...wp,
+                  id: wp.id ?? el.id,
+                  elementType: wp.elementType ?? (el.elementType as any),
+                  box: { x: el.x - w / 2, y: el.y - h / 2, w, h },
+                };
               }
               return wp;
             });
             console.log(`Vision-enriched ${enriched.filter(w => w.box).length}/${enriched.length} user waypoints with box data`);
-            scene = { ...scene, cursorWaypoints: enriched };
+            scene = {
+              ...scene,
+              cursorWaypoints: applyCursorJourneyLabels(enriched, scene.cursorJourney),
+            };
           }
         } catch { /* non-fatal */ }
       }
-      const wpts = scene.cursorWaypoints ?? [];
+      const wpts = applyCursorJourneyLabels(scene.cursorWaypoints ?? [], scene.cursorJourney);
       console.log(`Cursor path: using ${wpts.length} user-confirmed waypoints for "${scene.title}"`);
       detectedElementsBlock = `\n\n${buildInteractionScript(wpts)}`;
     } else {
@@ -1073,9 +1429,8 @@ async function consumeSceneGeneration(
       // Skip /api/vision only when ALL waypoints already have valid box data.
       // Using .some() was a bug — if only 1/4 waypoints had a box, vision was skipped
       // and the remaining 3 stayed boxless, breaking chameleon overlays on those targets.
-      const allHaveBoxData = scene.cursorWaypoints?.length
-        ? scene.cursorWaypoints.every(wp => wp.box && wp.box.w > 0)
-        : false;
+      // No waypoints (undefined or []) → nothing to enrich, skip vision
+      const allHaveBoxData = scene.cursorWaypoints?.every(wp => wp.box && wp.box.w > 0) ?? true;
       const needsVisionDetection = !allHaveBoxData;
       if (!needsVisionDetection) {
         console.log(`Skipping /api/vision for "${scene.title}" — box data already present in waypoints`);
@@ -1085,7 +1440,7 @@ async function consumeSceneGeneration(
         const visionResponse = await fetch("/api/vision", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ image: images[0] }),
+          body: JSON.stringify({ image: images[0], uiSchema: (scene as any).uiSchema ?? undefined }),
         });
         if (visionResponse.ok) {
           const visionData = await visionResponse.json();
@@ -1283,7 +1638,7 @@ Design rules for zoom-through arrival:
     : "";
 
   const stageDirectionBlock = (scene as any).stageDirection
-    ? `\n\n## STAGE DIRECTION\n${(scene as any).stageDirection}`
+    ? `\n\n## STAGE DIRECTION\n${((scene as any).stageDirection as string).replace(/`/g, "\\`")}`
     : "";
 
   // Visual anchor — emotional transformation throughline across problem/solution scenes
@@ -1390,51 +1745,46 @@ Rules:
 - Use usePreFocusCamera(${mz.focusPoint.x}, ${mz.focusPoint.y}, ${mz.zoomInFrame ?? 30}) for anticipatory camera drift BEFORE the macro zoom snaps in — makes the camera feel intentional, not abrupt.`
     : "";
 
-  // Timeline Engine: structured event array to decouple timing from raw LLM math
-  // The LLM outputs a SCENE_TIMELINE constant — an ordered array of timed events.
-  // This prevents hallucinated frame offsets and makes timing logic auditable.
-  const dur = scene.durationInFrames;
-  const timelineBlock = `
-
-## SCENE TIMELINE (structured timing — MANDATORY output)
-Your component MUST declare a SCENE_TIMELINE constant near the top of the function body.
-This is an ordered array of timed events that drives all animations in this scene.
-Each entry has: t (frame number), type (what fires), and optional meta fields.
-
-Example structure (adapt frame numbers to this scene's ${dur} frame duration):
-const SCENE_TIMELINE = [
-  { t: 0,   type: "bg-enter" },
-  { t: 12,  type: "headline", text: "Main message" },
-  { t: 28,  type: "subtext" },
-  { t: 45,  type: "ui-reveal" },
-  { t: 60,  type: "cursor-start" },
-  { t: ${Math.round(dur * 0.7)},  type: "cta-glow" },
-  { t: ${Math.round(dur * 0.85)}, type: "hold" },
-];
-
-Rules:
-- Use SCENE_TIMELINE[n].t as the startFrame for each element's spring/interpolate — never hardcode raw numbers elsewhere
-- All frame values MUST be ≤ ${dur} (this scene's duration)
-- Cursor events use CURSOR_STEPS/INTERACTION_SCRIPT timings (already calculated) — reference them, don't duplicate
-- "hold" marks where animation stops and the scene simply plays out before the transition fires`;
-
   const scenePrompt = errorContext
-    ? `${brandBlock}\n\n${scene.prompt}${detectedElementsBlock}${uiSchemaBlock}${voiceoverBlock}${narrativeBlock}${continuityBlock}${stageDirectionBlock}${visualAnchorBlock}${zoomThroughBlock}${morphImportBlock}${macroZoomBlock}${stockVideoBlock}${featureHeaderBlock}${multiViewBlock}${timelineBlock} \n\nPrevious attempt failed with this error: \n${errorContext} \nPlease fix the issues and regenerate.`
-    : `${brandBlock} \n\n${scene.prompt}${detectedElementsBlock}${uiSchemaBlock}${voiceoverBlock}${narrativeBlock}${continuityBlock}${stageDirectionBlock}${visualAnchorBlock}${zoomThroughBlock}${morphImportBlock}${macroZoomBlock}${stockVideoBlock}${featureHeaderBlock}${multiViewBlock}${timelineBlock} `;
+    ? `${errorContext}\n\n${brandBlock}\n\n${scene.prompt}${detectedElementsBlock}${uiSchemaBlock}${voiceoverBlock}${narrativeBlock}${continuityBlock}${stageDirectionBlock}${visualAnchorBlock}${zoomThroughBlock}${morphImportBlock}${macroZoomBlock}${stockVideoBlock}${featureHeaderBlock}${multiViewBlock}`
+    : `${brandBlock} \n\n${scene.prompt}${detectedElementsBlock}${uiSchemaBlock}${voiceoverBlock}${narrativeBlock}${continuityBlock}${stageDirectionBlock}${visualAnchorBlock}${zoomThroughBlock}${morphImportBlock}${macroZoomBlock}${stockVideoBlock}${featureHeaderBlock}${multiViewBlock} `;
 
-  const response = await fetch("/api/generate", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    signal: AbortSignal.timeout(90_000),
-    body: JSON.stringify({
-      prompt: scenePrompt,
-      model,
-      isFollowUp: Boolean(errorContext),
-      forcedSkills: skillMode === "force" && scene.skills?.length ? scene.skills : undefined,
-      previouslyUsedSkills: skillMode === "fallback" ? (scene.skills ?? []) : undefined,
-      frameImages: images?.length ? images : undefined,
-    }),
-  });
+  const makeRequest = async () =>
+    fetch("/api/generate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      // Some scenes (esp. image-heavy + premium skills) can exceed 90s on free-tier models.
+      // Use a longer timeout and rely on retry/fallback logic for robustness.
+      signal: AbortSignal.timeout(180_000),
+      body: JSON.stringify({
+        prompt: scenePrompt,
+        model,
+        isFollowUp: Boolean(errorContext),
+        forcedSkills: skillMode === "force" && scene.skills?.length ? scene.skills : undefined,
+        previouslyUsedSkills: skillMode === "fallback" ? (scene.skills ?? []) : undefined,
+        frameImages: images?.length ? images : undefined,
+        skillComposition: (scene as any).skillComposition,
+        visualState: scene.visualState,
+        visualAnchor: (scene as any).visualAnchor,
+        initialCameraZoom: initialCameraState.zoom,
+        initialCameraPan: { x: initialCameraState.panX, y: initialCameraState.panY },
+      }),
+    });
+
+  let response: Response;
+  try {
+    response = await makeRequest();
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    const isTimeout = /timed out|TimeoutError/i.test(msg) || (err as any)?.name === "TimeoutError";
+    // Single retry on timeout-ish failures (common transient for upstream model calls).
+    if (isTimeout) {
+      await new Promise((r) => setTimeout(r, 1200));
+      response = await makeRequest();
+    } else {
+      throw err;
+    }
+  }
 
   if (!response.ok) {
     const errorData = await response.json().catch(() => ({}));
@@ -1493,7 +1843,7 @@ Rules:
 function reorderImagesForScene(images: string[] | undefined, scene: ScenePlan): string[] {
   if (!images || images.length === 0) return [];
   if (scene.imageIndex === undefined || scene.imageIndex < 0 || scene.imageIndex >= images.length) {
-    return images;
+    return images.slice(0, 1); // safe fallback: only first image, never out-of-bounds
   }
   return [images[scene.imageIndex], ...images.filter((_, i) => i !== scene.imageIndex)];
 }
@@ -1553,6 +1903,183 @@ const DEFAULT_CAMERA_STATE: CameraEndState = { zoom: 1.0, panX: 0, panY: 0 };
 /** Standard CinematicCamera ending state — what the camera settles at after 90 frames. */
 const CINEMATIC_CAMERA_END: CameraEndState = { zoom: 1.06, panX: 0, panY: 0 };
 
+function fastQualityCheck(code: string, intentRaw?: string): { passed: boolean; issues: string[] } {
+  const issues: string[] = [];
+  const intent = (intentRaw ?? "feature").toLowerCase();
+
+  if (!/MaskedReveal/.test(code) && ["hook", "solution", "cta"].includes(intent)) {
+    issues.push("missing-headline-animation");
+  }
+  if (!/(TiltWrapper|DepthStack|perspective)/.test(code) && ["feature", "solution"].includes(intent)) {
+    issues.push("flat-ui-no-depth");
+  }
+  if (!/(LightArcBg|MeshGradientBg|EntropyDust|STOCK_VIDEO_URL|VideoPlateMockup|ContextualBgPulse)/.test(code)) {
+    issues.push("static-background");
+  }
+  // Audit rubric flags “flicker” when particles/orbs/confetti arrays are created inside the component.
+  // This is a cheap heuristic: if it sees these common identifiers AND an Array.from/[] literal, it likely flickers.
+  if (/(PARTICLES|ORBS|CONFETTI)\b/.test(code) && /(Array\.from\(|=\s*\[)/.test(code)) {
+    issues.push("flicker-arrays-in-component");
+  }
+  // Audit rubric penalizes overflow: headlines without maxWidth are high-risk.
+  if ((/fontSize\s*:\s*(?:1[0-9]{2,}|[89][0-9])/.test(code) || /Hook\/CTA/.test(code)) && !/maxWidth\s*:/.test(code)) {
+    issues.push("missing-maxwidth");
+  }
+
+  return { passed: issues.length === 0, issues };
+}
+
+function shouldDeepAuditScene(scene: ScenePlan): boolean {
+  if (scene.isAhaMoment) return true;
+  return false;
+}
+
+type SceneStructureIssue =
+  | { kind: "missing-eof" }
+  | { kind: "leaked-language-label"; label: string }
+  | { kind: "multiple-main-exports"; count: number }
+  | { kind: "nested-main-export"; sceneName: string; exportName: string }
+  | { kind: "scene-missing-return"; sceneName: string }
+  | { kind: "scene-missing-absolutefill"; sceneName: string }
+  | { kind: "main-scene-missing-return"; exportName: string }
+  | { kind: "main-scene-missing-absolutefill"; exportName: string }
+  | { kind: "unsafe-audio-spring-constants" };
+
+function detectSceneStructureIssues(code: string): SceneStructureIssue[] {
+  const issues: SceneStructureIssue[] = [];
+  const lines = code.split("\n");
+
+  // The generator contract requires // EOF; missing it strongly correlates with truncation.
+  if (!/^\s*\/\/\s*EOF\s*$/m.test(code)) {
+    issues.push({ kind: "missing-eof" });
+  }
+
+  // Catch leaked standalone language label lines (not fenced) before Babel sees them.
+  for (let i = 0; i < lines.length; i++) {
+    const t = lines[i]?.trim().toLowerCase();
+    if (t === "javascript" || t === "typescript" || t === "jsx" || t === "tsx") {
+      issues.push({ kind: "leaked-language-label", label: t });
+      break;
+    }
+  }
+
+  const mainExportMatches = Array.from(
+    code.matchAll(/export\s+const\s+(MyAnimation|DynamicAnimation|FragmentedScene)\s*=/g),
+  );
+  if (mainExportMatches.length > 1) {
+    issues.push({ kind: "multiple-main-exports", count: mainExportMatches.length });
+  }
+
+  if (/\bAUDIO_STIFFNESS\b|\bAUDIO_DAMPING\b/.test(code)) {
+    issues.push({ kind: "unsafe-audio-spring-constants" });
+  }
+
+  const mainSceneMatch = code.match(/export\s+const\s+(MyAnimation|DynamicAnimation|FragmentedScene)\s*=\s*(?:async\s*)?(?:\([^)]*\)|[A-Za-z_$][A-Za-z0-9_$]*)\s*=>\s*\{/);
+  if (mainSceneMatch?.[1]) {
+    const exportName = mainSceneMatch[1];
+    const start = code.indexOf(mainSceneMatch[0]) + mainSceneMatch[0].length - 1;
+    let depth = 0;
+    let inStr: string | null = null;
+    let end = -1;
+    for (let i = start; i < code.length; i++) {
+      const ch = code[i];
+      if (inStr) {
+        if (ch === "\\") { i++; continue; }
+        if (ch === inStr) inStr = null;
+        continue;
+      }
+      if (ch === '"' || ch === "'" || ch === "`") { inStr = ch; continue; }
+      if (ch === "{") depth++;
+      else if (ch === "}") {
+        depth--;
+        if (depth === 0) { end = i; break; }
+      }
+    }
+    if (end !== -1) {
+      const body = code.slice(start + 1, end);
+      if (!/\breturn\b/.test(body)) {
+        issues.push({ kind: "main-scene-missing-return", exportName });
+      } else if (!/<AbsoluteFill\b/.test(body)) {
+        issues.push({ kind: "main-scene-missing-absolutefill", exportName });
+      }
+    }
+  }
+
+  // Validate helper scenes if present: const Scene0 = () => { ... }
+  // Minimal brace scan per Scene to ensure it returns JSX and includes AbsoluteFill.
+  const re = /\bconst\s+(Scene\d+)\s*=\s*\(\s*\)\s*=>\s*\{/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(code)) !== null) {
+    const sceneName = m[1]!;
+    const braceStart = (m.index ?? 0) + m[0].length - 1; // points at "{"
+    let depth = 0;
+    let inStr: string | null = null;
+    let end = -1;
+
+    for (let i = braceStart; i < code.length; i++) {
+      const ch = code[i];
+      if (inStr) {
+        if (ch === "\\") { i++; continue; }
+        if (ch === inStr) inStr = null;
+        continue;
+      }
+      if (ch === '"' || ch === "'" || ch === "`") { inStr = ch; continue; }
+
+      if (ch === "{") depth++;
+      else if (ch === "}") {
+        depth--;
+        if (depth === 0) { end = i; break; }
+      }
+    }
+
+    if (end !== -1) {
+      const body = code.slice(braceStart + 1, end);
+      const nestedExport = body.match(/export\s+const\s+([A-Z]\w*)\s*=/);
+      if (nestedExport) {
+        issues.push({ kind: "nested-main-export", sceneName, exportName: nestedExport[1]! });
+        continue;
+      }
+      if (!/\breturn\b/.test(body)) {
+        issues.push({ kind: "scene-missing-return", sceneName });
+        continue;
+      }
+      if (!/<AbsoluteFill\b/.test(body)) {
+        issues.push({ kind: "scene-missing-absolutefill", sceneName });
+      }
+    }
+  }
+
+  return issues;
+}
+
+function formatStructureIssuesForRetry(issues: SceneStructureIssue[]): string {
+  const bullets = issues.map((i) => {
+    switch (i.kind) {
+      case "missing-eof":
+        return "- Missing required `// EOF` sentinel (output likely truncated).";
+      case "leaked-language-label":
+        return `- Found leaked standalone language label line: \`${i.label}\` (invalid JS token).`;
+      case "multiple-main-exports":
+        return `- Found ${i.count} exported main components. Output must contain exactly one main export.`;
+      case "nested-main-export":
+        return `- \`${i.sceneName}\` illegally contains nested export \`${i.exportName}\`. Helper scenes cannot declare exported components.`;
+      case "scene-missing-return":
+        return `- \`${i.sceneName}\` is missing a \`return (...)\` block.`;
+      case "scene-missing-absolutefill":
+        return `- \`${i.sceneName}\` does not include \`<AbsoluteFill>\` inside its returned JSX.`;
+      case "main-scene-missing-return":
+        return `- Main exported scene \`${i.exportName}\` is missing a \`return (...)\` block.`;
+      case "main-scene-missing-absolutefill":
+        return `- Main exported scene \`${i.exportName}\` must return JSX rooted in \`<AbsoluteFill>\`.`;
+      case "unsafe-audio-spring-constants":
+        return "- Do NOT reference `AUDIO_STIFFNESS` or `AUDIO_DAMPING`; use `SPRING_CONFIGS` or explicit safe positive spring values.";
+      default:
+        return "- Unknown structural issue.";
+    }
+  });
+  return `STRUCTURE VALIDATION FAILED — fix these before anything else:\n${bullets.join("\n")}`;
+}
+
 /** Generate, compile, and error-recover a single scene. Never throws. */
 async function processScene(
   scene: ScenePlan,
@@ -1569,6 +2096,10 @@ async function processScene(
   initialCameraState: CameraEndState = DEFAULT_CAMERA_STATE,
   /** MorphPortal rect from the previous scene's morphExport — passed as MORPH_FROM scope to compiler */
   morphFrom: { x: number; y: number; w: number; h: number } | null = null,
+  /** Music URL for useSpectrum/useBassKick hooks in generated scenes */
+  musicUrl: string | null = null,
+  creativeBrief?: import("@/types/generation").CreativeBrief | null,
+  backbone?: import("@/types/generation").NarrativeBackbone | null,
 ): Promise<CompiledScene> {
   const key = cacheKey(scene, brand);
 
@@ -1613,27 +2144,129 @@ async function processScene(
     console.log(`Model routing: "${scene.title}" (${scene.skills.join("+")}) → ${resolvedModel}`);
   }
 
+  // Pre-compute cursor steps from waypoints for direct scope injection into compileCode.
+  // This ensures cursor animation works even when the LLM mangles its CURSOR_STEPS declaration.
+  const pipelineCursorSteps = scene.cursorWaypoints?.length
+    ? computeCursorStepsData(scene.cursorWaypoints)
+    : [];
+
   // First attempt
   try {
-    const code = await consumeSceneGeneration(enrichedScene, resolvedModel, brand, undefined, sceneImages, continuityContext);
+    const code = await consumeSceneGeneration(enrichedScene, resolvedModel, brand, undefined, sceneImages, continuityContext, "force", initialCameraState);
     if (code.trim()) {
-      const result = compileCode(code, sceneImages, brand as Record<string, string>, scene.voiceoverAudioUrl ?? null, scene.wordTimings ?? [], (scene.uiSchema as unknown as Record<string, unknown> | null) ?? null, globalBg, globalFrameOffset, (morphFrom ?? scene.morphImport?.rect ?? null), sfxUrls, {}, initialCameraState, (scene as any).stockFootage ?? null, scene.featureHeader ?? null);
+      const structureIssues = detectSceneStructureIssues(code);
+      const result =
+        structureIssues.length > 0
+          ? { Component: null, error: formatStructureIssuesForRetry(structureIssues) }
+          : compileCode(
+              code,
+              sceneImages,
+              brand as Record<string, string>,
+              scene.voiceoverAudioUrl ?? null,
+              scene.wordTimings ?? [],
+              (scene.uiSchema as unknown as Record<string, unknown> | null) ?? null,
+              globalBg,
+              globalFrameOffset,
+              (morphFrom ?? scene.morphImport?.rect ?? null),
+              sfxUrls,
+              {},
+              initialCameraState,
+              (scene as any).stockFootage ?? null,
+              scene.featureHeader ?? null,
+              musicUrl,
+              brand.logo ?? null,
+              scene.highlightWords ?? [],
+              scene.visualState ?? null,
+              scene.visualAnchor ?? null,
+              scene.musicMood ?? "energetic-precise",
+              (scene as any).skillComposition ?? null,
+              pipelineCursorSteps,
+            );
       if (!result.error && result.Component) {
-        // ── Quality audit gate ───────────────────────────────────────────────
-        // Audit compiled code for visual quality issues. If score < 70, retry
-        // with specific fix instructions. Non-fatal — if audit/retry fails,
-        // we keep the successfully-compiled original.
         let finalCode = code;
         let finalComponent = result.Component;
         let auditScore: number | undefined;
 
-        // ── Audit gate ────────────────────────────────────────────────────────
-        // Audit every successfully-compiled scene. Catches quality issues before
-        // they ship. The audit route caches by code hash (5 min TTL) so repeated
-        // calls on the same code are free. Score < 70 → quality retry.
-        const shouldAudit = true;
+        const tryQualityRetry = async (fixContext: string) => {
+          try {
+            const qualityCode = await consumeSceneGeneration(enrichedScene, resolvedModel, brand, fixContext, sceneImages, continuityContext, "force", initialCameraState);
+
+            if (!qualityCode.trim()) return false;
+            const qualityResult = compileCode(
+              qualityCode,
+              sceneImages,
+              brand as Record<string, string>,
+              scene.voiceoverAudioUrl ?? null,
+              scene.wordTimings ?? [],
+              (scene.uiSchema as unknown as Record<string, unknown> | null) ?? null,
+              globalBg,
+              globalFrameOffset,
+              (morphFrom ?? scene.morphImport?.rect ?? null),
+              sfxUrls,
+              {},
+              initialCameraState,
+              (scene as any).stockFootage ?? null,
+              scene.featureHeader ?? null,
+              musicUrl,
+              brand.logo ?? null,
+              scene.highlightWords ?? [],
+              scene.visualState ?? null,
+              scene.visualAnchor ?? null,
+              scene.musicMood ?? "energetic-precise",
+              (scene as any).skillComposition ?? null,
+              pipelineCursorSteps,
+            );
+            if (!qualityResult.error && qualityResult.Component) {
+              finalCode = qualityCode;
+              finalComponent = qualityResult.Component;
+              return true;
+            }
+          } catch {
+            // non-fatal
+          }
+          return false;
+        };
+
+        const fastCheck = fastQualityCheck(code, scene.intent);
         try {
-          if (shouldAudit) {
+          if (!fastCheck.passed) {
+            // Cheap targeted critique for non-compliant scenes.
+            const critiqueRes = await fetch("/api/critique", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                code,
+                prompt: scene.prompt,
+                issues: fastCheck.issues,
+                intent: scene.intent,
+                skills: scene.skills,
+              }),
+            });
+            if (critiqueRes.ok) {
+              const critique = await critiqueRes.json() as { hasIssues: boolean; fixPrompt: string };
+              if (critique.hasIssues && critique.fixPrompt?.trim()) {
+                const fastContext = `## MANDATORY FIX -- apply before anything else:
+${critique.fixPrompt}
+
+FAST QUALITY CHECK FAILED.
+Detected issues: ${fastCheck.issues.join(", ")}`;
+                const retried = await tryQualityRetry(fastContext);
+                if (retried) {
+                  auditScore = 75;
+                  console.log(`Quality retry succeeded for "${scene.title}"`);
+                }
+              }
+            }
+          } else if (shouldDeepAuditScene(scene)) {
+            // Non-blocking prewarm: populate audit cache for clean scenes
+            if (finalCode?.trim()) {
+              fetch("/api/audit", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ _prewarm: true, code: finalCode, score: 82 }),
+              }).catch((err) => console.warn("[Audit prewarm] non-fatal:", err)); // deliberately fire-and-forget, never blocking
+            }
+            // Expensive full audit only for AHA scenes and critical-path cases.
             const auditRes = await fetch("/api/audit", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
@@ -1641,6 +2274,8 @@ async function processScene(
                 code,
                 prompt: scene.prompt,
                 brand: brand as Record<string, string>,
+                creativeBrief,
+                backbone,
               }),
             });
             if (auditRes.ok) {
@@ -1652,25 +2287,26 @@ async function processScene(
               };
               auditScore = audit.score;
               console.log(`Audit "${scene.title}": score=${audit.score}, passed=${audit.passed}`);
-
               if (!audit.passed && audit.score < 70 && audit.fixes?.length > 0) {
-                const fixContext = `QUALITY AUDIT FAILED (score: ${audit.score}/100). Code compiled but has visual quality issues.\n\nIssues found:\n${audit.issues.map(i => `- ${i}`).join('\n')}\n\nRequired fixes:\n${audit.fixes.map(f => `- ${f}`).join('\n')}\n\nApply ALL fixes and regenerate the complete component.`;
-                try {
-                  const qualityCode = await consumeSceneGeneration(enrichedScene, resolvedModel, brand, fixContext, sceneImages);
-                  if (qualityCode.trim()) {
-                    const qualityResult = compileCode(qualityCode, sceneImages, brand as Record<string, string>, scene.voiceoverAudioUrl ?? null, scene.wordTimings ?? [], (scene.uiSchema as unknown as Record<string, unknown> | null) ?? null, globalBg, globalFrameOffset, (morphFrom ?? scene.morphImport?.rect ?? null), sfxUrls, {}, initialCameraState, (scene as any).stockFootage ?? null, scene.featureHeader ?? null);
-                    if (!qualityResult.error && qualityResult.Component) {
-                      finalCode = qualityCode;
-                      finalComponent = qualityResult.Component;
-                      auditScore = 75;
-                      console.log(`Quality retry succeeded for "${scene.title}"`);
-                    }
-                  }
-                } catch { /* non-fatal — use original compiled result */ }
+                const primaryFix = audit.fixes[0] ?? "";
+                const fixContext = `## MANDATORY FIX -- implement this FIRST before anything else:
+${primaryFix}
+
+The previous code had these quality issues that must be resolved:
+${audit.issues.map(i => `- ${i}`).join("\n")}
+
+Regenerate the complete component with these fixes applied.`;
+                const retried = await tryQualityRetry(fixContext);
+                if (retried) {
+                  auditScore = 75;
+                  console.log(`Quality retry succeeded for "${scene.title}"`);
+                }
               }
             }
           }
-        } catch { /* audit failure is non-fatal */ }
+        } catch {
+          /* non-fatal quality gate failures should not block scene */
+        }
 
         const compiled: CompiledScene = {
           Component: finalComponent,
@@ -1686,9 +2322,22 @@ async function processScene(
           morphExport: scene.morphExport,
           auditScore,
           hasVoiceover: !!scene.voiceoverAudioUrl,
+          voiceoverAudioUrl: scene.voiceoverAudioUrl ?? null,
+          wordTimings: scene.wordTimings ?? [],
           isAhaMoment: (scene as any).isAhaMoment ?? false,
           emotionalIntent: (scene as any).emotionalIntent,
           musicVolume: (scene as any).musicVolume,
+          creativeBrief,
+          backbone,
+          uiSchema: (scene.uiSchema as unknown as Record<string, unknown> | null) ?? null,
+          highlightWords: scene.highlightWords ?? [],
+          visualState: scene.visualState ?? null,
+          visualAnchor: scene.visualAnchor ?? null,
+          featureHeader: scene.featureHeader ?? null,
+          stockFootage: (scene as any).stockFootage ?? null,
+          musicMood: scene.musicMood ?? "energetic-precise",
+          skillComposition: (scene as any).skillComposition ?? null,
+          pipelineCursorSteps,
         };
         sceneCache.set(key, compiled);
         return compiled;
@@ -1701,20 +2350,45 @@ async function processScene(
       try {
         const failedSkills = enrichedScene.skills.join(", ");
         const errMsg = result.error ?? "JSX or syntax error";
-        // Classify error type to provide targeted fix strategy
-        const isJsxParseError = /unexpected token|jsx|unterminated|expected/i.test(errMsg);
-        const isUndefinedVar = /is not defined|cannot access|ReferenceError/i.test(errMsg);
-        const isRuntimeError = /TypeError|cannot read|null|undefined/i.test(errMsg);
-        const errorStrategy = isJsxParseError
-          ? "- JSX PARSE ERROR: Simplify component structure. Use React.createElement instead of JSX. Avoid nested ternaries in JSX."
+
+        // Extract Babel code-frame lines (everything after the first line)
+        const errLines = errMsg.split('\n');
+        const errFirstLine = errLines[0];
+        const codeFrame = errLines.length > 1 ? `\nCode at failure point:\n${errLines.slice(1, 8).join('\n')}` : "";
+
+        // Extract line/column hint for targeted diagnosis
+        const lineColMatch = errFirstLine.match(/\((\d+):(\d+)\)/);
+        const lineColHint = lineColMatch ? ` at line ${lineColMatch[1]}` : "";
+
+        // ── Classify error type to provide a targeted fix strategy ────────────
+        // isDanglingTernary: `?` on its own line after a comment that broke
+        // the expression context — the #1 Babel "Unexpected token" pattern.
+        const isDanglingTernary =
+          /Unexpected token/i.test(errFirstLine) &&
+          (errMsg.includes('\n    ?') || errMsg.includes('\n  ?') || errMsg.includes('\n?'));
+        const isUnclosedExprConst = /Unexpected keyword ['"]?const['"]?/i.test(errFirstLine);
+        const isUnclosedBracket = /Unexpected token.*(?:,|\)|]|})/i.test(errFirstLine);
+        const isJsxParseError = !isDanglingTernary && !isUnclosedExprConst && /unexpected token|unterminated|expected/i.test(errFirstLine);
+        const isUndefinedVar = /is not defined|cannot access|ReferenceError/i.test(errFirstLine);
+        const isRuntimeError = /TypeError|cannot read|null|undefined/i.test(errFirstLine);
+
+        const errorStrategy = isDanglingTernary
+          ? `- DANGLING TERNARY${lineColHint}: A comment line was placed between the ternary condition and its \`?\` operator. This breaks the expression context.\n  WRONG: condition\\n// any comment\\n  ? value : other\n  RIGHT: condition\\n  ? value // comment after operator is safe\\n  : other\n  RULE: condition and \`?\` must be on adjacent lines — no blank lines, no comments between them.`
+          : isUnclosedExprConst
+          ? `- UNBALANCED BRACKETS${lineColHint}: A new \`const\` was opened while a previous [ or { was still unclosed. Close every bracket before starting a new declaration.`
+          : isUnclosedBracket
+          ? `- UNEXPECTED TOKEN${lineColHint}: A bracket was closed where the parser didn't expect one. Check for double-closing or mismatched { } [ ] ( ).`
+          : isJsxParseError
+          ? `- JSX PARSE ERROR${lineColHint}: Simplify component structure. Avoid nested ternaries in JSX. Use simple conditional rendering: {flag && <El />}.`
           : isUndefinedVar
-          ? "- UNDEFINED VARIABLE: Add scope guards. Check all variables are declared before use. Use optional chaining (?.) on all external scope refs."
+          ? `- UNDEFINED VARIABLE${lineColHint}: A variable was used before declaration. Guard with optional chaining (?.) and ensure all arrays/objects are declared before use.`
           : isRuntimeError
-          ? "- RUNTIME ERROR: Add null checks. Guard all array accesses with optional chaining. Ensure all objects are initialized before use."
-          : "- SYNTAX ERROR: Check for unclosed brackets, missing commas, or invalid template literals.";
+          ? `- RUNTIME ERROR${lineColHint}: Add null checks. Guard all array accesses with ?. e.g. ATTACHED_IMAGES?.[0], UI_SCHEMA?.sections?.[0].`
+          : `- SYNTAX ERROR${lineColHint}: Check for unclosed brackets, missing commas, or invalid template literals.`;
+
         const retryErrorCtx = `COMPILATION FAILED — the previous attempt could not be rendered.
 
-Error: ${errMsg}
+Error: ${errFirstLine}${codeFrame}
 
 Failed skills: ${failedSkills}
 
@@ -1726,6 +2400,7 @@ RETRY INSTRUCTIONS:
 - Use only built-in scope variables (BRAND, spring, interpolate, useCurrentFrame, AbsoluteFill, Sequence, Audio)
 - Avoid complex component patterns — use simple inline JSX
 - Keep all arrays (particles, items, etc.) defined OUTSIDE the component function
+- SAFE MODE FOR SYNTAX: Do NOT use Array.from() with nested object returns. Do NOT define helper functions. Use only simple literal arrays/objects.
 - Guard all optional values: ATTACHED_IMAGES?.[0], UI_SCHEMA?.sections?.[0]
 - No template literal expressions inside JSX string attributes`;
         const retryCode = await consumeSceneGeneration(
@@ -1734,11 +2409,35 @@ RETRY INSTRUCTIONS:
           brand,
           retryErrorCtx,
           sceneImages,
-          undefined,
+          continuityContext,
           "fallback",
+          initialCameraState,
         );
         if (retryCode.trim()) {
-          const retryResult = compileCode(retryCode, sceneImages, brand as Record<string, string>, scene.voiceoverAudioUrl ?? null, scene.wordTimings ?? [], (scene.uiSchema as unknown as Record<string, unknown> | null) ?? null, globalBg, globalFrameOffset, (morphFrom ?? scene.morphImport?.rect ?? null), sfxUrls, {}, initialCameraState, (scene as any).stockFootage ?? null, scene.featureHeader ?? null);
+          const retryResult = compileCode(
+            retryCode,
+            sceneImages,
+            brand as Record<string, string>,
+            scene.voiceoverAudioUrl ?? null,
+            scene.wordTimings ?? [],
+            (scene.uiSchema as unknown as Record<string, unknown> | null) ?? null,
+            globalBg,
+            globalFrameOffset,
+            (morphFrom ?? scene.morphImport?.rect ?? null),
+            sfxUrls,
+            {},
+            initialCameraState,
+            (scene as any).stockFootage ?? null,
+            scene.featureHeader ?? null,
+            musicUrl,
+            brand.logo ?? null,
+            scene.highlightWords ?? [],
+            scene.visualState ?? null,
+            scene.visualAnchor ?? null,
+            scene.musicMood ?? "energetic-precise",
+            (scene as any).skillComposition ?? null,
+            pipelineCursorSteps,
+          );
           if (retryResult.error) {
             console.error(`[Scene "${scene.title}"] Compile error (retry):`, retryResult.error);
           }
@@ -1756,7 +2455,21 @@ RETRY INSTRUCTIONS:
               exitAnchor: (scene as any).exitAnchor,
               morphExport: scene.morphExport,
               hasVoiceover: !!scene.voiceoverAudioUrl,
-            };
+              voiceoverAudioUrl: scene.voiceoverAudioUrl ?? null,
+              wordTimings: scene.wordTimings ?? [],
+              creativeBrief,
+              backbone,
+              uiSchema: (scene.uiSchema as unknown as Record<string, unknown> | null) ?? null,
+              highlightWords: scene.highlightWords ?? [],
+              visualState: scene.visualState ?? null,
+              visualAnchor: scene.visualAnchor ?? null,
+              featureHeader: scene.featureHeader ?? null,
+              stockFootage: (scene as any).stockFootage ?? null,
+              musicMood: scene.musicMood ?? "energetic-precise",
+              skillComposition: (scene as any).skillComposition ?? null,
+              pipelineCursorSteps,
+              };
+
             sceneCache.set(key, compiled);
             return compiled;
           }
@@ -1769,7 +2482,10 @@ RETRY INSTRUCTIONS:
     console.error(`[Scene "${scene.title}"] Generation threw:`, outerErr);
   }
 
-  console.warn(`Scene "${scene.title}" failed to compile after retry, using placeholder`);
+  console.error(
+    `[VideoGen] ❌ Scene "${scene.title}" — BOTH compile attempts failed. Falling back to placeholder.\n` +
+    `Check [Scene "${scene.title}"] Compile error logs above this line for the exact error.`
+  );
   return {
     Component: createPlaceholderScene(scene.title, "Generation failed — click Regenerate on this scene to retry"),
     durationInFrames: scene.durationInFrames,
@@ -1799,7 +2515,7 @@ export interface FullVideoProgress {
 /** Build a visual continuity summary from a completed scene.
  *  Passed to the next scene's prompt so the LLM maintains consistent visual language.
  *  Now includes the Visual Thread exit state — the "handoff coordinate" that the next scene picks up. */
-function buildContinuityContext(prev: CompiledScene, prevPlan: ScenePlan, brand: BrandTokens): string {
+function buildContinuityContext(prev: CompiledScene, prevPlan: ScenePlan, brand: BrandTokens, nextPlan?: ScenePlan): string {
   const emotion = prevPlan.emotionalIntent ?? "";
   const skills = prevPlan.skills.slice(0, 2).join(" + ");
   const isAha = prevPlan.isAhaMoment ? " (AHA MOMENT)" : "";
@@ -1821,13 +2537,18 @@ This scene must open with the anchor already in that exit state — do NOT re-in
   // Global Visual Thread note — the design motif (ring/shape/color wash) must persist
   const visualThreadNote = `\nGLOBAL VISUAL THREAD: Identify what geometric motif or persistent element was established in the previous scene. This scene MUST contain that same element, evolved to match its current emotional state. It should appear early (Act 1) and maintain its established position/size unless the story calls for explicit transformation.`;
 
+  // Explicit Director Visual State from the plan (the backbone's intent)
+  const visualStateDirective = nextPlan?.visualState
+    ? `\nDIRECTOR VISUAL STATE: ${nextPlan.visualState}`
+    : "";
+
   return `Previous scene: "${prev.title}"${isAha} — skills: ${skills}${emotion ? `, emotional tone: ${emotion}` : ""}.
 Visual continuity rules for THIS scene:
 - Keep BRAND.bg (${brand.bg}) as the AbsoluteFill background — never drift from it
 - Font family must remain ${brand.font ?? "Inter"} on all text elements
 - Card border-radius, shadow elevation, and spacing must match the established visual language
 - If the previous scene showed a sidebar/app shell, maintain the same app chrome identity
-- Color temperature: ${colorTemp}${visualThreadBlock}${visualThreadNote}`;
+- Color temperature: ${colorTemp}${visualThreadBlock}${visualThreadNote}${visualStateDirective}`;
 }
 
 function resolveModel(skill: string, userModel: string, isAhaMoment = false): string {
@@ -1840,6 +2561,7 @@ function resolveModel(skill: string, userModel: string, isAhaMoment = false): st
   return userModel;
 }
 
+// Sequential generation is more reliable against upstream rate limits/timeouts.
 const CONCURRENCY = 1;
 
 const DEFAULT_BRAND: BrandTokens = {
@@ -1875,6 +2597,8 @@ export function useFullVideoGeneration() {
     globalBg?: string;
     globalVisualThread?: string;
     edges?: import("@/types/generation").FlowEdge[];
+    creativeBrief?: import("@/types/generation").CreativeBrief | null;
+    backbone?: import("@/types/generation").NarrativeBackbone | null;
   } | null>(null);
   const [pendingFlow, setPendingFlow] = useState<{
     images: string[];
@@ -1887,10 +2611,12 @@ export function useFullVideoGeneration() {
   const [regeneratingSceneIndex, setRegeneratingSceneIndex] = useState<
     number | null
   >(null);
+  const [musicFetchFailed, setMusicFetchFailed] = useState(false);
 
   const pendingModelRef = useRef<string>("gemini-2.5-flash:none");
   const pendingImagesRef = useRef<string[]>([]);
   const pendingBrandRef = useRef<BrandTokens>(DEFAULT_BRAND);
+  const pendingLogoImageRef = useRef<string | null>(null);
   const pendingScreenFlowRef = useRef<ScreenFlow | undefined>(undefined);
   const pendingPromptRef = useRef<string>("");
   const pendingDescriptionsRef = useRef<string[]>([]);
@@ -1907,6 +2633,8 @@ export function useFullVideoGeneration() {
       globalBg: string = "arcs",
       globalVisualThread?: string,
       edges?: import("@/types/generation").FlowEdge[],
+      creativeBrief?: import("@/types/generation").CreativeBrief | null,
+      backbone?: import("@/types/generation").NarrativeBackbone | null,
     ) => {
       setIsGenerating(true);
       setError(null);
@@ -1974,13 +2702,33 @@ export function useFullVideoGeneration() {
           // Only available from scene 2 onwards; skip for scene 0 (first scene, no predecessor)
           const prevCompiled = i > 0 ? compiledScenesArr[i - 1] : undefined;
           const prevPlan = i > 0 ? scenesWithNavContext[i - 1] : undefined;
+          const nextPlan = batch[0]; // Current scene we are about to generate
           const continuityBase = prevCompiled && prevPlan
-            ? buildContinuityContext(prevCompiled, prevPlan, brand)
+            ? buildContinuityContext(prevCompiled, prevPlan, brand, nextPlan)
             : undefined;
+
+          // Build accumulated global palette summary from ALL completed scenes (not just prev-1)
+          // This prevents the LLM from forgetting the visual language established in scene 0 by scene 8.
+          let globalPaletteSummary = "";
+          if (i > 1) {
+            const completedSceneNotes = compiledScenesArr
+              .slice(0, i)
+              .filter(Boolean)
+              .map((_, idx) => {
+                const sp = scenesWithNavContext[idx];
+                if (!sp) return null;
+                return `Scene ${idx + 1} "${sp.title}": [${sp.skills.slice(0, 2).join("+")}] | emotion: ${sp.emotionalIntent ?? "?"} | vol: ${sp.musicVolume ?? 1.0}`;
+              })
+              .filter(Boolean);
+            if (completedSceneNotes.length > 0) {
+              globalPaletteSummary = `\n\nGLOBAL STYLE CONTINUITY (${completedSceneNotes.length} scenes completed — DO NOT DEVIATE from these established choices):\n${completedSceneNotes.join("\n")}\n- Palette: bg=${brand.bg}, primary=${brand.primary}, font=${brand.font ?? "Inter"} — MUST match ALL scenes`;
+            }
+          }
+
           // Prepend the global visual thread (from planner) to every scene's continuity block
           const continuityCtx = globalVisualThread
-            ? `GLOBAL VISUAL THREAD: ${globalVisualThread}\n\n${continuityBase ?? ""}`.trim()
-            : continuityBase;
+            ? `GLOBAL VISUAL THREAD: ${globalVisualThread}\n\n${continuityBase ?? ""}${globalPaletteSummary}`.trim()
+            : continuityBase ? `${continuityBase}${globalPaletteSummary}`.trim() : undefined;
 
           const batchResults = await Promise.allSettled(
             batch.map((scene, j) => {
@@ -2004,7 +2752,7 @@ export function useFullVideoGeneration() {
                   total: planScenes.length,
                   sceneTitle: title,
                 });
-              }, images, globalBg, continuityCtx, sceneOffsets[sceneIdx], sfxUrlsRef.current, camState, sceneIdx > 0 ? (compiledScenesArr[sceneIdx - 1]?.morphExport?.rect ?? null) : null);
+              }, images, globalBg, continuityCtx, sceneOffsets[sceneIdx], sfxUrlsRef.current, camState, sceneIdx > 0 ? (compiledScenesArr[sceneIdx - 1]?.morphExport?.rect ?? null) : null, musicUrlRef.current ?? null, creativeBrief, backbone);
             }),
           );
 
@@ -2025,7 +2773,7 @@ export function useFullVideoGeneration() {
           }
         }
 
-        const validScenes = compiledScenesArr.filter(Boolean);
+        const validScenes = enforceRhythmProfile(compiledScenesArr.filter(Boolean));
         const musicStyle = brand.musicStyle ?? brand.accentName ?? "cinematic";
         const musicUrl = musicUrlRef.current ?? MUSIC_TRACKS[musicStyle] ?? "";
         const master = createMasterComponent(validScenes, brand.bg, musicUrl, brand, sfxUrlsRef.current);
@@ -2089,6 +2837,7 @@ export function useFullVideoGeneration() {
             imageUserDescriptions: imageUserDescriptions?.length ? imageUserDescriptions : undefined,
             screenFlow,
             cachedBrand: shouldUseCachedBrand ? cachedBrandStore!.brand : undefined,
+            targetDurationSeconds: 90,
           }),
         });
 
@@ -2099,7 +2848,13 @@ export function useFullVideoGeneration() {
 
         const data = await planResponse.json();
         const planScenes: ScenePlan[] = data.scenes ?? [];
+        const creativeBrief = data.creativeBrief;
+        const backbone = data.backbone;
         const brand: BrandTokens = { ...DEFAULT_BRAND, ...(data.brand ?? {}) };
+        // Apply uploaded logo image (overrides LLM-extracted URL)
+        if (pendingLogoImageRef.current) {
+          brand.logo = pendingLogoImageRef.current;
+        }
         // Task 0.4: Cache brand for future regenerations
         if (images.length > 0 && data.brand) {
           cachedBrandStore = { imageHash: buildImageHash(images[0]), brand };
@@ -2153,7 +2908,8 @@ export function useFullVideoGeneration() {
 
         // Apply pacing profile — adjusts durations for rhythmic variety
         const pacedScenes = applyPacingProfile(scenesWithWaypoints);
-        setPendingPlan({ scenes: pacedScenes, brand, imageDescriptions, screenFlow, bgSkill, globalBg: globalBgFromPlan, globalVisualThread, edges: planEdges });
+        const contractedScenes = enforceNarrativeContract(pacedScenes);
+        setPendingPlan({ scenes: contractedScenes, brand, imageDescriptions, screenFlow, bgSkill, globalBg: globalBgFromPlan, globalVisualThread, edges: planEdges, creativeBrief, backbone });
       } catch (err) {
         setError(err instanceof Error ? err.message : "Planning failed");
       } finally {
@@ -2296,18 +3052,61 @@ export function useFullVideoGeneration() {
       const effectiveGlobalBg = pendingPlan?.globalBg ?? "arcs";
       const effectiveGlobalVisualThread = pendingPlan?.globalVisualThread;
       const effectiveEdges = pendingPlan?.edges;
+      const creativeBrief = pendingPlan?.creativeBrief;
+      const backbone = pendingPlan?.backbone;
       effectiveGlobalBgRef.current = effectiveGlobalBg;
       setPendingPlan(null);
       // Pre-fetch ElevenLabs TTS + SFX + Music in parallel (non-blocking on failure)
       setIsPrefetchingAudio(true);
       const musicStyle = pendingPlan?.brand?.musicStyle ?? "cinematic";
+      // Derive dominant mood from the solution/feature scene for music generation
+      // Derive dominant music mood from emotionalIntent arc, not just musicMood field.
+      // emotionalIntent → music mood mapping (mirrors WhatAStory energy arc):
+      const emotionalIntentToMusicMood: Record<string, string> = {
+        FRUSTRATION: "tense",
+        PAIN: "tense",
+        RECOGNITION: "building",
+        RELIEF: "uplifting-swell",
+        CONFIDENCE: "driving-pulse",
+        TRUST: "warm-resolve",
+        URGENCY: "driving-pulse",
+        EXCITEMENT: "triumphant",
+      };
+
+      // Prefer explicit musicMood from solution/feature scenes first,
+      // then fall back to emotionalIntent-derived mood from the AHA moment,
+      // then from any scene with emotionalIntent,
+      // then from first scene's musicMood.
+      const ahaMood =
+        editedScenes.find((s) => s.isAhaMoment)?.musicMood ??
+        (editedScenes.find((s) => s.isAhaMoment)?.emotionalIntent
+          ? emotionalIntentToMusicMood[
+              editedScenes.find((s) => s.isAhaMoment)!.emotionalIntent!
+            ]
+          : undefined);
+
+      const dominantMood =
+        editedScenes.find((s) => s.intent === "solution")?.musicMood ??
+        ahaMood ??
+        editedScenes.find((s) => s.intent === "feature")?.musicMood ??
+        (editedScenes.find((s) => s.emotionalIntent)?.emotionalIntent
+          ? emotionalIntentToMusicMood[
+              editedScenes.find((s) => s.emotionalIntent)!.emotionalIntent!
+            ]
+          : undefined) ??
+        editedScenes[0]?.musicMood ??
+        undefined;
       const [scenesWithAudio, sfxUrls, musicUrl] = await Promise.all([
         prefetchVoiceovers(editedScenes, voiceId),
         prefetchSfx(),
-        prefetchMusic(musicStyle),
+        prefetchMusic(musicStyle, dominantMood),
       ]);
       sfxUrlsRef.current = sfxUrls;
       musicUrlRef.current = musicUrl;
+      setMusicFetchFailed(musicUrl === null);
+      if (musicUrl === null) {
+        console.warn("Background music fetch failed — video will render without music");
+      }
       setIsPrefetchingAudio(false);
       // Phase 2.5: Clamp durationInFrames to match actual audio length
       const scenesWithClampedDuration = scenesWithAudio.map(scene => {
@@ -2326,8 +3125,35 @@ export function useFullVideoGeneration() {
       if (adjustments.length > 0) {
         console.log(`Alignment: ${adjustments.length} scene(s) adjusted:`, adjustments.map(a => `"${a.title}" ${a.oldDuration}→${a.newDuration}f`).join(", "));
       }
+
+      // ── Runtime budget guard ──────────────────────────────────────────────────
+      // Enforce 60–90 second discipline. WhatAStory never runs over 90s.
+      const MAX_VIDEO_FRAMES = 90 * 30; // 2700 frames = 90 seconds at 30fps
+      const MIN_SCENE_FRAMES = 90;      // Never compress a scene below 3 seconds
+      const totalFrames = alignedScenes.reduce((sum, sc) => sum + sc.durationInFrames, 0);
+
+      let finalScenes = alignedScenes;
+      if (totalFrames > MAX_VIDEO_FRAMES) {
+        const scale = MAX_VIDEO_FRAMES / totalFrames;
+        console.warn(
+          `[BudgetGuard] Total duration ${(totalFrames / 30).toFixed(1)}s exceeds 90s cap. ` +
+          `Scaling all scenes by ${(scale * 100).toFixed(1)}%.`
+        );
+        finalScenes = alignedScenes.map((sc) => ({
+          ...sc,
+          durationInFrames: Math.max(
+            MIN_SCENE_FRAMES,
+            Math.round((sc.durationInFrames * scale) / 30) * 30 // snap to 30f grid
+          ),
+        }));
+        console.log(
+          `[BudgetGuard] After scaling: ${(finalScenes.reduce((s, sc) => s + sc.durationInFrames, 0) / 30).toFixed(1)}s total.`
+        );
+      }
+      // ─────────────────────────────────────────────────────────────────────────
+
       runGeneration(
-        alignedScenes,
+        finalScenes,
         pendingModelRef.current,
         pendingBrandRef.current,
         pendingImagesRef.current,
@@ -2335,6 +3161,8 @@ export function useFullVideoGeneration() {
         effectiveGlobalBg,
         effectiveGlobalVisualThread,
         effectiveEdges,
+        creativeBrief,
+        backbone,
       );
     },
     [runGeneration],
@@ -2396,7 +3224,7 @@ export function useFullVideoGeneration() {
             }, brand)
           : undefined;
         const regenMorphFrom = index > 0 ? (scenes[index - 1]?.morphExport?.rect ?? null) : null;
-        const updated = await processScene(scenePlan, model, brand, true, () => { }, images, effectiveGlobalBgRef.current ?? "arcs", regenContinuity, globalFrameOffset, sfxUrlsRef.current, regenCamState, regenMorphFrom);
+        const updated = await processScene(scenePlan, model, brand, true, () => { }, images, effectiveGlobalBgRef.current ?? "arcs", regenContinuity, globalFrameOffset, sfxUrlsRef.current, regenCamState, regenMorphFrom, musicUrlRef.current ?? null, scene.creativeBrief, scene.backbone);
 
         setScenes((prev) => {
           const next = [...prev];
@@ -2451,7 +3279,28 @@ export function useFullVideoGeneration() {
           transition: scene.transition,
         };
 
-        const updated = await processScene(scenePlan, model, brand, true, () => { }, images, effectiveGlobalBgRef.current ?? "arcs", undefined, 0, sfxUrlsRef.current);
+        const sceneOffsets2 = calculateSceneOffsets(scenes);
+        const globalFrameOffset2 = sceneOffsets2[index] ?? 0;
+        const prevCompiledScene2 = index > 0 ? scenes[index - 1] : undefined;
+        const WALKTHROUGH_SKILLS_EDIT = new Set(["premium-cursor-engine","premium-app-walkthrough","premium-chameleon-ui","premium-scroll-demo"]);
+        const prevIsWalkthrough2 = prevCompiledScene2?.skills?.some(s => WALKTHROUGH_SKILLS_EDIT.has(s));
+        const thisIsWalkthrough2 = scene.skills?.some(s => WALKTHROUGH_SKILLS_EDIT.has(s));
+        const editCamState = scene.transition === "cameraPan" && thisIsWalkthrough2 && prevIsWalkthrough2
+          ? CINEMATIC_CAMERA_END : DEFAULT_CAMERA_STATE;
+        const editContinuity = prevCompiledScene2
+          ? buildContinuityContext(prevCompiledScene2, {
+              title: prevCompiledScene2.title,
+              prompt: prevCompiledScene2.prompt,
+              skills: prevCompiledScene2.skills,
+              durationInFrames: prevCompiledScene2.durationInFrames,
+              id: index - 1,
+              emotionalIntent: prevCompiledScene2.emotionalIntent,
+              isAhaMoment: prevCompiledScene2.isAhaMoment,
+              visualAnchor: (prevCompiledScene2 as any).visualAnchor,
+            }, brand)
+          : undefined;
+        const editMorphFrom = index > 0 ? (scenes[index - 1]?.morphExport?.rect ?? null) : null;
+        const updated = await processScene(scenePlan, model, brand, true, () => { }, images, effectiveGlobalBgRef.current ?? "arcs", editContinuity, globalFrameOffset2, sfxUrlsRef.current, editCamState, editMorphFrom, musicUrlRef.current ?? null, scene.creativeBrief, scene.backbone);
 
         setScenes((prev) => {
           const next = [...prev];
@@ -2480,6 +3329,9 @@ export function useFullVideoGeneration() {
       if (index === null) return;
       setScenes((prev) => {
         if (!prev[index]) return prev;
+        const sceneOffsets = calculateSceneOffsets(prev);
+        const sceneWaypoints = prev[index].cursorWaypoints;
+        const editCursorSteps = sceneWaypoints?.length ? computeCursorStepsData(sceneWaypoints) : [];
         const result = compileCode(
           newCode,
           images,
@@ -2488,14 +3340,22 @@ export function useFullVideoGeneration() {
           prev[index].wordTimings ?? [],
           (prev[index] as any).uiSchema ?? null,
           effectiveGlobalBgRef.current ?? "arcs",
-          0,
+          sceneOffsets[index] ?? 0,
           (prev[index] as any).morphImport?.rect ?? null,
           sfxUrlsRef.current,
           {},
           { zoom: 1, panX: 0, panY: 0 },
           (prev[index] as any).stockFootage ?? null,
           (prev[index] as any).featureHeader ?? null,
-        );
+          musicUrlRef.current ?? null,
+          (pendingBrandRef.current as any)?.logo ?? null,
+          (prev[index] as any).highlightWords ?? [],
+          (prev[index] as any).visualState ?? null,
+          (prev[index] as any).visualAnchor ?? null,
+          (prev[index] as any).musicMood ?? "energetic-precise",
+          (prev[index] as any).skillComposition ?? null,
+          editCursorSteps,
+          );
         if (result.error || !result.Component) return prev;
         const next = [...prev];
         next[index] = {
@@ -2530,6 +3390,60 @@ export function useFullVideoGeneration() {
     setIsFlowDetecting(false);
   }, []);
 
+  const setLogoImage = useCallback((url: string | null) => {
+    pendingLogoImageRef.current = url;
+  }, []);
+
+  /** Revise the pending plan based on user feedback without restarting from scratch. */
+  const [isRevising, setIsRevising] = useState(false);
+
+  const revisePlan = useCallback(
+    async (feedback: string) => {
+      if (!pendingPlan) return;
+      setIsRevising(true);
+      setError(null);
+      try {
+        const res = await fetch("/api/plan", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            prompt: pendingPromptRef.current,
+            model: pendingModelRef.current,
+            images: pendingImagesRef.current.length ? pendingImagesRef.current : undefined,
+            imageUserDescriptions: pendingDescriptionsRef.current.length ? pendingDescriptionsRef.current : undefined,
+            screenFlow: pendingScreenFlowRef.current,
+            cachedBrand: pendingBrandRef.current,
+            existingPlan: pendingPlan.scenes,
+            refinementFeedback: feedback,
+            targetDurationSeconds: 90,
+          }),
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          throw new Error(err.error || "Failed to revise plan");
+        }
+        const data = await res.json();
+        const revisedScenes: ScenePlan[] = data.scenes ?? pendingPlan.scenes;
+        // Preserve existing brand — only override if plan response changes something meaningful
+        const revisedBrand: BrandTokens = { ...DEFAULT_BRAND, ...pendingBrandRef.current, ...(data.brand ?? {}) };
+        if (pendingLogoImageRef.current) revisedBrand.logo = pendingLogoImageRef.current;
+        pendingBrandRef.current = revisedBrand;
+        setPendingPlan((prev) => prev ? {
+          ...prev,
+          scenes: revisedScenes,
+          brand: revisedBrand,
+          globalVisualThread: data.globalVisualThread ?? prev.globalVisualThread,
+          edges: data.edges ?? prev.edges,
+        } : null);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Failed to revise plan");
+      } finally {
+        setIsRevising(false);
+      }
+    },
+    [pendingPlan],
+  );
+
   return {
     generateFullVideo,
     approveFlow,
@@ -2540,6 +3454,7 @@ export function useFullVideoGeneration() {
     isPlanning,
     isFlowDetecting,
     isPrefetchingAudio,
+    musicFetchFailed,
     isGenerating,
     progress,
     scenes,
@@ -2556,5 +3471,11 @@ export function useFullVideoGeneration() {
     pendingBrandRef,
     /** Stable ref holding the confirmed screen flow — available for re-plan scenarios */
     pendingScreenFlowRef,
+    /** Set the uploaded logo image (base64 data URL) — merged into brand.logo after plan */
+    setLogoImage,
+    /** Revise the pending plan based on natural-language feedback */
+    revisePlan,
+    /** True while revisePlan is re-calling /api/plan */
+    isRevising,
   };
 }

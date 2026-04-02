@@ -17,6 +17,16 @@ const DEFAULT_VOICE_ID = "21m00Tcm4TlvDq8ikWAM"; // ElevenLabs "Rachel"
 const MAX_CHARS = 1000; // guard against excessive usage
 const FPS = 30; // Remotion frame rate
 
+/** Per-intent voice settings: vary stability/style to match the emotional energy of each scene. */
+const INTENT_VOICE_SETTINGS: Record<string, { stability: number; similarity_boost: number; style: number; use_speaker_boost: boolean }> = {
+  hook:     { stability: 0.32, similarity_boost: 0.88, style: 0.75, use_speaker_boost: true },
+  problem:  { stability: 0.72, similarity_boost: 0.70, style: 0.20, use_speaker_boost: false },
+  solution: { stability: 0.28, similarity_boost: 0.92, style: 0.90, use_speaker_boost: true },
+  feature:  { stability: 0.60, similarity_boost: 0.75, style: 0.40, use_speaker_boost: false },
+  proof:    { stability: 0.65, similarity_boost: 0.72, style: 0.35, use_speaker_boost: false },
+  cta:      { stability: 0.30, similarity_boost: 0.90, style: 0.80, use_speaker_boost: true },
+};
+
 /** Convert ElevenLabs character-level alignment to word-level frame timings. */
 function alignmentToWordTimings(
   alignment: {
@@ -121,7 +131,7 @@ async function geminiTTS(text: string, apiKey: string): Promise<string | null> {
 
 export async function POST(req: Request) {
   try {
-    const { text, voiceId, fps = FPS } = await req.json();
+    const { text, voiceId, fps = FPS, intent } = await req.json();
 
     if (!text?.trim()) {
       return Response.json({ audioUrl: null, error: "No text provided" });
@@ -131,6 +141,7 @@ export async function POST(req: Request) {
     const googleKey = process.env.GOOGLE_GENERATIVE_AI_API_KEY;
     const truncated = text.trim().slice(0, MAX_CHARS);
     const voice = voiceId ?? process.env.ELEVENLABS_VOICE_ID ?? DEFAULT_VOICE_ID;
+    const voiceSettings = INTENT_VOICE_SETTINGS[intent as string] ?? { stability: 0.45, similarity_boost: 0.80, style: 0.30, use_speaker_boost: true };
 
     // ── Attempt 1: ElevenLabs Flash with timestamps ──────────────────────────
     if (elevenLabsKey) {
@@ -142,7 +153,7 @@ export async function POST(req: Request) {
           body: JSON.stringify({
             text: truncated,
             model_id: "eleven_flash_v2_5",
-            voice_settings: { stability: 0.45, similarity_boost: 0.80, style: 0.30, use_speaker_boost: true },
+            voice_settings: voiceSettings,
           }),
         },
       );

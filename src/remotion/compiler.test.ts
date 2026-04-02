@@ -25,9 +25,11 @@ vi.mock("remotion", () => ({
   useVideoConfig: () => ({ fps: 30, width: 1920, height: 1080, durationInFrames: 300 }),
   spring: () => 1,
   interpolate: (_v: number, _i: number[], o: number[]) => o[0] ?? 0,
+  interpolateColors: (_v: number, _i: number[], o: string[]) => o[0] ?? "#000000",
   AbsoluteFill: ({ children }: any) => children ?? null,
   Audio: () => null,
   Img: () => null,
+  OffthreadVideo: () => null,
   Sequence: ({ children }: any) => children ?? null,
   // Deterministic seeded random — same algorithm as Remotion's implementation
   random: (seed: string | number) => {
@@ -73,7 +75,7 @@ vi.mock("@remotion/transitions/clock-wipe", () => ({ clockWipe: () => null }));
 // ---------------------------------------------------------------------------
 
 // eslint-disable-next-line import/first
-import { compileCode } from "./compiler";
+import { compileCode, extractComponentBody } from "./compiler";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -147,6 +149,7 @@ describe("Compiler scope — Phase 2: spring physics", () => {
       if (typeof EASINGS.easeInQuad !== 'function') throw new Error('easeInQuad missing');
     `))).not.toThrow();
   });
+
 });
 
 // ---------------------------------------------------------------------------
@@ -196,11 +199,11 @@ describe("Compiler scope — Phase 2: visual components", () => {
     `))).not.toThrow();
   });
 
-  it("getGlassCard includes saturate(180%) in backdropFilter", () => {
+  it("getGlassCard includes saturate(150%) in backdropFilter", () => {
     expect(() => executeComponent(makeComponent(`
       const styles = getGlassCard({ style: 'dark' });
-      if (!styles.backdropFilter.includes('saturate(180%)'))
-        throw new Error('Missing saturate(180%). Got: ' + styles.backdropFilter);
+      if (!styles.backdropFilter.includes('saturate(150%)'))
+        throw new Error('Missing saturate(150%). Got: ' + styles.backdropFilter);
     `))).not.toThrow();
   });
 
@@ -262,6 +265,170 @@ describe("Compiler scope — Phase 3: audio sync hooks", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Phase 4: Syntax recovery regressions (real-world LLM failures)
+// ---------------------------------------------------------------------------
+
+describe("Compiler recovery — unclosed literals", () => {
+  it("repairs unclosed CURSOR_STEPS array before next const (Unexpected token)", () => {
+    expect(() =>
+      executeComponent(
+        `export const MyAnimation = () => {
+  const { fps } = useVideoConfig();
+  const PAIN_CARDS_DATA = [
+    { title: "One", value: 1 },
+  const frame = useCurrentFrame();
+  // should not throw syntax error after repair
+  if (typeof frame !== "number") throw new Error("frame not number");
+  if (typeof fps !== "number") throw new Error("fps not number");
+  return null;
+};`,
+      ),
+    ).not.toThrow();
+  });
+
+  it("repairs unclosed CURSOR_STEPS before next const (Unexpected token)", () => {
+    expect(() =>
+      executeComponent(
+        `export const MyAnimation = () => {
+  const CURSOR_STEPS = [
+    { time: 0, x: 0.1, y: 0.2, action: "move", label: "A" },
+  const GENERAL_STIFFNESS = 100;
+  if (GENERAL_STIFFNESS !== 100) throw new Error("bad");
+  return null;
+};`,
+      ),
+    ).not.toThrow();
+  });
+
+  it("repairs CURSOR_STEPS when SFX_EVENTS starts before it closes", () => {
+    expect(() =>
+      executeComponent(
+        `export const MyAnimation = () => {
+  const CURSOR_STEPS = [
+  const SFX_EVENTS = [
+    { time: 0, id: "click" },
+  ];
+  const frame = useCurrentFrame();
+  if (typeof frame !== "number") throw new Error("bad frame");
+  return null;
+};`,
+      ),
+    ).not.toThrow();
+  });
+
+  it("repairs CURSOR_STEPS when a helper function starts before it closes", () => {
+    expect(() =>
+      executeComponent(
+        `export const MyAnimation = () => {
+  const CURSOR_STEPS = [
+  const CursorGuidedWorkflow = () => {
+    return 1;
+  };
+  const frame = useCurrentFrame();
+  if (typeof CursorGuidedWorkflow !== "function") throw new Error("missing fn");
+  if (typeof frame !== "number") throw new Error("bad frame");
+  return null;
+};`,
+      ),
+    ).not.toThrow();
+  });
+
+  it("repairs unclosed Array.from initializer before next const (Unexpected keyword 'const')", () => {
+    expect(() =>
+      executeComponent(
+        `export const MyAnimation = () => {
+  const ITEMS = Array.from({ length: 3 }, (_, i) => ({
+    i,
+    label: "Item " + i,
+  // missing close: }));
+  const NEXT = 123;
+  if (NEXT !== 123) throw new Error("bad");
+  return null;
+};`,
+      ),
+    ).not.toThrow();
+  });
+
+  it("repairs unclosed Array.from initializer for single-param arrow (i => ({ ... }))", () => {
+    expect(() =>
+      executeComponent(
+        `export const MyAnimation = () => {
+  const ITEMS = Array.from({ length: 3 }, i => ({
+    i,
+  // missing close: }));
+  const NEXT = 123;
+  if (NEXT !== 123) throw new Error("bad");
+  return null;
+};`,
+      ),
+    ).not.toThrow();
+  });
+
+  it("strips broken AUDIO_STIFFNESS precompute blocks (dangling ternary)", () => {
+    expect(() =>
+      executeComponent(
+        `export const MyAnimation = () => {
+  // Calculate AUDIO_STIFFNESS and AUDIO_DAMPING based on WORD_TIMINGS
+    ? (WORD_TIMINGS[WORD_TIMINGS.length - 1].startFrame - WORD_TIMINGS[0].startFrame) / (WORD_TIMINGS.length - 1)
+    : 20;
+  return null;
+};`,
+      ),
+    ).not.toThrow();
+  });
+
+  it("drops orphan template-literal .replace chain fragments", () => {
+    expect(() =>
+      executeComponent(
+        `export const MyAnimation = () => {
+  \`.replace(/0\\.\\d+/g, (match) => {
+    // Replace random numbers with mock foreign language words
+  }));
+  }));
+  const OK = 1;
+  if (OK !== 1) throw new Error("bad");
+  return null;
+};`,
+      ),
+    ).not.toThrow();
+  });
+
+  it("drops orphan bare brace-only lines (}}) that can appear after recovery", () => {
+    expect(() =>
+      executeComponent(
+        `export const MyAnimation = () => {
+  const frame = useCurrentFrame();
+  if (typeof frame !== "number") throw new Error("bad");
+  return null;
+};
+}}
+`,
+      ),
+    ).not.toThrow();
+  });
+});
+
+describe("extractComponentBody", () => {
+  it("prefers the candidate that actually returns an AbsoluteFill scene", () => {
+    const code = `const Scene0 = () => {
+  const helper = true;
+};
+
+export const DynamicAnimation = () => {
+  return (
+    <AbsoluteFill>
+      <div>Hello</div>
+    </AbsoluteFill>
+  );
+};`;
+
+    const body = extractComponentBody(code);
+    expect(body).toContain("<AbsoluteFill>");
+    expect(body).not.toContain("export const DynamicAnimation");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Scope: attached images & brand tokens
 // ---------------------------------------------------------------------------
 
@@ -302,6 +469,14 @@ describe("Compiler scope — ATTACHED_IMAGES and BRAND", () => {
       [], {}, "data:audio/mpeg;base64,abc",
     )).not.toThrow();
   });
+
+  it("hex() helper is injected", () => {
+    expect(() => executeComponent(makeComponent(`
+      const v = hex("#ff0000", 0.5);
+      if (typeof v !== "string") throw new Error("hex returned non-string");
+      if (!v.includes("rgba(")) throw new Error("hex did not rgba(): " + v);
+    `))).not.toThrow();
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -311,10 +486,19 @@ describe("Compiler scope — ATTACHED_IMAGES and BRAND", () => {
 describe("Compiler scope — Chameleon & App Shell components", () => {
   it("all chameleon components are injected", () => {
     expect(() => executeComponent(makeComponent(`
-      const names = ['ChameleonInput','ChameleonHighlight','DropdownMenu','CinematicCamera',
-                     'TaskDetailPanel','ModalOverlay','InputField','ChatBubble','SidebarNav','AppShell'];
-      for (const n of names) {
-        const v = eval(n);
+      const comps = {
+        ChameleonInput,
+        ChameleonHighlight,
+        DropdownMenu,
+        CinematicCamera,
+        TaskDetailPanel,
+        ModalOverlay,
+        InputField,
+        ChatBubble,
+        SidebarNav,
+        AppShell,
+      };
+      for (const [n, v] of Object.entries(comps)) {
         if (typeof v !== 'function') throw new Error(n + ' is not a function: ' + typeof v);
       }
     `))).not.toThrow();

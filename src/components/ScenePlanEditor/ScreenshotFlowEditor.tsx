@@ -69,7 +69,7 @@ export function ScreenshotFlowEditor({
 }: ScreenshotFlowEditorProps) {
   // Video recording metadata from flow-analyze
   const isVideoRecording = initialFlow?.isVideoRecording ?? false;
-  const [keyFrameIndices, setKeyFrameIndices] = useState<number[]>(
+  const [keyFrameIndices] = useState<number[]>(
     initialFlow?.keyFrameIndices ?? [],
   );
   const [narrativeSummary, setNarrativeSummary] = useState(
@@ -90,17 +90,45 @@ export function ScreenshotFlowEditor({
   const activeImages = activeIndices.map((i) => images[i]);
 
   const removeFrame = (origIdx: number) => {
-    // Update excluded set first; capture the new set synchronously for the flow rebuild.
     setExcludedSet((prev) => {
       const next = new Set(Array.from(prev));
       next.add(origIdx);
-      // Rebuild transitions using the freshly-computed exclusion set (avoids stale closure).
+
       setLocalFlow((prevFlow) => {
-        const remaining = baseIndices.filter((i) => !next.has(i));
-        const transitions = Array.from({ length: Math.max(0, remaining.length - 1) }, (_, j) => ({
-          from: j, to: j + 1, action: "", type: "click" as TransitionType,
-        }));
-        return { screens: prevFlow.screens, transitions };
+        // Derive old/new active indices from the excluded sets directly — avoids
+        // closing over outer `activeIndices` which may be stale inside a state updater.
+        const oldActiveIndices = baseIndices.filter((i) => !prev.has(i));
+        const newActiveIndices = baseIndices.filter((i) => !next.has(i));
+        if (newActiveIndices.length < 2) {
+          return { ...prevFlow, transitions: [] };
+        }
+
+        // Try to preserve existing transition data (actions/types) by matching pairs
+        // The old flow transitions were based on the PREVIOUS activeIndices.
+        const newTransitions: ScreenTransition[] = [];
+
+        for (let j = 0; j < newActiveIndices.length - 1; j++) {
+          const fromIdx = newActiveIndices[j];
+          const toIdx = newActiveIndices[j + 1];
+          
+          // Look for an existing transition in the current flow that matched this specific sequence
+          const oldFromPos = oldActiveIndices.indexOf(fromIdx);
+          const oldToPos = oldActiveIndices.indexOf(toIdx);
+          
+          let existingT = null;
+          if (oldFromPos !== -1 && oldToPos === oldFromPos + 1) {
+            existingT = prevFlow.transitions[oldFromPos];
+          }
+
+          newTransitions.push({
+            from: j,
+            to: j + 1,
+            action: existingT?.action ?? "",
+            type: (existingT?.type ?? "click") as TransitionType,
+          });
+        }
+
+        return { ...prevFlow, transitions: newTransitions };
       });
       return next;
     });
@@ -148,11 +176,23 @@ export function ScreenshotFlowEditor({
           if (!data?.elements?.length) return;
           const waypoints: CursorWaypoint[] = data.elements
             .slice(0, MAX_WAYPOINTS)
-            .map((el: { label: string; x: number; y: number }) => ({
-              label: el.label,
-              x: parseFloat(el.x.toFixed(3)),
-              y: parseFloat((0.06 + el.y * 0.94).toFixed(3)),
-            }));
+            .map((el: { label: string; x: number; y: number; w?: number; h?: number; elementType?: string; id?: string }) => {
+              const w = el.w ?? 0.12;
+              const h = el.h ?? 0.06;
+              return {
+                label: el.label,
+                x: parseFloat(el.x.toFixed(3)),
+                y: parseFloat(el.y.toFixed(3)),
+                id: el.id,
+                elementType: el.elementType as CursorWaypoint["elementType"],
+                box: {
+                  x: parseFloat((el.x - w / 2).toFixed(3)),
+                  y: parseFloat((el.y - h / 2).toFixed(3)),
+                  w: parseFloat(w.toFixed(3)),
+                  h: parseFloat(h.toFixed(3)),
+                },
+              } satisfies CursorWaypoint;
+            });
           setLocalWaypointsByImage((prev) => {
             if (prev[imgIdx]?.length > 0) return prev; // don't overwrite user-confirmed
             return { ...prev, [imgIdx]: waypoints };
@@ -198,18 +238,25 @@ export function ScreenshotFlowEditor({
   const detectFlow = async () => {
     setIsDetecting(true);
     try {
+      // IMPORTANT:
+      // - The Flow editor operates on "activeImages" (key moments after exclusions), not the full original frame list.
+      // - If we send the full `images` array but only send active descriptions, the server may misalign
+      //   descriptions with frames and infer an incorrect flow ("customized" / wrong cursor navigation).
+      // So we always analyze the active storyboard set.
+      const imagesToAnalyze = activeImages;
+      const descriptionsToAnalyze = localDescriptions;
       const res = await fetch("/api/flow-analyze", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ images, userDescriptions: localDescriptions }),
+        body: JSON.stringify({ images: imagesToAnalyze, userDescriptions: descriptionsToAnalyze }),
       });
       if (!res.ok) return;
       const data = await res.json();
 
-      // Update video recording metadata if re-detected
-      if (data.isVideoRecording && Array.isArray(data.keyFrameIndices) && data.keyFrameIndices.length >= 2) {
-        setKeyFrameIndices(data.keyFrameIndices);
-        setNarrativeSummary(data.narrativeSummary ?? narrativeSummary);
+      // We intentionally do NOT update keyFrameIndices here because we analyzed the already-selected key moments.
+      // (keyFrameIndices refers to original indices in the raw recording, and changing it here would desync the editor.)
+      if (typeof data.narrativeSummary === "string" && data.narrativeSummary.trim()) {
+        setNarrativeSummary(data.narrativeSummary);
       }
 
       // Merge descriptions
@@ -250,8 +297,21 @@ export function ScreenshotFlowEditor({
   };
 
   const handleSave = () => {
-    // Pass keyFrameIndices so the planner uses only these frames (not all 20)
-    onSave(localFlow, localDescriptions, localWaypointsByImage, isVideoRecording ? keyFrameIndices : undefined);
+    // CRITICAL: Waypoints are keyed by original index in local state, but the
+    // generator resolves them by relative index (0, 1, 2...) matching the
+    // *planning image set* (the storyboard the user approved).
+    // We must map the keys here before passing to onSave.
+    const mappedWaypoints: Record<number, CursorWaypoint[]> = {};
+    activeIndices.forEach((origIdx, pos) => {
+      if (localWaypointsByImage[origIdx]) {
+        mappedWaypoints[pos] = localWaypointsByImage[origIdx];
+      }
+    });
+
+    // Ensure the plan/generation layer uses the same image subset/order the user saw here.
+    // We pass `activeIndices` as "keyFrameIndices" so approveFlow() will plan on exactly this set.
+    // (For non-recording screenshots this also enables the "hide frame" behavior to persist.)
+    onSave(localFlow, localDescriptions, mappedWaypoints, activeIndices);
     onClose?.();
   };
 

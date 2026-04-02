@@ -214,3 +214,14 @@ const phoneEntrance = spring({ frame: frame - 10, fps, config: { damping: 18, st
 - **Sheen sweep**: slides across screen once during entrance (frames 20–80) for glass feel
 - **Shadows**: large, soft `0 60px 120px rgba(0,0,0,0.45)` — crucial for depth
 - **Don't render the device bezel as SVG** — pure CSS is faster and looks just as good
+
+## Agency upgrade (WaS look): stage the device in 3D space
+
+For premium results, stage the entire device/browser mockup inside `IsometricWrapper` (preferred) or `TiltWrapper`.
+
+```tsx
+<IsometricWrapper lift={10} shadowOpacity={0.35} rotateX={58} rotateZ={-28}>
+  {/* your device/browser mockup */}
+</IsometricWrapper>
+// Cursor layers stay OUTSIDE this wrapper.
+```

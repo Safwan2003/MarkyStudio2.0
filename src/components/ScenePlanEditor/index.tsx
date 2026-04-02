@@ -1,8 +1,8 @@
-"use client";
+////"use client";
 
 import { Button } from "@/components/ui/button";
 import type { BrandTokens, CursorWaypoint, ScenePlan, ScreenFlow } from "@/types/generation";
-import { Film, Mic2, MousePointerClick, Plus, Trash2, Volume2 } from "lucide-react";
+import { Film, Loader2, Mic2, MousePointerClick, Plus, RefreshCw, Trash2, Volume2 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { CursorWaypointEditor } from "./CursorWaypointEditor";
 
@@ -28,7 +28,6 @@ const AVAILABLE_SKILLS = [
   // Showcase / cursor
   "premium-saas-showcase",
   "premium-cursor-engine",
-  "premium-hand-cursor",
   "premium-chameleon-ui",
   "premium-interactive-ui",
   "premium-camera-zoom",
@@ -80,7 +79,6 @@ const AVAILABLE_SKILLS = [
 // Skills that display images — show the image picker for these
 const IMAGE_SKILLS = new Set([
   "premium-cursor-engine",
-  "premium-hand-cursor",
   "premium-chameleon-ui",
   "premium-device-mockup",
   "premium-scroll-demo",
@@ -100,7 +98,6 @@ const IMAGE_SKILLS = new Set([
 // Skills that get cursor waypoint editor
 const CURSOR_SKILLS = new Set([
   "premium-cursor-engine",
-  "premium-hand-cursor",
   "premium-chameleon-ui",
 ]);
 
@@ -128,6 +125,10 @@ interface ScenePlanEditorProps {
   onConfirm: (editedScenes: ScenePlan[], screenFlow?: ScreenFlow, imageDescriptions?: string[]) => void;
   /** Called when the user removes an image from the list; parent should update attachedImages state */
   onImageRemove?: (index: number) => void;
+  /** Called when user requests AI to revise the plan based on feedback */
+  onRevise?: (feedback: string) => Promise<void>;
+  /** True while the AI is re-planning after a revision request */
+  isRevising?: boolean;
 }
 
 
@@ -138,14 +139,25 @@ export function ScenePlanEditor({
   imageDescriptions,
   onConfirm,
   onImageRemove,
+  onRevise,
+  isRevising = false,
 }: ScenePlanEditorProps) {
   const [localScenes, setLocalScenes] = useState<ScenePlan[]>(initialScenes);
+  /** Request-changes panel: expanded state + feedback text */
+  const [showRevisePanel, setShowRevisePanel] = useState(false);
+  const [reviseFeedback, setReviseFeedback] = useState("");
   /** Index of the scene whose cursor path editor is open, or null */
   const [cursorEditorScene, setCursorEditorScene] = useState<number | null>(null);
   /** Image-level waypoints: imageIndex → CursorWaypoint[] */
   const [waypointsByImage, setWaypointsByImage] = useState<Record<number, CursorWaypoint[]>>({});
   /** Track which (sceneId, imageIdx) combos we already fetched to avoid refetching */
   const fetchedRef = useRef<Set<string>>(new Set());
+
+  // When parent pushes a revised plan, reset local state to match
+  useEffect(() => {
+    setLocalScenes(initialScenes);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialScenes]);
 
   const handleSceneChange = <K extends keyof ScenePlan>(
     index: number,
@@ -161,10 +173,19 @@ export function ScenePlanEditor({
   const handleImageRemove = (removedIdx: number) => {
     setLocalScenes((prev) =>
       prev.map((s) => {
-        if (s.imageIndex === undefined) return s;
-        if (s.imageIndex === removedIdx) return { ...s, imageIndex: undefined };
-        if (s.imageIndex > removedIdx) return { ...s, imageIndex: s.imageIndex - 1 };
-        return s;
+        let updated: typeof s = s;
+        // Handle scalar imageIndex field
+        if (s.imageIndex !== undefined) {
+          if (s.imageIndex === removedIdx) updated = { ...updated, imageIndex: undefined };
+          else if (s.imageIndex > removedIdx) updated = { ...updated, imageIndex: s.imageIndex - 1 };
+        }
+        // Handle imageIndices[] array (multi-screenshot scenes)
+        if ((s as any).imageIndices) {
+          const filtered = ((s as any).imageIndices as number[]).filter((idx) => idx !== removedIdx);
+          const adjusted = filtered.map((idx) => (idx > removedIdx ? idx - 1 : idx));
+          updated = { ...updated, imageIndices: adjusted.length > 0 ? adjusted : undefined } as any;
+        }
+        return updated;
       }),
     );
     onImageRemove?.(removedIdx);
@@ -321,8 +342,8 @@ export function ScenePlanEditor({
         </div>
       </div>
 
-      {/* Global image strip — remove images from the list */}
-      {images && images.length > 1 && onImageRemove && (
+      {/* Global image strip — preview (and optionally remove) images */}
+      {images && images.length > 0 && (
         <div className="px-4 py-2 border-b border-border/30 shrink-0">
           <div className="flex items-center gap-2 flex-wrap">
             <span className="text-[10px] text-muted-foreground shrink-0">Screenshots:</span>
@@ -330,14 +351,16 @@ export function ScenePlanEditor({
               <div key={imgIdx} className="group/strip relative shrink-0">
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img src={img} alt={`Screenshot ${imgIdx + 1}`} className="w-8 h-8 rounded border border-border/40 object-cover" />
-                <button
-                  type="button"
-                  onClick={() => handleImageRemove(imgIdx)}
-                  className="absolute -top-1 -right-1 w-3.5 h-3.5 rounded-full bg-destructive text-destructive-foreground text-[9px] leading-none flex items-center justify-center opacity-0 group-hover/strip:opacity-100 transition-opacity"
-                  title={`Remove screenshot ${imgIdx + 1}`}
-                >
-                  ×
-                </button>
+                {onImageRemove && images.length > 1 && (
+                  <button
+                    type="button"
+                    onClick={() => handleImageRemove(imgIdx)}
+                    className="absolute -top-1 -right-1 w-3.5 h-3.5 rounded-full bg-destructive text-destructive-foreground text-[9px] leading-none flex items-center justify-center opacity-0 group-hover/strip:opacity-100 transition-opacity"
+                    title={`Remove screenshot ${imgIdx + 1}`}
+                  >
+                    ×
+                  </button>
+                )}
               </div>
             ))}
           </div>
@@ -529,10 +552,10 @@ export function ScenePlanEditor({
                 </label>
               </div>
 
-              {/* Row 4: image picker + cursor path editor button */}
+              {/* Row 4: image picker/preview + cursor path editor button */}
               {images && images.length > 0 && scene.skills?.some(sk => IMAGE_SKILLS.has(sk)) && (
                 <div className="pl-7 flex items-center gap-1.5 flex-wrap">
-                  {images.length > 1 && (
+                  {images.length > 1 ? (
                     <>
                       <span className="text-[10px] text-muted-foreground shrink-0">Screenshot:</span>
                       {images.map((img, imgIdx) => {
@@ -572,6 +595,26 @@ export function ScenePlanEditor({
                         </button>
                       )}
                     </>
+                  ) : (
+                    <>
+                      <span className="text-[10px] text-muted-foreground shrink-0">Screenshot:</span>
+                      <div className="flex items-center gap-2">
+                        <div
+                          className="relative w-9 h-9 rounded border border-border/40 overflow-hidden opacity-80"
+                          title={imageDescriptions?.[0] ?? "Screenshot 1"}
+                        >
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img
+                            src={images[0] as string}
+                            alt={imageDescriptions?.[0] ?? "Screenshot 1"}
+                            className="w-full h-full object-cover"
+                          />
+                        </div>
+                        <span className="text-[10px] text-muted-foreground">
+                          {imageDescriptions?.[0]?.trim() ? imageDescriptions?.[0] : "Screenshot 1"}
+                        </span>
+                      </div>
+                    </>
                   )}
 
                   {/* Cursor Path Editor button — for cursor-engine and chameleon-ui scenes */}
@@ -598,17 +641,72 @@ export function ScenePlanEditor({
         })}
       </div>
 
+      {/* Request Changes Panel */}
+      {onRevise && showRevisePanel && (
+        <div className="px-4 py-3 border-t border-border/50 shrink-0 space-y-2">
+          <p className="text-[11px] text-muted-foreground">
+            Describe what you want changed — the AI will revise the plan while keeping what works.
+          </p>
+          <textarea
+            value={reviseFeedback}
+            onChange={(e) => setReviseFeedback(e.target.value)}
+            placeholder='e.g. "Replace scene 2 with a data visualization scene" · "Add a social proof scene before the CTA" · "Make the hook more emotional"'
+            rows={3}
+            className="w-full bg-background border border-border rounded-lg px-3 py-2 text-xs text-foreground placeholder:text-muted-foreground-dim focus:outline-none focus:border-foreground/40 resize-none transition-colors"
+            disabled={isRevising}
+          />
+          <div className="flex gap-2 justify-end">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => { setShowRevisePanel(false); setReviseFeedback(""); }}
+              className="text-xs h-7 px-3 text-muted-foreground"
+              disabled={isRevising}
+            >
+              Cancel
+            </Button>
+            <Button
+              size="sm"
+              onClick={async () => {
+                if (!reviseFeedback.trim()) return;
+                await onRevise(reviseFeedback.trim());
+                setReviseFeedback("");
+                setShowRevisePanel(false);
+              }}
+              disabled={!reviseFeedback.trim() || isRevising}
+              className="text-xs h-7 px-4 gap-1.5 bg-violet-600 hover:bg-violet-500 text-white"
+            >
+              {isRevising ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+              {isRevising ? "Revising…" : "Revise Plan"}
+            </Button>
+          </div>
+        </div>
+      )}
+
       {/* Footer */}
       <div className="px-4 py-3 border-t border-border/50 flex items-center justify-between shrink-0">
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={handleAddScene}
-          className="text-muted-foreground hover:text-foreground text-xs h-7 px-2 gap-1.5"
-        >
-          <Plus className="w-3.5 h-3.5" />
-          Add Scene
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={handleAddScene}
+            className="text-muted-foreground hover:text-foreground text-xs h-7 px-2 gap-1.5"
+          >
+            <Plus className="w-3.5 h-3.5" />
+            Add Scene
+          </Button>
+          {onRevise && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setShowRevisePanel((v) => !v)}
+              className={`text-xs h-7 px-2 gap-1.5 ${showRevisePanel ? "text-violet-400" : "text-muted-foreground hover:text-foreground"}`}
+            >
+              <RefreshCw className="w-3.5 h-3.5" />
+              Request Changes
+            </Button>
+          )}
+        </div>
         <Button
           size="sm"
           onClick={() => {
@@ -621,7 +719,7 @@ export function ScenePlanEditor({
             }));
             onConfirm(mergedScenes);
           }}
-          disabled={localScenes.length === 0}
+          disabled={localScenes.length === 0 || isRevising}
           className="text-xs h-7 px-4 gap-1.5 bg-teal-600 hover:bg-teal-500 text-white"
         >
           <Film className="w-3.5 h-3.5" />
@@ -634,6 +732,7 @@ export function ScenePlanEditor({
         <CursorWaypointEditor
           image={activeEditorImage}
           waypoints={activeEditorScene.cursorWaypoints ?? []}
+          suggestedLabels={activeEditorScene.cursorJourney ?? []}
           onChange={(waypoints) =>
             handleSceneChange(cursorEditorScene, "cursorWaypoints", waypoints)
           }
