@@ -244,10 +244,16 @@ export function useGenerationApi(): UseGenerationApiReturn {
 
         let finalCode = stripMarkdownFences(accumulatedText);
 
-        // EOF validation: if the model was cut off mid-generation, the // EOF sentinel
-        // will be missing. Warn rather than silently accepting truncated code.
-        if (accumulatedText.length > 200 && !accumulatedText.includes("// EOF")) {
-          console.warn("[stream] Missing // EOF — generation may be truncated. Proceeding but quality may be reduced.");
+        // EOF validation: older prompts may omit the sentinel even when the component
+        // itself is complete, so only warn when the stream looks both large and
+        // structurally incomplete.
+        const looksPossiblyTruncated =
+          accumulatedText.length > 400 &&
+          !accumulatedText.includes("// EOF") &&
+          /(?:export\s+const|const\s+[A-Za-z_$][A-Za-z0-9_$]*\s*=)/.test(accumulatedText) &&
+          !/[}\])]\s*$/.test(accumulatedText.trim());
+        if (looksPossiblyTruncated) {
+          console.warn("[stream] Missing // EOF and response looks incomplete — generation may be truncated.");
         }
 
         finalCode = extractComponentCode(finalCode);

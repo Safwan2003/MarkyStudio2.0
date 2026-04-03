@@ -23,6 +23,18 @@ export type WaypointAction = "click" | "hover" | "double-click" | "scroll" | "no
 
 export type TransitionType = "search" | "click" | "scroll" | "navigate" | "submit" | "hover";
 
+export type JourneyStepKind =
+  | "discover"
+  | "explore"
+  | "input"
+  | "filter"
+  | "navigate"
+  | "review"
+  | "result"
+  | "confirm"
+  | "proof"
+  | "cta";
+
 export interface ScreenTransition {
   from: number;
   to: number;
@@ -43,6 +55,31 @@ export interface ScreenTransition {
   style?: { bgColor: string; borderRadius: number };
 }
 
+export interface JourneyContext {
+  /** Narrative function of this scene in the user journey. */
+  kind: JourneyStepKind;
+  /** What the viewer/user is trying to accomplish in this moment. */
+  narrativeTask: string;
+  /** Which screen this scene is primarily anchored to. */
+  sourceScreenIndex?: number;
+  /** Which screen the story leads toward next. */
+  targetScreenIndex?: number;
+  /** Human-readable description of the current screen. */
+  sourceScreenDescription?: string;
+  /** Human-readable description of the next/result screen. */
+  targetScreenDescription?: string;
+  /** Concrete next action taken from the source screen. */
+  nextAction?: string;
+  /** Transition type derived from flow analysis. */
+  transitionType?: TransitionType;
+  /** UI target label involved in the next action. */
+  targetLabel?: string;
+  /** UI element type involved in the next action. */
+  elementType?: "input" | "button" | "dropdown" | "card" | "nav";
+  /** Product/feature area this scene belongs to. */
+  featureName?: string;
+}
+
 export interface ScreenFlow {
   screens: { index: number; description: string }[];
   transitions: ScreenTransition[];
@@ -52,6 +89,10 @@ export interface ScreenFlow {
   visualComplexity?: number;
   /** Interaction pacing detected from recording */
   uiPace?: "fast" | "slow";
+  /** 2-3 sentence description of the overall walkthrough story. */
+  narrativeSummary?: string;
+  /** Main feature being demonstrated across the flow. */
+  productFeature?: string;
 }
 
 /** A single cursor waypoint — normalized coordinates (0–1) within the video frame. */
@@ -123,6 +164,39 @@ export interface SkillComposition {
   modifiers: string[];
 }
 
+export type NarrativeRole =
+  | "problem-tension"
+  | "workflow-choreography"
+  | "before-after-transformation"
+  | "compare-split-screen"
+  | "ecosystem-network"
+  | "proof-confidence"
+  | "product-payoff";
+
+export type MotionLanguage =
+  | "constrained-focus"
+  | "guided-choreography"
+  | "transformational-portal"
+  | "measured-proof"
+  | "premium-payoff";
+
+export type InteractionStoryMode =
+  | "guided-reveal"
+  | "transformation-chain"
+  | "proof-of-control"
+  | "coordinated-automation"
+  | "none";
+
+export interface StyleContract {
+  typographyEnergy: "editorial-bold" | "clean-product" | "authoritative-minimal";
+  depthModel: "immersive" | "layered" | "soft-studio";
+  lightingModel: "cool-specular" | "warm-glow" | "neutral-premium";
+  spacingDensity: "airy" | "balanced" | "dense";
+  cursorPersonality: "confident-precise" | "guided-calm" | "assertive-snappy";
+  iconMotion: "subtle-orbit" | "snapped-magnetic" | "quiet-supporting";
+  surfaceStyle: "glass-premium" | "soft-shadow" | "matte-clean";
+}
+
 export interface ScenePlan {
   id: number;
   title: string;
@@ -148,6 +222,8 @@ export interface ScenePlan {
   cursorJourney?: string[];
   /** User journey flow context carried on scenes (primarily used on scene 0 for planner reference). */
   screenFlow?: ScreenFlow;
+  /** Narrative task context for this specific scene within the product journey. */
+  journeyContext?: JourneyContext;
   /** Timed interaction script: maps video actions → Remotion frame numbers. Used by chameleon-ui scenes. */
   interactionScript?: InteractionEvent[];
   /** AI-written narration script for this scene. Word count must match duration × 2.5 words/sec. */
@@ -156,6 +232,16 @@ export interface ScenePlan {
   emotionalIntent?: string;
   /** High-level narrative intent — drives director-led skill selection. */
   intent?: "hook" | "problem" | "solution" | "feature" | "proof" | "cta";
+  /** Planner-selected narrative beat archetype for stronger progression. */
+  narrativeRole?: NarrativeRole;
+  /** Planner-selected visual grammar archetype to avoid repetitive scene structures. */
+  visualGrammarRole?: NarrativeRole;
+  /** Motion policy for this scene; generation should follow this instead of generic defaults. */
+  motionLanguage?: MotionLanguage;
+  /** Story mode for cursor/UI scenes so interactions feel marketable rather than merely functional. */
+  interactionStoryMode?: InteractionStoryMode;
+  /** Global art-direction contract repeated onto scenes for prompt simplicity. */
+  styleContract?: StyleContract;
   /** 1–2 headline words to render in BRAND.primary accent color — the highest emotional-weight words. */
   highlightWords?: string[];
   /** Max number of skills allowed in `skills[]` for this scene. Default: 2 (director budget). */
@@ -164,6 +250,26 @@ export interface ScenePlan {
   motionBudget?: "low" | "medium" | "high";
   /** Director-defined visual state carry-over for continuity (e.g. "App sidebar remains open, camera zoomed into dashboard") */
   visualState?: string;
+  /** Agency Design System overrides for this scene. */
+  designSystem?: {
+    /** Spacing grid (e.g. 8, 12, 16, 24). Default: 16 */
+    spacing?: number;
+    /** Content safe-zone margin in px. Default: 80 */
+    safeZone?: number;
+    /** Motion character: snappy (damping:200) | floaty (damping:400) | elastic (damping:8) */
+    motionCharacter?: "snappy" | "floaty" | "elastic";
+    /** Visual depth style: glass-heavy | glass-light | flat | soft-shadow */
+    depthStyle?: "glass-heavy" | "glass-light" | "flat" | "soft-shadow";
+  };
+  /** Explicit visual hierarchy mapping for the Art Director. */
+  hierarchy?: {
+    /** The one focal element that must dominate (e.g. "Hero Dashboard", "CTA Button"). */
+    primary: string;
+    /** Supporting element (e.g. "Sidebar Nav", "Metric Cards"). 60-70% scale. */
+    secondary?: string;
+    /** Subtle contextual elements. Muted opacity. */
+    tertiary?: string;
+  };
   /** Visual anchor object that transforms between scenes.
    *  Must persist across scenes to create a "Visual Thread". */
   visualAnchor?: {
@@ -364,6 +470,8 @@ export interface FullVideoPlan {
   globalBg?: string;
   /** One-sentence description of the persistent visual motif that threads all scenes */
   globalVisualThread?: string;
+  /** Global art-direction contract that must remain consistent across all scenes. */
+  styleContract?: StyleContract;
   /** Flow graph edges — describe transitions and state carry-over between scenes */
   edges?: FlowEdge[];
 }

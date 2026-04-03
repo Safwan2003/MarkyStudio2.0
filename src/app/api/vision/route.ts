@@ -1,5 +1,42 @@
 import { GoogleGenAI, Type } from "@google/genai";
 
+const GEMINI_VISION_MODEL = process.env.GEMINI_VISION_MODEL ?? process.env.GEMINI_FAST_MODEL ?? "gemini-2.5-flash";
+
+function isRetryableGeminiError(error: unknown): boolean {
+  const msg = error instanceof Error ? error.message : String(error);
+  return [
+    "429",
+    "RESOURCE_EXHAUSTED",
+    "503",
+    "UNAVAILABLE",
+    "ETIMEDOUT",
+    "UND_ERR_CONNECT_TIMEOUT",
+    "Connect Timeout Error",
+    "fetch failed",
+    "ECONNRESET",
+    "socket hang up",
+    "read ETIMEDOUT",
+  ].some((token) => msg.includes(token));
+}
+
+async function withRetry<T>(fn: () => Promise<T>, maxRetries = 3): Promise<T> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      return await fn();
+    } catch (error) {
+      lastError = error;
+      if (!isRetryableGeminiError(error) || attempt === maxRetries) {
+        throw error;
+      }
+      const delayMs = Math.min(15000, Math.pow(2, attempt + 1) * 2000);
+      console.warn(`[vision] transient Gemini failure, retrying in ${Math.round(delayMs / 1000)}s (attempt ${attempt + 1}/${maxRetries + 1})`);
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+  }
+  throw lastError;
+}
+
 const VISION_SYSTEM_PROMPT = `You are a precision UI element detector for interactive product screenshots.
 
 Analyze the provided screenshot and identify all visible interactive elements: buttons, input fields, navigation links, tabs, checkboxes, toggles, dropdowns, cards, and other clickable UI components.
@@ -81,7 +118,7 @@ function inferStableId(el: UIElement): string | undefined {
 // This mirrors resolveElementPosition() in `src/remotion/compiler.ts` so ids and snapping agree.
 function inferStableIdFromUiSchema(
   el: UIElement,
-  uiSchema: any,
+  uiSchema: { layout?: { type?: string } } | null | undefined,
 ): string | undefined {
   if (!uiSchema) return undefined;
   const layout = uiSchema?.layout?.type ?? "sidebar-main";
@@ -169,11 +206,10 @@ export async function POST(req: Request) {
   }
 
   const ai = new GoogleGenAI({ apiKey });
-  const FAST_MODEL = "gemini-2.5-flash";
 
   try {
-    const result = await ai.models.generateContent({
-      model: FAST_MODEL,
+    const result = await withRetry(() => ai.models.generateContent({
+      model: GEMINI_VISION_MODEL,
       contents: [
         {
           role: "user",
@@ -209,7 +245,7 @@ export async function POST(req: Request) {
           required: ["elements"],
         },
       },
-    });
+    }));
 
     if (!result.text) console.warn("[vision] LLM returned empty text");
     let data: { elements: UIElement[] };

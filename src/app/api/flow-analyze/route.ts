@@ -464,8 +464,10 @@ Also assess the visual energy of this screenshot sequence:
           energyLevel: { type: Type.STRING },
           visualComplexity: { type: Type.NUMBER },
           uiPace: { type: Type.STRING },
+          narrativeSummary: { type: Type.STRING, description: "2-3 sentence description of the user journey story arc shown in these screenshots" },
+          productFeature: { type: Type.STRING, description: "Short name of the main feature being demonstrated" },
         },
-        required: ["screens", "transitions", "energyLevel", "visualComplexity", "uiPace"],
+        required: ["screens", "transitions", "energyLevel", "visualComplexity", "uiPace", "narrativeSummary", "productFeature"],
       },
     },
   });
@@ -488,8 +490,10 @@ Also assess the visual energy of this screenshot sequence:
   const ssEnergy = (["high", "medium", "calm"].includes(parsed.energyLevel) ? parsed.energyLevel : "medium") as "high" | "medium" | "calm";
   const ssComplexity = typeof parsed.visualComplexity === "number" ? Math.max(0, Math.min(1, parsed.visualComplexity)) : 0.5;
   const ssPace = (["fast", "slow"].includes(parsed.uiPace) ? parsed.uiPace : "slow") as "fast" | "slow";
+  const narrativeSummary = parsed.narrativeSummary ?? "";
+  const productFeature = parsed.productFeature ?? "";
 
-  return { screens, transitions, energyLevel: ssEnergy, visualComplexity: ssComplexity, uiPace: ssPace };
+  return { screens, transitions, energyLevel: ssEnergy, visualComplexity: ssComplexity, uiPace: ssPace, narrativeSummary, productFeature };
 }
 
 // ---------------------------------------------------------------------------

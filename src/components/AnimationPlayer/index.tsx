@@ -212,8 +212,8 @@ export const AnimationPlayer: React.FC<AnimationPlayerProps> = ({
               backgroundColor: "transparent",
             }}
             controls
-            autoPlay
             loop
+            numberOfSharedAudioTags={15}
             errorFallback={renderErrorFallback}
             spaceKeyToPlayOrPause={false}
             clickToPlay={false}

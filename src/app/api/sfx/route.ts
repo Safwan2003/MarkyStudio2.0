@@ -67,18 +67,21 @@ export async function POST() {
     return Response.json({ urls: {} });
   }
 
-  // Generate all SFX in parallel
   const sounds = Object.keys(SFX_SPECS) as SfxType[];
-  const results = await Promise.all(
-    sounds.map(async (sound) => {
-      const url = await generateSfx(sound, apiKey);
-      return [sound, url] as const;
-    }),
-  );
-
   const urls: Partial<Record<SfxType, string>> = {};
-  for (const [sound, url] of results) {
-    if (url) urls[sound] = url;
+
+  // Keep concurrency intentionally low to stay within ElevenLabs free-tier limits.
+  for (let i = 0; i < sounds.length; i += 2) {
+    const batch = sounds.slice(i, i + 2);
+    const results = await Promise.all(
+      batch.map(async (sound) => {
+        const url = await generateSfx(sound, apiKey);
+        return [sound, url] as const;
+      }),
+    );
+    for (const [sound, url] of results) {
+      if (url) urls[sound] = url;
+    }
   }
 
   console.log(`SFX: generated ${Object.keys(urls).length}/${sounds.length} sounds`);

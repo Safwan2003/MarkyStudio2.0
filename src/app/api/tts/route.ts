@@ -16,6 +16,8 @@ import { GoogleGenAI } from "@google/genai";
 const DEFAULT_VOICE_ID = "21m00Tcm4TlvDq8ikWAM"; // ElevenLabs "Rachel"
 const MAX_CHARS = 1000; // guard against excessive usage
 const FPS = 30; // Remotion frame rate
+const TTS_ENABLED = process.env.ENABLE_TTS === "true";
+const GEMINI_TTS_MODEL = process.env.GEMINI_TTS_MODEL ?? "gemini-2.5-flash-preview-tts";
 
 /** Per-intent voice settings: vary stability/style to match the emotional energy of each scene. */
 const INTENT_VOICE_SETTINGS: Record<string, { stability: number; similarity_boost: number; style: number; use_speaker_boost: boolean }> = {
@@ -92,7 +94,7 @@ async function geminiTTS(text: string, apiKey: string): Promise<string | null> {
     const ai = new GoogleGenAI({ apiKey });
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const response = await (ai.models.generateContent as any)({
-      model: "gemini-2.5-flash-preview-tts",
+      model: GEMINI_TTS_MODEL,
       contents: [{ role: "user", parts: [{ text }] }],
       config: {
         responseModalities: ["AUDIO"],
@@ -131,6 +133,10 @@ async function geminiTTS(text: string, apiKey: string): Promise<string | null> {
 
 export async function POST(req: Request) {
   try {
+    if (!TTS_ENABLED) {
+      return Response.json({ audioUrl: null, wordTimings: [] });
+    }
+
     const { text, voiceId, fps = FPS, intent } = await req.json();
 
     if (!text?.trim()) {

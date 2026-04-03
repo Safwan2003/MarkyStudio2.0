@@ -199,11 +199,11 @@ describe("Compiler scope — Phase 2: visual components", () => {
     `))).not.toThrow();
   });
 
-  it("getGlassCard includes saturate(150%) in backdropFilter", () => {
+  it("getGlassCard includes saturate(160%) in backdropFilter", () => {
     expect(() => executeComponent(makeComponent(`
       const styles = getGlassCard({ style: 'dark' });
-      if (!styles.backdropFilter.includes('saturate(150%)'))
-        throw new Error('Missing saturate(150%). Got: ' + styles.backdropFilter);
+      if (!styles.backdropFilter.includes('saturate(160%)'))
+        throw new Error('Missing saturate(160%). Got: ' + styles.backdropFilter);
     `))).not.toThrow();
   });
 
@@ -218,7 +218,7 @@ describe("Compiler scope — Phase 2: visual components", () => {
   it("getGlassCard light mode has correct gradient", () => {
     expect(() => executeComponent(makeComponent(`
       const s = getGlassCard({ style: 'light' });
-      if (!s.background.includes('rgba(255,255,255,0.8)'))
+      if (!s.background.includes('rgba(255,255,255,0.85)'))
         throw new Error('Light glass card gradient wrong: ' + s.background);
     `))).not.toThrow();
   });

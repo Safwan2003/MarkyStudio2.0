@@ -5,8 +5,8 @@ import { Check, ChevronDown, MousePointerClick, RefreshCw, X } from "lucide-reac
 import { useEffect, useRef, useState } from "react";
 import { CursorWaypointEditor } from "./CursorWaypointEditor";
 
-/** Max waypoints per image — keeps cursor paths focused and manageable */
-const MAX_WAYPOINTS = 5;
+/** Max auto-detected waypoints per image — keep enough real targets without overwhelming the editor */
+const MAX_WAYPOINTS = 10;
 
 const TRANSITION_ICONS: Record<TransitionType, string> = {
   search:   "🔍",

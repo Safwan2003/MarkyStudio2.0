@@ -5,7 +5,7 @@ import { bundle } from "@remotion/bundler";
 import { renderMedia, selectComposition } from "@remotion/renderer";
 import { existsSync, mkdirSync } from "fs";
 import { stat } from "fs/promises";
-import path from "path";
+import * as path from "path";
 import { randomUUID } from "crypto";
 import { COMP_NAME } from "../../../../types/constants";
 
@@ -86,11 +86,24 @@ export async function POST(req: Request) {
           composition,
           serveUrl: bundleCache,
           codec: "h264",
+          // Agency standard: use 'high' profile for better gradient/glow compression
+          // and concurrency: 8 to maximize local hardware threads for heavy CSS blurs.
+          enforceAudioTrack: true,
+          concurrency: 8,
+          browserExecutable: undefined, // default Chromium
+          chromiumOptions: {
+            disableWebSecurity: true,
+            // Use supported properties for Chromium optimization
+            headless: true,
+          },
           outputLocation: outputPath,
           inputProps,
           onProgress: ({ progress }) => {
             // progress is 0–1; map to 0.15–0.98
-            send({ type: "progress", progress: 0.15 + progress * 0.83 });
+            const scaled = 0.15 + (progress * 0.83);
+            controller.enqueue(
+              encoder.encode(`data: ${JSON.stringify({ type: "progress", progress: scaled })}\n\n`)
+            );
           },
         });
 

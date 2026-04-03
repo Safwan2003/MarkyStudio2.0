@@ -1,6 +1,8 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import { createHash } from "crypto";
 
+const GEMINI_AUDIT_MODEL = process.env.GEMINI_AUDIT_MODEL ?? process.env.GEMINI_FAST_MODEL ?? "gemini-2.5-flash";
+
 // ---------------------------------------------------------------------------
 // In-memory audit cache — skips the LLM call when the same code is audited
 // again (e.g. after a hot-reload or re-render without code changes).
@@ -24,48 +26,54 @@ function codeHash(code: string): string {
 // into /api/generate as an errorCorrection context for up to 3 iterations.
 // ---------------------------------------------------------------------------
 
-const AUDIT_CODE_PROMPT = `You are a senior motion graphics art director and creative director auditing AI-generated Remotion animation code.
+const AUDIT_CODE_PROMPT = `You are a senior motion graphics Art Director at a premium agency (WhatAStory / Sandwich Video).
 
-Your job is to review the code and catch both visual quality issues AND strategic narrative failures.
+Your job is to audit AI-generated code and enforce STRICTURE VISUAL DISCIPLINE. You are the "Art Director" pass.
 
-## 1. NARRATIVE & STRATEGY AUDIT (Director Layer)
-- **Core Transformation**: Does the voiceoverText and headline move the needle toward the "Core Transformation" defined in the brief?
-- **Visual Metaphor**: If this is a hook/problem scene, does it use the abstract/chaos visual metaphor requested? (Raw UI in a hook = -20 points).
-- **Visual Anchor**: Is the VISUAL_ANCHOR (icon/label/color) present and in the correct state (colorFrom for pain, colorTo for resolution)?
-- **Visual State**: Does the code respect the VISUAL_STATE carry-over instructions (e.g. keeping sidebar mounted, matching zoom level)?
+## 1. STRATEGIC NARRATIVE AUDIT
+- **Scene Purpose**: If this is an AHA scene, is it ultra-minimal and centered? (clutter in AHA = -40 points).
+- **Visual Anchor**: Is the VISUAL_ANCHOR present and in the correct emotional state (Red/Broken for problem, Green/Glowing for solution)?
+- **Visual State**: Does the code respect the VISUAL_STATE handoff (e.g. keeping sidebar from previous scene)?
+- **Narrative Role**: Does the scene behave like its intended beat (problem tension, workflow choreography, transformation, proof, or payoff), or does it collapse into a generic app demo?
+- **Style Contract**: Does the scene preserve the same typography/depth/lighting/cursor language implied by the prompt, or does it drift into a different visual system?
 
-## 2. VISUAL RUBRIC — catch amateur/broken patterns:
+## 2. THE ART DIRECTOR RUBRIC (MANDATORY)
 
-### Layout & Composition
-- Does AbsoluteFill have a background color set from frame 0? (missing = flickering black flash)
-- Are text elements at correct sizes? Hero headline ≥ 128px, scene headline ≥ 80px, body ≥ 22px
-- Do elements have 60–120px breathing room from screen edges? (tight = cramped, unprofessional)
-- Is there a clear visual hierarchy — one dominant element per scene?
+### Element Discipline (HARD LIMIT)
+- **Max 3 visual elements** per scene. (Count: headline, card group, chart, icons).
+- If you find 4+ elements → **REJECT (passed: false)** and list the specific elements to remove in 'fixes'.
+- Clutter is the #1 enemy of agency-level quality.
 
-### Brand Fidelity
-- Does every text element use BRAND.font? (missing = wrong typeface)
-- Does the background use BRAND.bg exactly? (deviation = off-brand)
-- Is BRAND.primary used on only 2–3 elements? (overuse kills impact)
+### Visual Hierarchy
+- Is there a clear **Primary Focal Element**?
+- Are secondary elements at 60–70% scale or muted (opacity 0.6–0.8)?
+- If all elements have the same visual weight → **REJECT**.
 
-### Animation Quality
-- Are spring() calls using SPRING_CONFIGS.entrance (damping:200) not bare default { damping:100 }?
-- Do animated elements have willChange: "transform" where they animate every frame?
-- Is random('seed') used instead of Math.random()?
+### Layout & Safe-Zones
+- **80px Safe-Zone**: Every element must have ≥ 80px padding from ALL edges. (Check interpolation and translate values).
+- **Overlaps**: No headline can overlap with a card. No text can overlap with a chart.
+- Is AbsoluteFill background set from frame 0?
 
-### Common Bugs
-- Are PARTICLES/ORBS/CONFETTI arrays defined OUTSIDE the component function? (inside = flicker)
-- Is ATTACHED_IMAGES[0] guarded with a null check?
-- Does any headline/title text LACK maxWidth? (missing maxWidth = text overflow = -15 points)
-- Is whiteSpace: "nowrap" used on any headline text? (causes overflow on long names = -15 points)
-- Is any fontSize > 100px used without a width constraint? (overflow risk = -10 points)
+### Animation & Physics
+- **Damping:200**: All standard UI reveals must use damping:200 (SPRING_CONFIGS.entrance).
+- **Internal Acts**: Animation MUST stop at the Resolve Act start frame (Act 3). If elements move/drift in the resolve act → **REJECT**.
+- Is there a CinematicCamera push-in (zoom 1.0 -> 1.2) for AHA/Showcase scenes?
+
+### Cinematic Premium Quality
+- Is the motion language story-motivated, or does it feel like generic fades/slides?
+- If this is a workflow scene, does cursor/action visibly CAUSE the interface state change?
+- If this is a proof scene, does the metric/data evidence feel authoritative and staged, not merely decorative?
+- If this is a CTA/payoff scene, does it deliver emotional resolution rather than just placing a button on screen?
+- If the scene uses UI, does it feel product-marketing polished rather than functional/demo-like?
 
 ## OUTPUT
-- passed: true if quality is acceptable (score ≥ 70)
-- score: 0–100
-- issues: specific issues found
-- fixes: specific code changes to make
+- passed: true ONLY if the scene is perfectly clean, hierarchical, and follows the mandates.
+- score: 0–100 (90+ is WhatAStory quality).
+- issues: specific visual/strategic failures.
+- fixes: DIRECT instructions to the generator (e.g. "Remove the 4th card", "Reduce headline to 80px", "Add 80px margin").
+- Prefer fixes that increase cinematic clarity, narrative progression, and style cohesion without increasing scene complexity.
 
-Be strict. Score below 70 = not passed.`;
+Be brutal. We only accept world-class motion graphics. Score < 80 = FAIL.`;
 
 const AUDIT_FRAME_PROMPT = `You are a senior motion graphics art director evaluating a rendered animation frame.
 
@@ -93,6 +101,12 @@ Look at the screenshot and assess visual quality against agency standards.
 - Are elements visibly misaligned or overlapping unintentionally?
 - Does anything look broken, pixelated, or low quality?
 
+### Cinematic Feel
+- Does this frame suggest a deliberate story beat, or does it feel like a generic software screenshot with motion?
+- Is there evidence of depth, premium lighting, and consistent surface treatment?
+- If a cursor/UI action is implied, does the frame feel staged around that action?
+- Does the scene look cohesive with a high-end agency SaaS explainer rather than a template?
+
 ## OUTPUT
 - passed: true if this looks agency-quality
 - score: 0–100 (100 = What A Story quality)
@@ -116,6 +130,8 @@ interface AuditResult {
   score: number;
   issues: string[];
   fixes: string[];
+  auditFailed?: boolean;
+  providerStatus?: number | null;
 }
 
 function parseDataUrl(dataUrl: string): { mimeType: string; data: string } | null {
@@ -205,7 +221,7 @@ export async function POST(req: Request) {
 
   try {
     const result = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
+      model: GEMINI_AUDIT_MODEL,
       contents: [{ role: "user", parts }],
       config: {
         systemInstruction: isVisualAudit ? AUDIT_FRAME_PROMPT : AUDIT_CODE_PROMPT,
@@ -244,8 +260,12 @@ export async function POST(req: Request) {
   } catch (error) {
     console.error("Audit error:", error);
     // On failure, return a pass so it doesn't block generation
+    const providerStatus =
+      typeof error === "object" && error !== null && "status" in error && typeof (error as { status?: unknown }).status === "number"
+        ? (error as { status: number }).status
+        : null;
     return new Response(
-      JSON.stringify({ passed: true, score: 75, issues: [], fixes: [], auditFailed: true }),
+      JSON.stringify({ passed: true, score: 75, issues: [], fixes: [], auditFailed: true, providerStatus }),
       { status: 200, headers: { "Content-Type": "application/json" } },
     );
   }

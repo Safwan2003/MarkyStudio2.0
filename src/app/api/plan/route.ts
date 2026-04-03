@@ -1,7 +1,20 @@
 import { GoogleGenAI, Type } from "@google/genai";
+import { enforceScreenshotDrivenSceneContract } from "./screenshot-contract";
+import {
+  choosePlannerTransition,
+  deriveQualityMetadata,
+  deriveStyleContract,
+  type InteractionStoryMode,
+  type MotionLanguage,
+  type NarrativeRole,
+  type StyleContract,
+} from "./quality-grammar";
+
+const GEMINI_FAST_MODEL = process.env.GEMINI_FAST_MODEL ?? "gemini-2.5-flash";
+const GEMINI_PRO_MODEL = process.env.GEMINI_PRO_MODEL ?? "gemini-2.5-pro";
 
 // ---------------------------------------------------------------------------
-// Retry-with-backoff for 429 rate-limit responses
+// Retry-with-backoff for transient Gemini/API/network failures
 // ---------------------------------------------------------------------------
 
 function extractRetryDelay(error: unknown): number | null {
@@ -11,20 +24,35 @@ function extractRetryDelay(error: unknown): number | null {
   return match ? Math.ceil(parseFloat(match[1])) + 2 : null; // +2s buffer
 }
 
+function isRetryableGeminiError(error: unknown): boolean {
+  const msg = error instanceof Error ? error.message : String(error);
+  return [
+    "429",
+    "RESOURCE_EXHAUSTED",
+    "503",
+    "UNAVAILABLE",
+    "ETIMEDOUT",
+    "UND_ERR_CONNECT_TIMEOUT",
+    "Connect Timeout Error",
+    "fetch failed",
+    "ECONNRESET",
+    "socket hang up",
+    "read ETIMEDOUT",
+  ].some((token) => msg.includes(token));
+}
+
 async function withRetry<T>(
   fn: () => Promise<T>,
-  maxRetries = 3,
+  maxRetries = 4,
 ): Promise<T> {
   let lastError: unknown;
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
       return await fn();
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      const isRetryable = msg.includes("429") || msg.includes("RESOURCE_EXHAUSTED") || msg.includes("503") || msg.includes("UNAVAILABLE");
-      if (!isRetryable || attempt === maxRetries) throw err;
-      const delaySec = extractRetryDelay(err) ?? Math.pow(2, attempt + 1) * 5;
-      console.log(`Rate limited — retrying in ${delaySec}s (attempt ${attempt + 1}/${maxRetries})`);
+      if (!isRetryableGeminiError(err) || attempt === maxRetries) throw err;
+      const delaySec = extractRetryDelay(err) ?? Math.min(20, Math.pow(2, attempt + 1) * 3);
+      console.log(`Gemini transient failure — retrying in ${delaySec}s (attempt ${attempt + 1}/${maxRetries + 1})`);
       await new Promise((resolve) => setTimeout(resolve, delaySec * 1000));
       lastError = err;
     }
@@ -269,7 +297,7 @@ async function critiqueNarrativeBackbone(
     const userMessage = `Creative Brief: ${JSON.stringify(brief)}\n\nProposed Backbone: ${JSON.stringify(backbone)}`;
     const result = await withRetry(() =>
       ai.models.generateContent({
-        model: "gemini-2.5-flash",
+        model: GEMINI_FAST_MODEL,
         config: {
           systemInstruction: NARRATIVE_BACKBONE_CRITIQUE_PROMPT,
           responseMimeType: "application/json",
@@ -321,7 +349,7 @@ Proposed Scene Plan: ${JSON.stringify(plan)}
 
     const result = await withRetry(() =>
       ai.models.generateContent({
-        model: "gemini-2.5-flash",
+        model: GEMINI_FAST_MODEL,
         config: {
           systemInstruction: NARRATIVE_PLANNING_CRITIQUE_PROMPT,
           responseMimeType: "application/json",
@@ -352,7 +380,7 @@ async function generateNarrativeBackbone(
 
     const result = await withRetry(() =>
       ai.models.generateContent({
-        model: "gemini-2.5-pro",
+        model: GEMINI_PRO_MODEL,
         config: {
           systemInstruction: NARRATIVE_BACKBONE_PROMPT,
           responseMimeType: "application/json",
@@ -382,7 +410,7 @@ Please provide a REFINED NarrativeBackbone that addresses these issues.
 
       const refinementResult = await withRetry(() =>
         ai.models.generateContent({
-          model: "gemini-2.5-pro",
+          model: GEMINI_PRO_MODEL,
           config: {
             systemInstruction: NARRATIVE_BACKBONE_PROMPT + "\n\n## REFINEMENT MODE: Fix the provided backbone based on the director's critique.",
             responseMimeType: "application/json",
@@ -421,7 +449,7 @@ async function generateCreativeBrief(
 
     const result = await withRetry(() =>
       ai.models.generateContent({
-        model: "gemini-2.5-pro",
+        model: GEMINI_PRO_MODEL,
         config: {
           systemInstruction: CREATIVE_BRIEF_PROMPT,
           responseMimeType: "application/json",
@@ -527,6 +555,8 @@ function buildDirectorPlannerSystemPrompt(
     "- primary: The main layout (e.g. premium-reconstructed-ui).",
     "- secondary: [backgroundSkill, polishSkill].",
     "- modifiers: MUST map from the emotional intent (e.g. 'emotional-tension' for problem, 'emotional-relief' for solution).",
+    "- Every scene MUST also define: narrativeRole, visualGrammarRole, motionLanguage, and interactionStoryMode.",
+    "- Do not repeat the same visualGrammarRole in adjacent scenes unless the second scene is clearly a continuation of the same product world.",
   ].join("\n");
 
   return briefSection + "\n\n---\n\n" + NARRATIVE_PLANNING_PROMPT;
@@ -544,17 +574,71 @@ Your job is not just to plan scenes — it is to craft a STORY that makes viewer
 2. Act timing in EVERY scene prompt: "Act 1 (0-Xf): ... Act 2 (Xf-Yf): ... Act 3 (Yf-Zf): hold final state."
 3. No two consecutive scenes share the same layoutTopology (split-left/split-right/center-focus/isometric-float/full-bleed-overlay)
 4. EVERY scene prompt contains "VISUAL THREAD:" line describing the global motif's state in this scene
-5. Count middle scenes: >=80% must use cameraPan. "fade" on middle scene = quality fail.
+5. Transition grammar must be story-motivated: do NOT repeat one transition mechanically across all middle scenes.
 6. EVERY voiceoverText describes what the VIEWER GAINS (not product features)
 7. EVERY scene has highlightWords[] with 1-2 accent words
 8. EVERY scene prompt ends with "Stage Direction:" sentence
 
 Given a product description, write a complete video narrative plan.
 
-## THE AGENCY NARRATIVE FORMULA
+## SCENE GRAMMAR SYSTEM (MANDATORY)
+Every scene must explicitly choose a narrativeRole and a visualGrammarRole from this cinematic grammar:
+- problem-tension
+- workflow-choreography
+- before-after-transformation
+- compare-split-screen
+- ecosystem-network
+- proof-confidence
+- product-payoff
 
-Premium SaaS explainer videos follow PAS (Problem → Agitation → Solution) not a feature walkthrough.
-The formula that converts: **Broken Reality → Empathy → Relief → Proof → Action**
+Rules:
+- Adjacent scenes should not share the same visualGrammarRole unless they are an intentional persistent-shell continuation.
+- A strong SaaS explainer should usually progress from tension → workflow/transformation → proof → payoff.
+- No more than one purely functional walkthrough scene may appear before a transformation or proof beat.
+- Final scene must land as product-payoff, not just a generic CTA card.
+
+Also assign:
+- motionLanguage: constrained-focus | guided-choreography | transformational-portal | measured-proof | premium-payoff
+- interactionStoryMode: guided-reveal | transformation-chain | proof-of-control | coordinated-automation | none
+
+## THE AGENCY DISCIPLINE MANDATES (NON-NEGOTIABLE)
+
+WhatAStory quality comes from **extreme opinionation**. You are no longer "suggesting" — you are "dictating".
+
+### 1. STRICT SCENE COMPOSITION RULES (NON-NEGOTIABLE)
+- **Maximum 3 visual elements** per scene.
+- **Only ONE focal element** per scene.
+- **Minimum padding:** 80px from all edges.
+- **Headline must occupy a single clear region** (no overlaps).
+- **Supporting elements must be visually subordinate** (opacity/scale).
+- If a scene contains more than 3 elements → **REMOVE the least important one.**
+
+### 2. SKILL DISCIPLINE (CRITICAL)
+Each scene MUST use **exactly ONE primary skill**. 
+DO NOT combine multiple concepts.
+- BAD: "feature-grid + data-reveal + cursor-demo"
+- GOOD: "feature-grid ONLY"
+
+### 3. VISUAL DENSITY CURVE
+You must manage the "visual breathing" of the video:
+- **HOOK/PROBLEM:** High density (more elements, tighter spacing).
+- **RECOGNITION:** Medium density.
+- **AHA:** Low density (maximum whitespace). *The AHA scene MUST be the least visually complex scene in the entire video. Remove all non-essential elements. Focus only on the transformation.*
+- **CTA:** Ultra minimal (1-2 elements only).
+
+### 4. LAYOUT SYSTEM LOCK
+Each scene MUST use one of these layouts:
+- **center-focus**
+- **split-left**
+- **split-right**
+- **isometric**
+No custom layouts allowed. **No two consecutive scenes can use the same layout.**
+
+### 5. CAMERA RULES
+- **Every 2 scenes MUST include camera movement.**
+- **Showcase scenes MUST include macro zoom** (1.0 → 1.3).
+- **Problem scenes may include slight shake or instability.**
+- **CTA must be static** (no camera movement).
 
 ### Step 1 — Identify the BROKEN REALITY (write this first, before choosing scenes)
 What is the viewer's life like RIGHT NOW without this product?
@@ -991,14 +1075,14 @@ For each scene, assign a transition value that describes how the viewer moves IN
 Rules:
 - First scene: always "fade" (fade in from black)
 - Last scene (CTA/finale): always "fade" (clean exit to black)
-- ALL middle scenes (every scene between first and last): DEFAULT to "cameraPan". This is the WhatAStory "infinite canvas" mandate — scenes exist in one continuous world; the camera pans laterally to reveal them. NEVER use "fade" for middle scenes.
-- AHA moment / problem→solution pivot (isAhaMoment: true): use "zoomThrough" instead of cameraPan for maximum cinematic impact. MAX 1 zoomThrough per video. Set exitAnchor on the PRECEDING scene targeting the most visually dominant element the camera should zoom into.
-- Any scene immediately following a cursor CTA click finale: use "flash" (white burst energy release). Then resume "cameraPan" for subsequent middle scenes.
+- Middle scenes: choose the transition that fits the beat. Workflow continuation can use "cameraPan", transformation pivots should prefer "zoomThrough", proof reveals can use "scale", compare/before-after scenes can use "none", and forward-momentum narrative beats can use "slide".
+- AHA moment / problem→solution pivot (isAhaMoment: true): prefer "zoomThrough" for maximum cinematic impact. MAX 1 zoomThrough per video. Set exitAnchor on the PRECEDING scene targeting the most visually dominant element the camera should zoom into.
+- Any scene immediately following a cursor CTA click finale may use "flash" (white burst energy release) if it feels like payoff, not as a blanket default.
 - "scale": reserve ONLY for the single most dramatic non-AHA reveal in the video. Max 1 per video.
-- "slide": avoid for middle scenes — cameraPan already provides lateral movement WITH cinematic motion blur and world continuity. Use "slide" only as a fallback if cameraPan causes issues.
+- "slide": use for forward momentum and progression. Do not use it repeatedly across unrelated beats.
 - "none": hard cut — use only for deliberate before/after contrast scenes. Extremely rare.
 - zoomThrough rules: MUST set exitAnchor on the sending scene (e.g., exitAnchor: { x: 0.6, y: 0.5 }) pointing to the element camera zooms into. Max 1 zoomThrough per video.
-- MANDATE CHECK: Before finalizing your plan, count your middle scenes. ≥80% MUST use "cameraPan". If fewer than 80% use "cameraPan", go back and fix them. "fade" on a middle scene = WhatAStory quality fail.
+- MANDATE CHECK: Before finalizing your plan, scan the middle scenes. If three adjacent scenes share the same transition or visual grammar, the plan is too repetitive — fix it.
 
 ## MORPH PORTAL (cross-scene shape morphing)
 
@@ -1261,7 +1345,7 @@ When user uploads 3+ screenshots sharing the SAME sidebar/navigation (same app):
 1. Mark scenes as isWalkthroughScene: true on each related scene
 2. First scene MUST use premium-reconstructed-ui with full AppShell (<ReconstructedAppShell>)
 3. Subsequent walkthrough scenes: HARD RULE — REUSE the exact same AppShell layout. ONLY replace the main content area. Never re-mount or re-render the sidebar/topbar from scratch. Add to each prompt: "Maintain IDENTICAL sidebar and topbar from previous scene. Only update inner content panel."
-4. MANDATORY: use "cameraPan" transition between ALL walkthrough scenes — no exceptions.
+4. Prefer "cameraPan" for walkthrough continuations, but allow "zoomThrough" for the single transformation pivot or "slide" for clear forward navigation beats.
 5. Add to each walkthrough scene prompt: "Render feature name '[FEATURE]' as FeatureSectionHeader persistent label at top of content area"
 6. FLOW EDGES: For each pair of adjacent walkthrough scenes, output a FlowEdge with transition:"cameraPan" and carryOver:{ui:true,camera:true} — this signals the generator to carry the AppShell and camera state across the cut without resetting.
 
@@ -1320,7 +1404,7 @@ Before finalizing your scene plan, confirm ALL of the following. If any fail, fi
 
 4. VISUAL THREAD: Every scene prompt contains a "VISUAL THREAD:" line describing how the global motif appears in that scene and how it has evolved from the previous scene.
 
-5. TRANSITIONS: Count your middle scenes. At least 80% must use "cameraPan". Any middle scene using "fade" is a quality fail — change it to "cameraPan".
+5. TRANSITIONS: Middle scenes must feel intentionally varied. Do not use the same transition more than twice in a row, and never fall back to generic fade when a story-motivated transition exists.
 
 6. VOICEOVER: Every voiceoverText describes what the VIEWER GAINS (not what the product does). Count words — must be no more than (durationInFrames / 30) x 2.8 words.
 
@@ -1353,7 +1437,7 @@ The user has reviewed the plan and has specific feedback. Your job is to SURGICA
 - Emotional visual grammar: include damping/stiffness in scene prompt matching emotionalIntent
 - Voiceover: outcome-driven ("what viewer gains") not feature-driven ("what product does")
 - Scene prompts: include Act 1/2/3 frame timing
-- Transitions: cameraPan for all middle scenes; fade for first and last
+- Transitions: vary by narrative beat; reserve fade for opening/ending or intentional calm resets
 - Skill stacking: skills[0]=primary, skills[1]=background (optional), skills[2]=polish (optional)
 - Skill composition: define structured skillComposition with primary, secondary, and modifiers
 
@@ -1378,6 +1462,11 @@ interface ScenePlanRaw {
   skill?: string; // deprecated — kept for backward compat with old LLM responses
   /** Director intent category — required in new planner contract */
   intent?: "hook" | "problem" | "solution" | "feature" | "proof" | "cta";
+  narrativeRole?: NarrativeRole;
+  visualGrammarRole?: NarrativeRole;
+  motionLanguage?: MotionLanguage;
+  interactionStoryMode?: InteractionStoryMode;
+  styleContract?: StyleContract;
   /** Hard cap on number of skills allowed */
   skillBudget?: number;
   /** Motion intensity cap (feature scenes default low) */
@@ -1416,6 +1505,7 @@ interface FullVideoPlanRaw {
   bgSkill?: string;
   globalBg?: string;
   globalVisualThread?: string;
+  styleContract?: StyleContract;
   edges?: import("@/types/generation").FlowEdge[];
 }
 
@@ -1451,6 +1541,7 @@ type EnrichedScene = ScenePlanRaw & {
   durationInFrames: number;
   imageIndex?: number;
   interactionScript?: import("@/types/generation").InteractionEvent[];
+  journeyContext?: import("@/types/generation").JourneyContext;
   uiSchema?: Record<string, unknown>;
 };
 
@@ -1717,7 +1808,7 @@ export async function POST(req: Request) {
   }
 
   const ai = new GoogleGenAI({ apiKey });
-  const FAST_MODEL = "gemini-2.5-flash";
+  const FAST_MODEL = GEMINI_FAST_MODEL;
 
   // Parse attached images once
   const parsedImages = Array.isArray(images)
@@ -2025,10 +2116,56 @@ Return JSON with: screenSummaries (array of {screen, keyElement, action}), narra
   const flowEnergy = (["high", "medium", "calm"].includes(screenFlow?.energyLevel) ? screenFlow.energyLevel : undefined) as "high" | "medium" | "calm" | undefined;
   const flowUiPace = (["fast", "slow"].includes(screenFlow?.uiPace) ? screenFlow.uiPace : undefined) as "fast" | "slow" | undefined;
 
+  const inferJourneyKindFromTransition = (
+    transition?: { type?: string; elementType?: string; targetLabel?: string } | null,
+    fallbackIntent?: string,
+  ): import("@/types/generation").JourneyStepKind => {
+    if (fallbackIntent === "proof") return "proof";
+    if (fallbackIntent === "cta") return "cta";
+    if (!transition) {
+      if (fallbackIntent === "solution") return "result";
+      if (fallbackIntent === "feature") return "review";
+      return "discover";
+    }
+    if (transition.type === "search") return "filter";
+    if (transition.type === "submit") return "confirm";
+    if (transition.type === "scroll") return "explore";
+    if (transition.type === "navigate") return "navigate";
+    if (transition.elementType === "input" || transition.elementType === "dropdown") return "input";
+    return "review";
+  };
+
+  const describeJourneyTask = (
+    screenDescription: string,
+    transition?: { action?: string; type?: string; targetLabel?: string } | null,
+    fallbackIntent?: string,
+  ) => {
+    if (fallbackIntent === "proof") {
+      return "Reinforce the product's credibility with a clear proof point.";
+    }
+    if (fallbackIntent === "cta") {
+      return "Land the final call to action and make the next step feel obvious.";
+    }
+    if (!transition) {
+      return `Orient the viewer inside "${screenDescription}" and make the screen's purpose instantly clear.`;
+    }
+    const action = transition.action?.trim() || transition.type || "continue";
+    const target = transition.targetLabel?.trim();
+    return target
+      ? `Use "${screenDescription}" as the setup state, then guide the viewer toward ${action} on "${target}".`
+      : `Use "${screenDescription}" as the setup state, then guide the viewer toward ${action}.`;
+  };
+
   // Build screenFlow narrative block when the user has confirmed a flow
   let screenFlowBlock = "";
   if (screenFlow && Array.isArray(screenFlow.transitions) && screenFlow.transitions.length > 0) {
-    const lines: string[] = ["USER JOURNEY FLOW (confirmed by user):"];
+    const lines: string[] = ["USER JOURNEY NARRATIVE (Extracted from screens):"];
+    
+    if (screenFlow.narrativeSummary) {
+      lines.push(`STORY ARC: ${screenFlow.narrativeSummary}`);
+      lines.push("");
+    }
+
     const screens: { index: number; description: string }[] = screenFlow.screens ?? [];
     const transitions: { from: number; to: number; action: string; type: string; elementType?: string }[] = screenFlow.transitions;
 
@@ -2042,7 +2179,25 @@ Return JSON with: screenSummaries (array of {screen, keyElement, action}), narra
     }
 
     lines.push("");
+    lines.push("JOURNEY ROLES BY SCREEN:");
+    for (let i = 0; i < parsedImages.length; i++) {
+      const t = transitions.find((tr) => tr.from === i);
+      const kind = inferJourneyKindFromTransition(t);
+      const nextScreenDesc = t ? (screens.find((s) => s.index === t.to)?.description || finalDescriptions[t.to] || `screen ${t.to}`) : null;
+      const task = describeJourneyTask(finalDescriptions[i] || `screen ${i}`, t);
+      lines.push(`- Screen ${i}: journey kind = ${kind}`);
+      lines.push(`  task: ${task}`);
+      if (nextScreenDesc) lines.push(`  next screen: "${nextScreenDesc}"`);
+    }
+
+    lines.push("");
     lines.push("SCENE ASSIGNMENT RULES:");
+    lines.push("- Every image-driven scene MUST output a journeyContext object describing the story role of that scene.");
+    lines.push('- journeyContext.kind must be one of: discover | explore | input | filter | navigate | review | result | confirm | proof | cta');
+    lines.push("- journeyContext.narrativeTask must describe what the user is trying to achieve, not just what element they click.");
+    lines.push("- For cursor / chameleon / walkthrough scenes, prefer journeyContext kinds: input, filter, navigate, explore, confirm.");
+    lines.push("- For reveal / dashboard / reconstructed UI scenes, prefer journeyContext kinds: review or result.");
+    lines.push("- When a scene uses imageIndices for multi-view, it should represent one continuous journey segment across those views, not random screenshots.");
     for (let i = 0; i < parsedImages.length; i++) {
       const t = transitions.find((tr) => tr.from === i);
       const prefix = `- Scenes using Screen ${i} → set imageIndex: ${i}`;
@@ -2200,6 +2355,24 @@ Plan a complete 5–6 scene narrative video for this product, and extract brand 
                   durationInFrames: { type: Type.NUMBER },
                   imageIndex: { type: Type.NUMBER },
                   imageIndices: { type: Type.ARRAY, items: { type: Type.NUMBER }, description: "Multiple 0-based image indices for multi-view walkthrough scenes. When set, all referenced images become ATTACHED_IMAGES[0], [1], [2], etc." },
+                  journeyContext: {
+                    type: Type.OBJECT,
+                    description: "Narrative task mapping for this scene. Use this to describe what the user is accomplishing in the journey, not just which screenshot is shown.",
+                    properties: {
+                      kind: { type: Type.STRING, description: "discover | explore | input | filter | navigate | review | result | confirm | proof | cta" },
+                      narrativeTask: { type: Type.STRING, description: "Short sentence describing the user goal or story job of this scene." },
+                      sourceScreenIndex: { type: Type.NUMBER, description: "0-based source screen index this scene is anchored to." },
+                      targetScreenIndex: { type: Type.NUMBER, description: "0-based next/result screen index this scene points toward." },
+                      sourceScreenDescription: { type: Type.STRING, description: "Human-readable description of the current screen." },
+                      targetScreenDescription: { type: Type.STRING, description: "Human-readable description of the next/result screen." },
+                      nextAction: { type: Type.STRING, description: "The concrete action the user takes after this scene." },
+                      transitionType: { type: Type.STRING, description: "search | click | scroll | navigate | submit | hover" },
+                      targetLabel: { type: Type.STRING, description: "Name of the UI target if relevant." },
+                      elementType: { type: Type.STRING, description: "input | button | dropdown | card | nav" },
+                      featureName: { type: Type.STRING, description: "Feature or product area this scene belongs to." },
+                    },
+                    required: ["kind", "narrativeTask"],
+                  },
                   cursorJourney: {
                     type: Type.ARRAY,
                     items: { type: Type.STRING },
@@ -2218,6 +2391,10 @@ Plan a complete 5–6 scene narrative video for this product, and extract brand 
                   voiceoverText: { type: Type.STRING },
                   transition: { type: Type.STRING },
                   emotionalIntent: { type: Type.STRING, description: "FRUSTRATION | RELIEF | CONFIDENCE | TRUST | URGENCY | EXCITEMENT" },
+                  narrativeRole: { type: Type.STRING, description: "problem-tension | workflow-choreography | before-after-transformation | compare-split-screen | ecosystem-network | proof-confidence | product-payoff" },
+                  visualGrammarRole: { type: Type.STRING, description: "Planner-selected visual scene grammar role. Must vary across adjacent scenes unless intentionally continuing the same world." },
+                  motionLanguage: { type: Type.STRING, description: "constrained-focus | guided-choreography | transformational-portal | measured-proof | premium-payoff" },
+                  interactionStoryMode: { type: Type.STRING, description: "guided-reveal | transformation-chain | proof-of-control | coordinated-automation | none" },
                   isAhaMoment: { type: Type.BOOLEAN, description: "true for the single scene delivering the core product transformation" },
                   stageDirection: { type: Type.STRING, description: "Cinematic stage direction for the animator: camera move, emotional arc shift, pacing" },
                   musicVolume: { type: Type.NUMBER, description: "Volume multiplier: 0.5 for pain/problem scenes, 1.0 normal, 1.3 for aha/relief, 1.5 for CTA" },
@@ -2304,6 +2481,39 @@ Plan a complete 5–6 scene narrative video for this product, and extract brand 
                     type: Type.STRING,
                     description: "Instructions for continuing UI/camera from previous scene. E.g. 'Sidebar remains mounted, zoom level 1.05 persists'.",
                   },
+                  designSystem: {
+                    type: Type.OBJECT,
+                    description: "Agency Design System overrides for this scene.",
+                    properties: {
+                      spacing: { type: Type.NUMBER, description: "Spacing grid (e.g. 16)" },
+                      safeZone: { type: Type.NUMBER, description: "Content safe-zone margin in px (default 80)" },
+                      motionCharacter: { type: Type.STRING, description: "snappy | floaty | elastic" },
+                      depthStyle: { type: Type.STRING, description: "glass-heavy | glass-light | flat | soft-shadow" },
+                    },
+                  },
+                  hierarchy: {
+                    type: Type.OBJECT,
+                    description: "Explicit visual hierarchy mapping.",
+                    properties: {
+                      primary: { type: Type.STRING, description: "The one focal element that must dominate" },
+                      secondary: { type: Type.STRING, description: "Supporting element (60-70% scale)" },
+                      tertiary: { type: Type.STRING, description: "Subtle contextual elements" },
+                    },
+                    required: ["primary"],
+                  },
+                  styleContract: {
+                    type: Type.OBJECT,
+                    description: "Global art-direction contract to preserve premium consistency across scenes.",
+                    properties: {
+                      typographyEnergy: { type: Type.STRING },
+                      depthModel: { type: Type.STRING },
+                      lightingModel: { type: Type.STRING },
+                      spacingDensity: { type: Type.STRING },
+                      cursorPersonality: { type: Type.STRING },
+                      iconMotion: { type: Type.STRING },
+                      surfaceStyle: { type: Type.STRING },
+                    },
+                  },
                 },
                 required: ["id", "title", "prompt", "skills", "durationInFrames", "intent", "skillBudget", "motionBudget", "continuityRole"],
               },
@@ -2311,6 +2521,19 @@ Plan a complete 5–6 scene narrative video for this product, and extract brand 
             bgSkill: { type: Type.STRING },
             globalBg: { type: Type.STRING, description: "arcs | grid | dots" },
             globalVisualThread: { type: Type.STRING, description: "One sentence describing the single geometric/color/motion motif that persists across ALL scenes and evolves from broken→resolved. E.g. 'A glowing ring: fragmented arcs in problem scenes, full brand-color ring in solution scenes, exploding into the logo on CTA.'" },
+            styleContract: {
+              type: Type.OBJECT,
+              description: "Global art-direction contract for typography, depth, lighting, cursor motion, and surface treatment. Must remain consistent across the whole video.",
+              properties: {
+                typographyEnergy: { type: Type.STRING },
+                depthModel: { type: Type.STRING },
+                lightingModel: { type: Type.STRING },
+                spacingDensity: { type: Type.STRING },
+                cursorPersonality: { type: Type.STRING },
+                iconMotion: { type: Type.STRING },
+                surfaceStyle: { type: Type.STRING },
+              },
+            },
             edges: {
               type: Type.ARRAY,
               description: "Flow graph edges describing transitions and state carry-over between adjacent scenes. Required for all walkthrough scene pairs.",
@@ -2456,6 +2679,24 @@ Plan a complete 5–6 scene narrative video for this product, and extract brand 
     // injects brand as a structured block at call time.
     // Clamp imageIndex to valid range so bad LLM output doesn't cause errors downstream.
     const maxImageIdx = parsedImages.length - 1;
+    const globalStyleContract =
+      parsed.styleContract ??
+      deriveStyleContract(creativeBrief ?? null, brand.style);
+    const qualityMetadata = deriveQualityMetadata(
+      parsed.scenes.map((scene, index) => ({
+        intent: (scene as any).intent,
+        title: scene.title,
+        skills: scene.skills,
+        motionBudget: (scene as any).motionBudget,
+        continuityRole: (scene as any).continuityRole,
+        isAhaMoment: (scene as any).isAhaMoment,
+        journeyKind: (scene as any).journeyContext?.kind,
+        narrativeRole: (scene as any).narrativeRole,
+        visualGrammarRole: (scene as any).visualGrammarRole,
+        motionLanguage: (scene as any).motionLanguage,
+        interactionStoryMode: (scene as any).interactionStoryMode,
+      })),
+    );
     const scenes = parsed.scenes.map((s, i) => {
       const resolvedSkills = (s.skills ?? []).map((sk) => sk.replace(/^marky-/, "premium-"));
       const durFromPrompt = (s as any).durationInFrames ?? 210;
@@ -2472,8 +2713,9 @@ Plan a complete 5–6 scene narrative video for this product, and extract brand 
       const safeDuration = Math.max(120, Math.min(600, biasedDuration));
 
       const rawIdx = (s as any).imageIndex;
-      const imageIdx = typeof rawIdx === "number" ? Math.max(0, Math.min(maxImageIdx, rawIdx)) : undefined;
+      let imageIdx = typeof rawIdx === "number" ? Math.max(0, Math.min(maxImageIdx, rawIdx)) : undefined;
       const imageIndices = (s as any).imageIndices ?? [];
+      const rawJourneyContext = (s as any).journeyContext;
 
       const featureHeader = (s as any).featureHeader ?? null;
       const cursorJourney = Array.isArray((s as any).cursorJourney)
@@ -2484,11 +2726,95 @@ Plan a complete 5–6 scene narrative video for this product, and extract brand 
       const interactionScript = (s as any).interactionScript ?? null;
       // Prefer inline uiSchema from planner; fall back to uiSchemasByIndex for scenes with a matching imageIndex
       const uiSchema = (s as any).uiSchema ?? (imageIdx !== undefined ? uiSchemasByIndex[imageIdx] ?? null : null);
+      const sceneImageIndices = Array.isArray(imageIndices)
+        ? imageIndices.filter((idx: unknown): idx is number => typeof idx === "number" && idx >= 0 && idx <= maxImageIdx)
+        : [];
+      const buildJourneyContext = (activeImageIdx: number | undefined) => {
+        const sceneTransitions = sceneImageIndices.length > 1
+          ? sceneImageIndices
+              .map((idx) => (screenFlow?.transitions ?? []).find((tr: import("@/types/generation").ScreenTransition) => tr.from === idx))
+              .filter((tr): tr is NonNullable<typeof tr> => Boolean(tr))
+          : activeImageIdx !== undefined
+            ? (screenFlow?.transitions ?? []).filter((tr: import("@/types/generation").ScreenTransition) => tr.from === activeImageIdx)
+            : [];
+        const screenTransition = sceneTransitions[0];
+        const sourceScreenDescription = activeImageIdx !== undefined
+          ? (screenFlow?.screens ?? []).find((screen: import("@/types/generation").ScreenFlow["screens"][number]) => screen.index === activeImageIdx)?.description || finalDescriptions[activeImageIdx] || `screen ${activeImageIdx + 1}`
+          : undefined;
+        const targetScreenDescription = typeof screenTransition?.to === "number"
+          ? (screenFlow?.screens ?? []).find((screen: import("@/types/generation").ScreenFlow["screens"][number]) => screen.index === screenTransition.to)?.description || finalDescriptions[screenTransition.to] || `screen ${screenTransition.to + 1}`
+          : undefined;
+        const multiViewJourneyContext = sceneImageIndices.length > 1
+          ? {
+              kind: typeof (s as any).intent === "string" && (s as any).intent === "feature"
+                ? "review"
+                : inferJourneyKindFromTransition(sceneTransitions[0], (s as any).intent),
+              narrativeTask: sceneTransitions.length > 0
+                ? `Walk the viewer through a continuous product tour: ${sceneTransitions.map((tr: import("@/types/generation").ScreenTransition) => tr.action || tr.type).join(" → ")}.`
+                : `Show a continuous multi-view product journey across the assigned screens.`,
+              sourceScreenIndex: sceneImageIndices[0],
+              targetScreenIndex: sceneTransitions[sceneTransitions.length - 1]?.to ?? sceneImageIndices[sceneImageIndices.length - 1],
+              sourceScreenDescription: (screenFlow?.screens ?? []).find((screen: import("@/types/generation").ScreenFlow["screens"][number]) => screen.index === sceneImageIndices[0])?.description || finalDescriptions[sceneImageIndices[0]],
+              targetScreenDescription: (() => {
+                const targetIdx = sceneTransitions[sceneTransitions.length - 1]?.to ?? sceneImageIndices[sceneImageIndices.length - 1];
+                return (screenFlow?.screens ?? []).find((screen: import("@/types/generation").ScreenFlow["screens"][number]) => screen.index === targetIdx)?.description || finalDescriptions[targetIdx];
+              })(),
+              nextAction: sceneTransitions.map((tr: import("@/types/generation").ScreenTransition) => tr.action || tr.type).filter(Boolean).join(" → "),
+              transitionType: sceneTransitions[0]?.type,
+              targetLabel: sceneTransitions[0]?.targetLabel,
+              elementType: sceneTransitions[0]?.elementType,
+              featureName: screenFlow?.productFeature,
+            }
+          : null;
 
-      // ── Scene-specific music volume ─────────────────────────────────────
-      // Low-tempo music in setup/narrative scenes; high-tempo (1.0) in showcase
-      const isShowcase = resolvedSkills.some(sk => sk.includes("showcase") || sk.includes("walkthrough"));
-      const effectiveMusicVolume = isShowcase ? 1.0 : 0.65;
+        const normalizedJourneyContext = rawJourneyContext && typeof rawJourneyContext === "object"
+          ? {
+              kind: typeof rawJourneyContext.kind === "string"
+                ? rawJourneyContext.kind
+                : inferJourneyKindFromTransition(screenTransition, (s as any).intent),
+              narrativeTask: typeof rawJourneyContext.narrativeTask === "string" && rawJourneyContext.narrativeTask.trim().length > 0
+                ? rawJourneyContext.narrativeTask.trim()
+                : describeJourneyTask(sourceScreenDescription ?? ((s as any).title ?? "this product scene"), screenTransition, (s as any).intent),
+              sourceScreenIndex: typeof rawJourneyContext.sourceScreenIndex === "number" ? rawJourneyContext.sourceScreenIndex : activeImageIdx,
+              targetScreenIndex: typeof rawJourneyContext.targetScreenIndex === "number" ? rawJourneyContext.targetScreenIndex : screenTransition?.to,
+              sourceScreenDescription: typeof rawJourneyContext.sourceScreenDescription === "string" ? rawJourneyContext.sourceScreenDescription : sourceScreenDescription,
+              targetScreenDescription: typeof rawJourneyContext.targetScreenDescription === "string" ? rawJourneyContext.targetScreenDescription : targetScreenDescription,
+              nextAction: typeof rawJourneyContext.nextAction === "string" ? rawJourneyContext.nextAction : screenTransition?.action,
+              transitionType: typeof rawJourneyContext.transitionType === "string" ? rawJourneyContext.transitionType : screenTransition?.type,
+              targetLabel: typeof rawJourneyContext.targetLabel === "string" ? rawJourneyContext.targetLabel : screenTransition?.targetLabel,
+              elementType: typeof rawJourneyContext.elementType === "string" ? rawJourneyContext.elementType : screenTransition?.elementType,
+              featureName: typeof rawJourneyContext.featureName === "string"
+                ? rawJourneyContext.featureName
+                : screenFlow?.productFeature,
+            }
+          : multiViewJourneyContext
+            ? multiViewJourneyContext
+          : activeImageIdx !== undefined
+            ? {
+                kind: inferJourneyKindFromTransition(screenTransition, (s as any).intent),
+                narrativeTask: sceneTransitions.length > 1
+                  ? `Use "${sourceScreenDescription ?? `screen ${activeImageIdx + 1}`}" as a decision point and guide the viewer toward the most relevant next action for this scene.`
+                  : describeJourneyTask(sourceScreenDescription ?? `screen ${activeImageIdx + 1}`, screenTransition, (s as any).intent),
+                sourceScreenIndex: activeImageIdx,
+                targetScreenIndex: screenTransition?.to,
+                sourceScreenDescription,
+                targetScreenDescription,
+                nextAction: screenTransition?.action,
+                transitionType: screenTransition?.type,
+                targetLabel: screenTransition?.targetLabel,
+                elementType: screenTransition?.elementType,
+                featureName: screenFlow?.productFeature,
+              }
+            : undefined;
+
+        return {
+          normalizedJourneyContext,
+          sceneTransitions,
+          screenTransition,
+          sourceScreenDescription,
+          targetScreenDescription,
+        };
+      };
 
       // ── Gap 3: Per-scene musicMood derived from emotionalIntent ───────────
       // Injected as MUSIC_MOOD in compiler scope — drives AbstractMotionBg mode,
@@ -2533,9 +2859,27 @@ Plan a complete 5–6 scene narrative video for this product, and extract brand 
       }
       const continuityRole = (continuityRoleRaw ??
         ((s as any).isWalkthroughScene ? "continue-world" : "new-world")) as "new-world" | "continue-world";
+      const sceneQuality = qualityMetadata[i];
+      const narrativeRole = ((s as any).narrativeRole ?? sceneQuality?.narrativeRole ?? "workflow-choreography") as NarrativeRole;
+      const visualGrammarRole = ((s as any).visualGrammarRole ?? sceneQuality?.visualGrammarRole ?? narrativeRole) as NarrativeRole;
+      const motionLanguage = ((s as any).motionLanguage ?? sceneQuality?.motionLanguage ?? "guided-choreography") as MotionLanguage;
+      const interactionStoryMode = ((s as any).interactionStoryMode ?? sceneQuality?.interactionStoryMode ?? "none") as InteractionStoryMode;
+      const styleContract = ((s as any).styleContract ?? globalStyleContract) as StyleContract;
 
       // Intent-first: restrict & enforce primary skill choice
       let directedSkills = enforceIntentPrimarySkill(intent, resolvedSkills);
+      ({ imageIdx, directedSkills } = enforceScreenshotDrivenSceneContract({
+        intent,
+        directedSkills,
+        parsedImagesCount: parsedImages.length,
+        imageIdx,
+        sceneImageIndices,
+        maxImageIdx,
+        hasUiSchema: Boolean(uiSchema),
+      }));
+      const {
+        normalizedJourneyContext,
+      } = buildJourneyContext(imageIdx);
       // Demote live-action-composite if no stock footage source available.
       if (directedSkills[0] === "premium-live-action-composite") {
         const hasFootageSource = Boolean((s as any).stockFootage)
@@ -2601,6 +2945,11 @@ Plan a complete 5–6 scene narrative video for this product, and extract brand 
 
       // HARD enforce motion + skill budgets (reduces clutter)
       const { effectiveBudget, budgetedSkills } = enforceMotionBudget(intent, motionBudget, skillBudget, directedSkills);
+
+      // ── Scene-specific music volume ─────────────────────────────────────
+      // Low-tempo music in setup/narrative scenes; high-tempo (1.0) in showcase
+      const isShowcase = budgetedSkills.some(sk => sk.includes("showcase") || sk.includes("walkthrough"));
+      const effectiveMusicVolume = isShowcase ? 1.0 : 0.65;
 
       // Encode motion budget into the prompt so the generator obeys "do nothing" logic.
       const INTENT_ENERGY_CONTRACTS: Record<string, string> = {
@@ -2701,6 +3050,10 @@ Plan a complete 5–6 scene narrative video for this product, and extract brand 
       const MOTION_DIRECTIVE = [
         "## DIRECTOR NOTES (MANDATORY)",
         `Intent: ${intent}`,
+        `Narrative role: ${narrativeRole}`,
+        `Visual grammar role: ${visualGrammarRole}`,
+        `Motion language: ${motionLanguage}`,
+        `Interaction story mode: ${interactionStoryMode}`,
         `Skill budget: ${effectiveBudget} (HARD LIMIT)`,
         `Motion budget: ${motionBudget}`,
         `Continuity role: ${continuityRole}`,
@@ -2749,14 +3102,32 @@ Plan a complete 5–6 scene narrative video for this product, and extract brand 
         console.warn(`[plan-sanity] Scene "${(s as any).title ?? i}" intent=${intent} has potentially wrong skill stack:`, budgetedSkills);
       }
 
-      // Phase 1: Spatial Continuity Enforcement
-      // Default middle scenes to cameraPan unless they are the Hook (1st) or CTA (last)
+      // Phase 1: Story-motivated transition enforcement
       const isFirst = i === 0;
       const isLast = i === parsed.scenes.length - 1;
       const isSpecial = s.isAhaMoment || s.skills?.includes("premium-section-title") || s.skills?.includes("premium-cta-scene");
       let transition = s.transition;
-      if (!isFirst && !isLast && !isSpecial && (!transition || transition === "fade" || transition === "none")) {
-        transition = "cameraPan";
+      if (!transition || (!isFirst && !isLast && !isSpecial && transition === "fade")) {
+        transition = choosePlannerTransition({
+          index: i,
+          total: parsed.scenes.length,
+          scene: {
+            intent,
+            continuityRole,
+            isAhaMoment: s.isAhaMoment,
+            narrativeRole,
+            visualGrammarRole,
+            motionLanguage,
+          },
+          previousScene: i > 0
+            ? {
+                intent: (parsed.scenes[i - 1] as any)?.intent,
+                narrativeRole: qualityMetadata[i - 1]?.narrativeRole,
+                visualGrammarRole: qualityMetadata[i - 1]?.visualGrammarRole,
+                motionLanguage: qualityMetadata[i - 1]?.motionLanguage,
+              }
+            : null,
+        });
       }
 
       // ── HOUSE STYLE (per-video — injected into every scene prompt) ─────────
@@ -2809,8 +3180,28 @@ Plan a complete 5–6 scene narrative video for this product, and extract brand 
         "- Background (MANDATORY): NEVER use a plain solid color as the only background layer. When STOCK_VIDEO_URL is set: use OffthreadVideo + overlay. When null: use LightArcBg (light) OR AbstractMotionBg (dark, mode matching scene emotion: hook/CTA=gradient-flow, problem=grid-pulse, showcase=particle-field). Plain black/dark fill with no texture = automatic quality fail.",
         "- Cursor: all cursor scenes must render CursorRenderer outside any camera/wrapper layers (cursor never tilts/scales).",
         "- Beat sync (MANDATORY): Use snapToDownbeat(approxFrame, MUSIC_BPM, fps) for ALL major element entrances — headlines, cards, metrics, notification toasts. MUSIC_BPM is already in scope. useBeat() for CTA button pulse. useBeatClock() for isDownbeat checks on bar transitions.",
-        "- Continuity: middle scenes default to cameraPan; keep visual thread consistent; reuse the same AppShell/sidebar/topbar for walkthrough sequences (only inner content changes).",
+        "- Continuity: keep the visual thread consistent; walkthrough sequences reuse the same AppShell/sidebar/topbar while motion and transitions stay story-motivated.",
         ...(briefGrammarLines.length > 0 ? ["", ...briefGrammarLines] : []),
+      ].join("\n");
+
+      const styleContractBlock = [
+        "## STYLE CONTRACT (GLOBAL — do not drift scene to scene)",
+        `- Typography energy: ${styleContract.typographyEnergy}`,
+        `- Depth model: ${styleContract.depthModel}`,
+        `- Lighting model: ${styleContract.lightingModel}`,
+        `- Spacing density: ${styleContract.spacingDensity}`,
+        `- Cursor personality: ${styleContract.cursorPersonality}`,
+        `- Icon motion: ${styleContract.iconMotion}`,
+        `- Surface treatment: ${styleContract.surfaceStyle}`,
+      ].join("\n");
+
+      const sceneGrammarBlock = [
+        "## SCENE GRAMMAR (MANDATORY)",
+        `- Narrative role: ${narrativeRole}`,
+        `- Visual grammar role: ${visualGrammarRole}`,
+        `- Motion language: ${motionLanguage}`,
+        `- Interaction story mode: ${interactionStoryMode}`,
+        "- The scene should feel like a deliberate story beat, not a generic app demo.",
       ].join("\n");
 
       // ── Emotional Direction (prepended from creative brief) ────────────────
@@ -2851,6 +3242,26 @@ Plan a complete 5–6 scene narrative video for this product, and extract brand 
             "Each step badge / annotation / section header should reflect this narrative wording.",
           ].join("\n")
         : "";
+      const journeyContextBlock = normalizedJourneyContext
+        ? [
+            "## JOURNEY CONTEXT (MANDATORY STORY ROLE)",
+            `kind: ${normalizedJourneyContext.kind}`,
+            `task: ${normalizedJourneyContext.narrativeTask}`,
+            normalizedJourneyContext.sourceScreenDescription
+              ? `current screen: ${normalizedJourneyContext.sourceScreenDescription}`
+              : "",
+            normalizedJourneyContext.nextAction
+              ? `next action: ${normalizedJourneyContext.nextAction}${normalizedJourneyContext.transitionType ? ` (${normalizedJourneyContext.transitionType})` : ""}`
+              : "",
+            normalizedJourneyContext.targetScreenDescription
+              ? `result/next screen: ${normalizedJourneyContext.targetScreenDescription}`
+              : "",
+            normalizedJourneyContext.featureName
+              ? `feature area: ${normalizedJourneyContext.featureName}`
+              : "",
+            "Use this journey role to decide the animation purpose of the scene. The screenshot is only evidence; the narrative task is primary.",
+          ].filter(Boolean).join("\n")
+        : "";
 
       // Gap 2: Visual metaphor line for hook/problem scenes (prepended before house style)
       const metaphorLine =
@@ -2865,7 +3276,10 @@ Plan a complete 5–6 scene narrative video for this product, and extract brand 
       const promptWithHouseStyle = [
         metaphorLine,
         emotionalDirectionBlock,
+        styleContractBlock,
+        sceneGrammarBlock,
         HOUSE_STYLE,
+        journeyContextBlock,
         cursorJourneyBlock,
         scenePromptBody,
       ].filter(Boolean).join("\n\n").trim();
@@ -2877,13 +3291,19 @@ Plan a complete 5–6 scene narrative video for this product, and extract brand 
         skills: budgetedSkills,
         skillComposition: (s as any).skillComposition,
         intent,
+        narrativeRole,
+        visualGrammarRole,
+        motionLanguage,
+        interactionStoryMode,
         skillBudget,
         motionBudget,
         continuityRole,
+        styleContract,
         durationInFrames: safeDuration,
         imageIndex: imageIdx,
         imageIndices,
         featureHeader,
+        journeyContext: normalizedJourneyContext,
         cursorJourney: cursorJourney.length > 0 ? cursorJourney : undefined,
         interactionScript,
         uiSchema,
@@ -2987,7 +3407,7 @@ Plan a complete 5–6 scene narrative video for this product, and extract brand 
 
     console.log(
       "Narrative plan:",
-      finalScenes.map((s) => `${s.title} (${(s.skills ?? []).join("+")}${s.imageIndex !== undefined ? `, img${s.imageIndex}` : ""}${(s as any).stockFootage ? " +video" : ""})`).join(" → "),
+      finalScenes.map((s) => `${s.title} (${(s.skills ?? []).join("+")}${s.imageIndex !== undefined ? `, img${s.imageIndex}` : ""}${s.journeyContext?.kind ? `, ${s.journeyContext.kind}` : ""}${(s as any).stockFootage ? " +video" : ""})`).join(" → "),
     );
     console.log("Final brand:", brand);
 
@@ -3037,9 +3457,9 @@ Plan a complete 5–6 scene narrative video for this product, and extract brand 
         }
         return next;
       }
-      // Feature → Proof: cameraPan creates the "panning through the evidence" feeling.
+      // Feature → Proof should feel like entering evidence mode, not just another lateral move.
       if (prev && prevIntent === "feature" && intent === "proof") {
-        return { ...sc, transition: sc.transition && sc.transition !== "fade" ? sc.transition : "cameraPan" };
+        return { ...sc, transition: sc.transition && sc.transition !== "fade" ? sc.transition : "scale" };
       }
       return sc;
     });
@@ -3061,7 +3481,7 @@ Plan a complete 5–6 scene narrative video for this product, and extract brand 
           .filter(Boolean);
 
     const globalVisualThread = parsed.globalVisualThread ?? undefined;
-    return new Response(JSON.stringify({ scenes: scenesWithIntentTransitions, brand, bgSkill, globalBg, globalVisualThread, imageDescriptions: finalDescriptions, edges, creativeBrief: creativeBrief ?? null, backbone: narrativeBackbone ?? null }), {
+    return new Response(JSON.stringify({ scenes: scenesWithIntentTransitions, brand, bgSkill, globalBg, globalVisualThread, styleContract: globalStyleContract, imageDescriptions: finalDescriptions, edges, creativeBrief: creativeBrief ?? null, backbone: narrativeBackbone ?? null }), {
       status: 200,
       headers: { "Content-Type": "application/json" },
     });

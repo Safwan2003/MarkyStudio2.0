@@ -15,6 +15,11 @@ import { ScenePlanEditor } from "../../components/ScenePlanEditor";
 import { ScreenshotFlowEditor } from "../../components/ScenePlanEditor/ScreenshotFlowEditor";
 import { SceneTimeline } from "../../components/SceneTimeline";
 import { TabPanel } from "../../components/TabPanel";
+import {
+  buildSceneCodeSignature,
+  makeRuntimeFailureKey,
+  normalizeRuntimeErrorMessage,
+} from "./runtime-recovery";
 import { useCursorSteps } from "../../hooks/useCursorSteps";
 import { useFullVideoGeneration } from "../../hooks/useFullVideoGeneration";
 import type { ConversationMessage } from "../../types/conversation";
@@ -61,6 +66,58 @@ function parseSceneMention(prompt: string, scenes: { title: string }[]): number 
 
 function makeId(role: string) {
   return `${role}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+function buildRuntimeRetryInstruction(message: string, repeatedSameFailure = false): string {
+  const normalized = message.toLowerCase();
+
+  if (repeatedSameFailure) {
+    return "The same runtime failure happened again after regeneration. Rebuild this scene conservatively: remove duplicate helpers and duplicate locals, declare all base coordinates/targets before derived values, simplify nested animation chains, and prefer a single straightforward component tree over layered abstractions.";
+  }
+
+  const beforeInitMatch = message.match(/Cannot access ['"`]?([A-Za-z_$][\w$]*)['"`]?\s+before initialization/i);
+  if (beforeInitMatch?.[1]) {
+    return `Fix the runtime error by declaring \`${beforeInitMatch[1]}\` before any initializer that reads it. All coordinates, target rects, timing constants, and derived animation values must be declared in dependency order with no same-scope forward references.`;
+  }
+
+  const duplicateDeclMatch = message.match(/Identifier ['"`]?([A-Za-z_$][\w$]*)['"`]?\s+has already been declared/i);
+  if (duplicateDeclMatch?.[1]) {
+    return `Fix the runtime error by removing the duplicate declaration of \`${duplicateDeclMatch[1]}\`. Keep exactly one same-scope declaration for each local name and reuse or rename the variable instead of redeclaring it.`;
+  }
+
+  if (normalized.includes("springconfig")) {
+    return "Fix the runtime error by removing `springConfig` and using only `SPRING_CONFIGS` or an inline Remotion spring config object. Do not reference undeclared aliases.";
+  }
+  if (normalized.includes("spring(...).to is not a function") || (normalized.includes(".to is not a function") && normalized.includes("spring"))) {
+    return "Fix the runtime error by removing any `spring(...).to(...)` usage. Remotion `spring()` returns a number, so use it directly with `interpolate()` or numeric style props.";
+  }
+  if (normalized.includes("lifeDuration")) {
+    return "Fix the runtime error by removing `lifeDuration` and replacing it with explicit frame constants or `durationInFrames`.";
+  }
+  if (normalized.includes("nan") || normalized.includes("invalid value for the") || normalized.includes("infinity")) {
+    return "Fix the runtime error by ensuring all computed style values are finite numbers. Guard every position, size, opacity, and transform input with safe fallbacks like `?? 0`, clamps, and `Number.isFinite(...)` checks.";
+  }
+  if (normalized.includes("is not defined")) {
+    return "Fix the runtime error by removing invented variables/components and using only declared locals plus injected scope variables already provided by the runtime.";
+  }
+  if (normalized.includes("cannot read") || normalized.includes("undefined") || normalized.includes("null")) {
+    return "Fix the runtime error by adding null-safe guards and optional chaining for all nested data access, including `UI_SCHEMA`, `VISUAL_STATE`, arrays, and image references.";
+  }
+
+  return `Fix this runtime error without changing the scene's creative intent: ${message}`;
+}
+
+function findSceneIndexForFrame(
+  scenes: Array<{ durationInFrames: number }>,
+  frame: number,
+): number {
+  let offset = 0;
+  for (let i = 0; i < scenes.length; i++) {
+    const sceneEnd = offset + scenes[i].durationInFrames;
+    if (frame < sceneEnd) return i;
+    offset = sceneEnd;
+  }
+  return Math.max(0, scenes.length - 1);
 }
 
 // ---------------------------------------------------------------------------
@@ -146,6 +203,8 @@ function GeneratePageContent() {
   const chatSidebarRef = useRef<ChatSidebarRef>(null);
   const hasAutoStarted = useRef(false);
   const prevMasterCode = useRef<string | null>(null);
+  const runtimeLoggedRef = useRef<Set<string>>(new Set());
+  const runtimeFailureStateRef = useRef<Map<number, { codeSignature: string; failures: Set<string> }>>(new Map());
 
   const {
     generateFullVideo,
@@ -253,6 +312,11 @@ function GeneratePageContent() {
 
   // Track which failed scenes have already been auto-retried this session
   const autoRetriedRef = useRef<Set<number>>(new Set());
+  const clearRetryState = useCallback(() => {
+    autoRetriedRef.current.clear();
+    runtimeLoggedRef.current.clear();
+    runtimeFailureStateRef.current.clear();
+  }, []);
 
   // New masterCode = generation succeeded
   useEffect(() => {
@@ -269,6 +333,26 @@ function GeneratePageContent() {
     }
   }, [masterCode, fullVideoScenes, addAssistantMessage]);
 
+  useEffect(() => {
+    const nextState = new Map<number, { codeSignature: string; failures: Set<string> }>();
+    fullVideoScenes.forEach((scene, index) => {
+      const codeSignature = buildSceneCodeSignature(scene.code);
+      const previous = runtimeFailureStateRef.current.get(index);
+      if (previous && previous.codeSignature === codeSignature) {
+        nextState.set(index, previous);
+      } else {
+        nextState.set(index, { codeSignature, failures: new Set() });
+      }
+    });
+    runtimeFailureStateRef.current = nextState;
+  }, [fullVideoScenes]);
+
+  useEffect(() => {
+    if (fullVideoScenes.length === 0) {
+      clearRetryState();
+    }
+  }, [clearRetryState, fullVideoScenes.length]);
+
   // Auto-retry failed scenes after generation completes (staggered to avoid API hammering)
   useEffect(() => {
     if (isFullVideoBusy || regeneratingSceneIndex !== null) return;
@@ -282,7 +366,17 @@ function GeneratePageContent() {
 
     // Don't auto-retry if we know the API quota is exhausted — it will just fail again
     const lastError = fullVideoError ?? "";
-    if (lastError.toLowerCase().includes("quota") || lastError.includes("429")) return;
+    const normalizedError = lastError.toLowerCase();
+    if (
+      normalizedError.includes("quota") ||
+      lastError.includes("429") ||
+      lastError.includes("503") ||
+      normalizedError.includes("unavailable") ||
+      normalizedError.includes("high demand") ||
+      normalizedError.includes("rate limit")
+    ) {
+      return;
+    }
 
     // Mark all as retried immediately to prevent re-triggering
     failedIndices.forEach((i) => autoRetriedRef.current.add(i));
@@ -302,6 +396,57 @@ function GeneratePageContent() {
       addErrorMessage(fullVideoError);
     }
   }, [fullVideoError, addErrorMessage]);
+
+  useEffect(() => {
+    const onSceneRuntimeError = (event: Event) => {
+      const detail = (event as CustomEvent<{ sceneName?: string | null; message?: string }>).detail;
+      const sceneName = detail?.sceneName?.trim();
+      const message = detail?.message?.trim() || "Unknown runtime error";
+      const normalizedMessage = normalizeRuntimeErrorMessage(message);
+      const baseLogKey = `${sceneName ?? "unknown"}::${normalizedMessage}`;
+
+      if (!sceneName || isFullVideoBusy || regeneratingSceneIndex !== null) return;
+      const sceneIndex = fullVideoScenes.findIndex((scene) => scene.title === sceneName);
+      if (sceneIndex === -1) return;
+      const sceneCode = fullVideoScenes[sceneIndex]?.code ?? "";
+      const codeSignature = buildSceneCodeSignature(sceneCode);
+      const logKey = `${baseLogKey}::${codeSignature}`;
+      if (!runtimeLoggedRef.current.has(logKey)) {
+        runtimeLoggedRef.current.add(logKey);
+        addErrorMessage(
+          sceneName
+            ? `Runtime error in "${sceneName}": ${message}`
+            : `Runtime error in preview: ${message}`,
+        );
+      }
+      const failureKey = makeRuntimeFailureKey(sceneIndex, sceneCode, message);
+      const state = runtimeFailureStateRef.current.get(sceneIndex) ?? {
+        codeSignature,
+        failures: new Set<string>(),
+      };
+      const repeatedSameFailure = state.failures.has(failureKey);
+      if (repeatedSameFailure) {
+        const pausedKey = `${logKey}::paused`;
+        if (!runtimeLoggedRef.current.has(pausedKey)) {
+          runtimeLoggedRef.current.add(pausedKey);
+          addErrorMessage(`Auto-repair paused for "${sceneName}" because the same runtime failure repeated after regeneration.`);
+        }
+        return;
+      }
+
+      state.failures.add(failureKey);
+      runtimeFailureStateRef.current.set(sceneIndex, state);
+      const retryInstruction = buildRuntimeRetryInstruction(message, repeatedSameFailure);
+      setTimeout(() => {
+        regenerateSceneWithEdit(sceneIndex, retryInstruction);
+      }, 1200);
+    };
+
+    window.addEventListener("scene-runtime-error", onSceneRuntimeError as EventListener);
+    return () => {
+      window.removeEventListener("scene-runtime-error", onSceneRuntimeError as EventListener);
+    };
+  }, [addErrorMessage, fullVideoScenes, isFullVideoBusy, regeneratingSceneIndex, regenerateSceneWithEdit]);
 
   // Update player duration when full video is ready
   useEffect(() => {
@@ -340,19 +485,58 @@ function GeneratePageContent() {
 
       // Default: full video regeneration
       prevMasterCode.current = null;
+      clearRetryState();
       setAttachedImages(images ?? []);
       addUserMessage(promptText);
       setPendingMessage({ startedAt: Date.now() });
       resetFullVideo();
       generateFullVideo(promptText, model, images, userDescriptions);
     },
-    [isFullVideoBusy, fullVideoScenes, addUserMessage, addAssistantMessage, resetFullVideo, generateFullVideo, regenerateSceneWithEdit],
+    [isFullVideoBusy, fullVideoScenes, addUserMessage, addAssistantMessage, clearRetryState, resetFullVideo, generateFullVideo, regenerateSceneWithEdit],
   );
 
 
   const handleSeek = useCallback((frame: number) => {
     setSeekFrame(frame);
   }, []);
+
+  const handlePlayerRuntimeError = useCallback((message: string) => {
+    const trimmed = message.trim() || "Unknown runtime error";
+    const normalizedMessage = normalizeRuntimeErrorMessage(trimmed);
+    if (isFullVideoBusy || regeneratingSceneIndex !== null || fullVideoScenes.length === 0) return;
+
+    const sceneIndex = findSceneIndexForFrame(fullVideoScenes, currentFrame);
+    const sceneCode = fullVideoScenes[sceneIndex]?.code ?? "";
+    const codeSignature = buildSceneCodeSignature(sceneCode);
+    const previewLogKey = `preview::${normalizedMessage}::${codeSignature}`;
+    if (!runtimeLoggedRef.current.has(previewLogKey)) {
+      runtimeLoggedRef.current.add(previewLogKey);
+      addErrorMessage(`Preview runtime error: ${trimmed}`);
+    }
+    const failureKey = makeRuntimeFailureKey(sceneIndex, sceneCode, trimmed);
+    const state = runtimeFailureStateRef.current.get(sceneIndex) ?? {
+      codeSignature,
+      failures: new Set<string>(),
+    };
+    const repeatedSameFailure = state.failures.has(failureKey);
+    if (repeatedSameFailure) {
+      return;
+    }
+
+    state.failures.add(failureKey);
+    runtimeFailureStateRef.current.set(sceneIndex, state);
+    const retryInstruction = buildRuntimeRetryInstruction(trimmed, repeatedSameFailure);
+    setTimeout(() => {
+      regenerateSceneWithEdit(sceneIndex, retryInstruction);
+    }, 1200);
+  }, [
+    addErrorMessage,
+    currentFrame,
+    fullVideoScenes,
+    isFullVideoBusy,
+    regeneratingSceneIndex,
+    regenerateSceneWithEdit,
+  ]);
 
   // Auto-trigger from URL param (reads images from ref so the empty-dep closure gets them)
   useEffect(() => {
@@ -430,6 +614,7 @@ function GeneratePageContent() {
                   renderImages={attachedImages}
                   renderBrand={pendingBrandRef.current as Record<string, string>}
                   renderVoiceovers={masterVoiceovers}
+                  onRuntimeError={handlePlayerRuntimeError}
                   onFrameChange={setCurrentFrame}
                   seekFrame={seekFrame}
                   isCursorMode={false}

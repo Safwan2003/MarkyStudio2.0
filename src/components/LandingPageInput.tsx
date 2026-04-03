@@ -38,22 +38,22 @@ export function LandingPageInput({
   onNavigate,
   isNavigating = false,
 }: LandingPageInputProps) {
-  const [productName, setProductName] = useState("AdAstraConnect");
+  const [productName, setProductName] = useState("Ad Astra");
   const [description, setDescription] = useState(
-    "Ad Astra is a modern language services platform that combines human expertise with AI-assisted workflows to deliver faster, more consistent multilingual communication. It centralizes interpretation, translation, localization, and content workflows in one secure, compliant system built for how organizations operate today.",
+    "Ad Astra is a global leader in multilingual communication solutions. We help multinational enterprises break language barriers with professional translation, localization, and international communication services — enabling businesses to operate seamlessly across every market and language.",
   );
-  const [audience, setAudience] = useState("Organizations that need fast, secure multilingual communication (healthcare, government, legal, education, enterprise SaaS)");
+  const [audience, setAudience] = useState("Multinational enterprises, global corporations, and organizations requiring professional multilingual communication and localization services.");
   const [features, setFeatures] = useState([
-    "Centralized Management — schedule, track, generate reports, and manage billing in one place",
-    "Real-Time Support — instant access to professional interpreters 24/7",
-    "Secure & Compliant — HIPAA/GDPR-aware workflows designed for high-stakes communication",
-    "Custom API Integration — connect with existing systems via secure APIs",
+    "Multilingual Communication — Professional language services across dozens of languages and markets",
+    "Translation & Localization — Culturally accurate content adaptation for global audiences",
+    "International Business Support — End-to-end communication solutions for cross-border operations",
+    "Global Expertise — Decades of experience serving enterprise clients worldwide",
   ]);
-  const [tagline, setTagline] = useState("One System. Not Multiple Tools.");
-  const [cta, setCta] = useState("Request a Business Quote");
+  const [tagline, setTagline] = useState("Global Leader in Multilingual Communication.");
+  const [cta, setCta] = useState("Get In Touch");
   const [model, setModel] = useState<ModelId>("gemini-2.5-flash:none");
-  const [brandColors, setBrandColors] = useState<string[]>(["#2563eb", "#0ea5e9"]);
-  const [targetUrl, setTargetUrl] = useState("https://ad-astrainc.com/");
+  const [brandColors, setBrandColors] = useState<string[]>(["#d7383c", "#333333"]);
+  const [targetUrl, setTargetUrl] = useState("https://ad-astrainc.com");
   const [logoUrl, setLogoUrl] = useState("");
   const [logoImage, setLogoImage] = useState<string | null>(null);
   const [videoType, setVideoType] = useState("explainer");

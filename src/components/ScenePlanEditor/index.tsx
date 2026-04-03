@@ -6,6 +6,8 @@ import { Film, Loader2, Mic2, MousePointerClick, Plus, RefreshCw, Trash2, Volume
 import { useEffect, useMemo, useRef, useState } from "react";
 import { CursorWaypointEditor } from "./CursorWaypointEditor";
 
+const MAX_AUTO_WAYPOINTS = 10;
+
 const AVAILABLE_SKILLS = [
   // Intro / brand
   "premium-saas-hook",
@@ -237,9 +239,9 @@ export function ScenePlanEditor({
         .then((res) => res.ok ? res.json() : null)
         .then((data) => {
           if (!data?.elements?.length) return;
-          // Cap at 5 waypoints per image — more than that clutters the cursor path
+          // Keep the auto-detected set aligned with /api/vision so flow UI reflects what the model actually found.
           const waypoints: CursorWaypoint[] = data.elements
-            .slice(0, 5)
+            .slice(0, MAX_AUTO_WAYPOINTS)
             .map((el: { label: string; x: number; y: number; w?: number; h?: number; elementType?: string }) => {
               const videoW = el.w ?? 0.1;
               const videoH = el.h ? el.h * 0.94 : 0.05;
